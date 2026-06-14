@@ -34,6 +34,23 @@ pub fn output_id(o: &WalletOutput) -> String {
     format!("{}:{}", hex::encode(o.transaction()), o.index_in_transaction())
 }
 
+/// Compute the key image (linking tag) for an owned output:
+///   KI = (spend_key + key_offset) · Hp(P)
+/// where P is the output's one-time public key and Hp is Monero's key-image
+/// generator. Mirrors monero-wallet's own signing derivation. Requires the
+/// private spend key, so it's only computable for an unlocked (active) wallet —
+/// view-only/background wallets can't detect spends. Returns the compressed
+/// 32-byte key image. A wrong result simply never matches a chain input (the
+/// output stays counted), so this can't hide spendable funds.
+pub fn output_key_image(spend_key: &Scalar, o: &WalletOutput) -> [u8; 32] {
+    let spend_dalek: curve25519_dalek::Scalar = (*spend_key).into();
+    let offset_dalek: curve25519_dalek::Scalar = o.key_offset().into();
+    let input_key = spend_dalek + offset_dalek;
+    let hp: curve25519_dalek::EdwardsPoint =
+        Point::biased_hash(o.key().compress().to_bytes()).into();
+    Point::from(input_key * hp).compress().to_bytes()
+}
+
 /// Stable key linking a prepared tx to its relay step. The tx metadata bytes are
 /// identical at prepare (serialized) and relay (passed back), so their keccak256
 /// is a reliable join key for the staged spend.
@@ -536,6 +553,36 @@ impl WalletState {
             inner.sent.push(sent);
         }
         self.save_output_cache().await;
+    }
+
+    /// Detect spent outputs by matching their key images against a set of input
+    /// key images observed on-chain (collected from scanned blocks' transaction
+    /// inputs). Marks any owned output whose key image appears as spent. Requires
+    /// the private spend key; a view-only wallet returns 0 (can't compute key
+    /// images, so can't detect spends). Returns the number newly marked spent.
+    pub async fn mark_spent_by_inputs(&self, input_key_images: &HashSet<[u8; 32]>) -> usize {
+        if input_key_images.is_empty() {
+            return 0;
+        }
+        let mut inner = self.inner.write().await;
+        let Some(spend_key) = inner.spend_key.clone() else {
+            return 0;
+        };
+        let mut newly_spent = Vec::new();
+        for o in &inner.scanned_outputs {
+            let id = output_id(&o.output);
+            if inner.spent.contains(&id) {
+                continue;
+            }
+            if input_key_images.contains(&output_key_image(&spend_key, &o.output)) {
+                newly_spent.push(id);
+            }
+        }
+        let count = newly_spent.len();
+        for id in newly_spent {
+            inner.spent.insert(id);
+        }
+        count
     }
 
     pub async fn get_network(&self) -> Network {

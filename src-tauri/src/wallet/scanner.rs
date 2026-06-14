@@ -3,6 +3,7 @@
 //! Connects to a Monero daemon, fetches blocks in batches, and scans each block
 //! for outputs belonging to the wallet's ViewPair using monero-wallet's Scanner.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -714,6 +715,10 @@ async fn scan_loop<C: DaemonConnector>(
                 if let Some(mut scanner) = wallet_state.get_scanner().await {
                     let mut new_output_count = 0u64;
                     let mut new_amount = 0u64;
+                    // Key images spent in this batch's transactions — used to detect
+                    // which of our owned outputs were spent (incl. spends made in
+                    // other wallets). Coinbase (miner) inputs have no key image.
+                    let mut batch_kis: HashSet<[u8; 32]> = HashSet::new();
 
                     for (i, block) in blocks.iter().enumerate() {
                         // Blocks are fetched in range order starting at scan_height,
@@ -734,11 +739,26 @@ async fn scan_loop<C: DaemonConnector>(
                                 emit_log(&app, "Scan", "error", &format!("⚠️ Scan error at ~{}: {:?}", scan_height, e));
                             }
                         }
+                        // Collect the key images this block's (non-miner) transactions spend.
+                        for tx in &block.transactions {
+                            for input in &tx.prefix().inputs {
+                                if let monero_oxide::transaction::Input::ToKey { key_image, .. } = input {
+                                    batch_kis.insert(key_image.to_bytes());
+                                }
+                            }
+                        }
                     }
 
                     let scan_ms = scan_start.elapsed().as_millis();
                     let scan_bps = if scan_ms > 0 { blocks.len() as f64 / (scan_ms as f64 / 1000.0) } else { 0.0 };
                     emit_log(&app, "Scan", "info", &format!("🔬 Scanned {} blocks in {}ms ({:.0} blk/s)", blocks.len(), scan_ms, scan_bps));
+
+                    // Detect spends: mark any owned output whose key image was spent
+                    // in this batch. Requires the spend key (active wallet only).
+                    let newly_spent = wallet_state.mark_spent_by_inputs(&batch_kis).await;
+                    if newly_spent > 0 {
+                        emit_log(&app, "Scan", "info", &format!("📤 Detected {} spent output(s) in blocks {}-{}", newly_spent, scan_height, batch_end));
+                    }
 
                     if new_output_count > 0 {
                         emit_log(&app, "Scan", "success", &format!(
