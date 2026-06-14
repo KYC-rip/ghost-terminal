@@ -648,11 +648,15 @@ async fn scan_loop<C: DaemonConnector>(
             }
         };
 
-        if scan_height == u64::MAX || scan_height > daemon_height {
-            // New wallet sentinel (u64::MAX) or somehow ahead — start near tip
+        if scan_height == u64::MAX {
+            // New wallet sentinel — start near the tip.
             emit_log(&app, "Sync", "info", &format!("📦 New wallet: starting near daemon tip ({})", daemon_height));
             scan_height = daemon_height.saturating_sub(10);
         }
+        // NOTE: being slightly AHEAD of the daemon (scan_height == daemon_height + 1,
+        // the normal fully-synced state) must NOT reset to near-tip — that caused an
+        // infinite re-scan loop of the last ~10 blocks. The SYNCED check below handles
+        // scan_height >= daemon_height by idling.
 
         // Skip pre-RingCT blocks — monero-wallet can only scan RingCT outputs
         if scan_height < RINGCT_FORK_HEIGHT {
@@ -694,6 +698,10 @@ async fn scan_loop<C: DaemonConnector>(
             sleep(Duration::from_secs(10)).await;
             continue;
         }
+
+        // We have new blocks to scan — re-arm the daemon reconcile so it runs again
+        // when we next catch up (to detect spends made since the last reconcile).
+        spend_reconciled = false;
 
         // In fast-sync the whole batch comes back in ONE get_blocks.bin call, so
         // use a large batch. The validated per-block fallback gains nothing from

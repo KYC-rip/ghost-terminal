@@ -6,6 +6,12 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// Emit a log event to the frontend console (same format as Electron's core-log).
 pub fn emit_log(app: &AppHandle, source: &str, level: &str, message: &str) {
+    // Mirror app-console logs to stdout so they're visible when running headless /
+    // via the dev server (the emit below only reaches the frontend window). Skip
+    // the high-frequency SYNC_DATA/TOR_STATUS machine channels to avoid spam.
+    if source != "SYNC_DATA" && source != "TOR_STATUS" {
+        println!("[{}/{}] {}", source, level, message);
+    }
     let _ = app.emit("core-log", serde_json::json!({
         "source": source,
         "level": level,
