@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown, Maximize2, Minimize2, Copy, Check } from 'lucide-react';
+import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown, Maximize2, Minimize2, Copy, Check, Clock } from 'lucide-react';
 import { useVault } from './hooks/useVault';
 import { useStats } from './hooks/useStats';
 import { useTheme } from './hooks/useTheme';
@@ -37,6 +37,7 @@ function MainApp() {
   const [showConsole, setShowConsole] = useState(false);
   const [consoleMaximized, setConsoleMaximized] = useState(false);
   const [consoleCopied, setConsoleCopied] = useState(false);
+  const [consoleTimestamps, setConsoleTimestamps] = useState(true);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
   const [appVersion, setAppVersion] = useState('1.0');
@@ -55,8 +56,15 @@ function MainApp() {
     hasVaultFile, identities, activeId, switchIdentity
   } = vault;
 
+  const fmtLogTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.toLocaleTimeString([], { hour12: false })}.${String(ts % 1000).padStart(3, '0')}`;
+  };
+
   const copyConsoleLogs = useCallback(async () => {
-    const text = logs.map((l: any) => l.msg).join('\n');
+    const text = logs
+      .map((l: any) => (consoleTimestamps ? `[${fmtLogTime(l.timestamp)}] ${l.msg}` : l.msg))
+      .join('\n');
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -70,7 +78,7 @@ function MainApp() {
     }
     setConsoleCopied(true);
     setTimeout(() => setConsoleCopied(false), 1500);
-  }, [logs]);
+  }, [logs, consoleTimestamps]);
 
   const { stats, loading: statsLoading } = useStats();
   const { mode, cycleTheme, resolvedTheme, skin, skinLabel, cycleSkin, contrast, toggleContrast } = useTheme();
@@ -577,6 +585,13 @@ function MainApp() {
                 <div className="flex items-center gap-2 text-[11px] font-black text-xmr-green uppercase tracking-widest"><TerminalIcon size={12} /> System_Log_Output</div>
                 <div className="flex items-center gap-3">
                   <button
+                    onClick={() => setConsoleTimestamps(t => !t)}
+                    title={consoleTimestamps ? 'Hide timestamps' : 'Show timestamps'}
+                    className={`flex items-center gap-1 text-[10px] uppercase font-black transition-all cursor-pointer ${consoleTimestamps ? 'text-xmr-green' : 'text-xmr-dim hover:text-xmr-green'}`}
+                  >
+                    <Clock size={13} /> Time
+                  </button>
+                  <button
                     onClick={copyConsoleLogs}
                     title="Copy log contents"
                     className={`flex items-center gap-1 text-[10px] uppercase font-black transition-all cursor-pointer ${consoleCopied ? 'text-xmr-green' : 'text-xmr-dim hover:text-xmr-green'}`}
@@ -598,7 +613,9 @@ function MainApp() {
               <div className="flex-grow overflow-y-auto p-4 font-mono text-[11px] space-y-1.5 custom-scrollbar">
                 {logs.map((log, i) => (
                   <div key={i} className="flex gap-3 group">
-                    <span className="text-xmr-dim opacity-85 shrink-0 hidden">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                    {consoleTimestamps && (
+                      <span className="text-xmr-dim opacity-60 shrink-0 tabular-nums">[{fmtLogTime(log.timestamp)}]</span>
+                    )}
                     <span className={`break-all ${log.type === 'error' ? 'text-red-500 font-bold' :
                       log.type === 'success' ? 'text-xmr-green font-bold' :
                         log.type === 'process' ? 'text-xmr-accent' :
