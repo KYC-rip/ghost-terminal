@@ -538,6 +538,16 @@ async fn scan_loop<C: DaemonConnector>(
     // bulk error we fall back to the validated multi-node per-block path below.
     let fast_sync = read_config_bool(&app, "fast_sync");
 
+    // One-time marker so it's obvious from the log whether THIS build includes
+    // key-image spend detection (and whether it can run). If you don't see this
+    // line, the running binary predates the feature — restart `tauri dev` so the
+    // Rust side rebuilds (frontend HMR alone does NOT rebuild Rust).
+    if app.state::<WalletState>().can_detect_spends().await {
+        emit_log(&app, "Sync", "info", "🔑 Key-image spend detection: ON");
+    } else {
+        emit_log(&app, "Sync", "info", "🔑 Key-image spend detection: OFF (no spend key)");
+    }
+
     if scan_height == u64::MAX {
         emit_log(&app, "Sync", "info", "🔍 New wallet — will sync from daemon tip");
     } else {

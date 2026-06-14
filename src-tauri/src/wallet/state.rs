@@ -585,6 +585,12 @@ impl WalletState {
         count
     }
 
+    /// Whether spend detection is possible (the private spend key is loaded).
+    /// View-only / locked wallets return false.
+    pub async fn can_detect_spends(&self) -> bool {
+        self.inner.read().await.spend_key.is_some()
+    }
+
     pub async fn get_network(&self) -> Network {
         self.inner.read().await.network
     }
