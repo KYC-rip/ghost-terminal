@@ -632,10 +632,13 @@ async fn scan_loop<C: DaemonConnector>(
                 // Update scan height in state
                 ws.update_sync_status(scan_height, daemon_height).await;
 
-                // Persist output cache every 500 blocks
-                if scan_height % 500 < batch_size {
-                    ws.save_output_cache().await;
-                }
+                // Persist progress after EVERY batch. The old `scan_height % 500`
+                // heuristic drifted with the batch step and rarely fired, so the
+                // cache froze tens of thousands of blocks behind the live scan —
+                // and since unlock/restart resumes from the persisted height, all
+                // that progress was lost on every relaunch. The cache is small
+                // (serialized owned outputs only), so saving each batch is cheap.
+                ws.save_output_cache().await;
             }
             Err(e) => {
                 emit_log(&app, "Sync", "error", &format!("⚠️ Block fetch failed ({}-{}): {:?}", scan_height, batch_end, e));
