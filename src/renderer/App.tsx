@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown } from 'lucide-react';
+import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown, Maximize2, Minimize2, Copy, Check } from 'lucide-react';
 import { useVault } from './hooks/useVault';
 import { useStats } from './hooks/useStats';
 import { useTheme } from './hooks/useTheme';
@@ -35,6 +35,8 @@ const SkinOverlay = ({ config }: { config: any }) => {
 function MainApp() {
   const [view, setView] = useState<'home' | 'vault' | 'settings' | 'agent' | 'exchange' | 'vigil'>('home');
   const [showConsole, setShowConsole] = useState(false);
+  const [consoleMaximized, setConsoleMaximized] = useState(false);
+  const [consoleCopied, setConsoleCopied] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
   const [appVersion, setAppVersion] = useState('1.0');
@@ -52,6 +54,23 @@ function MainApp() {
     address, logs, status, isAppLoading, isInitializing, syncPercent, currentHeight, totalHeight, isLocked, unlock, lock, purgeIdentity,
     hasVaultFile, identities, activeId, switchIdentity
   } = vault;
+
+  const copyConsoleLogs = useCallback(async () => {
+    const text = logs.map((l: any) => l.msg).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for webviews without async clipboard access
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+    setConsoleCopied(true);
+    setTimeout(() => setConsoleCopied(false), 1500);
+  }, [logs]);
 
   const { stats, loading: statsLoading } = useStats();
   const { mode, cycleTheme, resolvedTheme, skin, skinLabel, cycleSkin, contrast, toggleContrast } = useTheme();
@@ -553,12 +572,27 @@ function MainApp() {
         {showConsole && (
           <>
             <div className="fixed inset-0 z-50 bg-black/5" onClick={() => setShowConsole(false)} />
-            <div className="absolute inset-x-0 bottom-8 h-64 bg-xmr-base/95 backdrop-blur-xl border-t border-xmr-green/30 z-[60] flex flex-col animate-in slide-in-from-bottom-4 duration-300 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] select-text">
+            <div className={`absolute inset-x-0 bg-xmr-base/95 backdrop-blur-xl border-t border-xmr-green/30 z-[60] flex flex-col animate-in slide-in-from-bottom-4 duration-300 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] select-text ${consoleMaximized ? 'top-10 bottom-8' : 'bottom-8 h-64'}`}>
               <div className="px-4 py-2 border-b border-xmr-green/10 flex justify-between items-center bg-xmr-green/5">
                 <div className="flex items-center gap-2 text-[11px] font-black text-xmr-green uppercase tracking-widest"><TerminalIcon size={12} /> System_Log_Output</div>
-                <div className="flex items-center gap-4">
-                  <span className="text-[11px] text-xmr-dim uppercase font-black opacity-50">[ PRESS ESC TO CLOSE ]</span>
-                  <button onClick={() => setShowConsole(false)} className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"><X size={14} /></button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={copyConsoleLogs}
+                    title="Copy log contents"
+                    className={`flex items-center gap-1 text-[10px] uppercase font-black transition-all cursor-pointer ${consoleCopied ? 'text-xmr-green' : 'text-xmr-dim hover:text-xmr-green'}`}
+                  >
+                    {consoleCopied ? <Check size={13} /> : <Copy size={13} />}
+                    {consoleCopied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button
+                    onClick={() => setConsoleMaximized(m => !m)}
+                    title={consoleMaximized ? 'Restore' : 'Maximize'}
+                    className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"
+                  >
+                    {consoleMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                  </button>
+                  <span className="text-[11px] text-xmr-dim uppercase font-black opacity-50 hidden sm:inline">[ ESC TO CLOSE ]</span>
+                  <button onClick={() => setShowConsole(false)} title="Close" className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"><X size={14} /></button>
                 </div>
               </div>
               <div className="flex-grow overflow-y-auto p-4 font-mono text-[11px] space-y-1.5 custom-scrollbar">

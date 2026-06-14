@@ -4,6 +4,7 @@
 //! for outputs belonging to the wallet's ViewPair using monero-wallet's Scanner.
 
 use std::future::Future;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -451,6 +452,66 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
 // monero-wallet only scans RingCT outputs, so scanning earlier blocks is pointless.
 const RINGCT_FORK_HEIGHT: u64 = 1_220_516;
 
+/// Validated per-block fetch of a contiguous range, pipelined round-robin across
+/// the connection pool (buffered = pool size). This is the trustless default path
+/// and the fast-sync fallback.
+async fn parallel_per_block<T>(
+    pool: &[MoneroDaemon<T>],
+    range: RangeInclusive<usize>,
+) -> Result<Vec<ScannableBlock>, InterfaceError>
+where
+    T: HttpTransport + Clone + Send + Sync + 'static,
+{
+    use futures::stream::StreamExt;
+    let pool_n = pool.len().max(1);
+    futures::stream::iter(range.enumerate())
+        .map(|(i, n)| {
+            let d = &pool[i % pool_n];
+            async move { ProvidesScannableBlocks::scannable_block_by_number(d, n).await }
+        })
+        .buffered(pool_n)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect()
+}
+
+/// Build the multi-node fallback pool: spread ONE connection across many distinct
+/// nodes (each sees a single connection → no per-IP throttling). The primary daemon
+/// is always first. Historical blocks are identical across nodes and every per-block
+/// fetch is validated, so multi-node fetch is safe. In Tor mode all entries share
+/// one TorClient (arti reuses circuits internally).
+async fn build_fallback_pool<C: DaemonConnector>(
+    app: &AppHandle,
+    connector: &C,
+    primary: &MoneroDaemon<C::Transport>,
+    primary_url: &str,
+    cap: usize,
+) -> Vec<MoneroDaemon<C::Transport>> {
+    use futures::stream::StreamExt;
+    let mut pool = vec![primary.clone()];
+    let others: Vec<(String, String)> = load_nodes(app, connector.section())
+        .await
+        .into_iter()
+        .filter(|(_, u)| u != primary_url)
+        .collect();
+    let connected: Vec<Option<_>> = futures::stream::iter(others)
+        .map(|(_, url)| {
+            let connector = connector.clone();
+            async move { connector.connect(url).await }
+        })
+        .buffer_unordered(cap)
+        .collect()
+        .await;
+    for d in connected.into_iter().flatten() {
+        pool.push(d);
+        if pool.len() >= cap {
+            break;
+        }
+    }
+    pool
+}
+
 async fn scan_loop<C: DaemonConnector>(
     app: AppHandle,
     daemon: MoneroDaemon<C::Transport>,
@@ -482,46 +543,26 @@ async fn scan_loop<C: DaemonConnector>(
         emit_log(&app, "Sync", "info", &format!("🔍 Scan loop started from height {}", scan_height));
     }
 
-    // Each transport serializes its own requests (SimpleRequestTransport via a
-    // mutex; ArtiTransport opens one stream per request), and public nodes cap
-    // connections per IP. So build the pool by spreading ONE connection across
-    // MANY distinct nodes — each node sees a single connection (no throttling)
-    // and we still get wide parallelism. Historical blocks are identical across
-    // nodes and every fetch is validated, so multi-node fetch is safe. In Tor
-    // mode all entries share one TorClient (arti reuses circuits internally).
+    // The multi-node fallback pool. In NORMAL mode it's the primary fetch path, so
+    // build it upfront (one connection spread across many nodes for parallelism).
+    // In FAST mode a single node carries the whole sync via get_blocks.bin, so we
+    // skip the upfront connections entirely and only build the pool lazily if a
+    // bulk batch ever fails (see the fallback branch below).
     let mut pool = vec![daemon.clone()];
-    {
-        use futures::stream::StreamExt;
-        let others: Vec<(String, String)> = load_nodes(&app, connector.section())
-            .await
-            .into_iter()
-            .filter(|(_, u)| u != &node_url)
-            .collect();
-        let connected: Vec<Option<_>> = futures::stream::iter(others)
-            .map(|(_, url)| {
-                let connector = connector.clone();
-                async move { connector.connect(url).await }
-            })
-            .buffer_unordered(fetch_concurrency)
-            .collect()
-            .await;
-        for d in connected.into_iter().flatten() {
-            pool.push(d);
-            if pool.len() >= fetch_concurrency {
-                break;
-            }
-        }
+    if !fast_sync {
+        pool = build_fallback_pool(&app, connector, &daemon, &node_url, fetch_concurrency).await;
     }
     let pool_n = pool.len();
     if fast_sync {
-        emit_log(&app, "Sync", "info", &format!("⚡ Fast sync ON — bulk get_blocks.bin, trusting {} (fallback: {} nodes)", node_label, pool_n));
+        emit_log(&app, "Sync", "info", &format!("⚡ Fast sync ON — bulk get_blocks.bin, trusting {} (fallback nodes spun up only if a batch fails)", node_label));
     } else {
         emit_log(&app, "Sync", "info", &format!("🔗 Fetching across {} nodes in parallel", pool_n));
     }
 
-    // Rolling measured throughput (blocks/sec), seeded then EMA-smoothed from
-    // real batch timings so the ETA reflects actual speed, not a guess.
-    let mut measured_bps: f64 = (pool_n as f64) * 1.5;
+    // Rolling measured throughput (blocks/sec), seeded then EMA-smoothed from real
+    // batch timings so the ETA reflects actual speed. Fast sync is seeded high
+    // (bulk path) so the first ETA isn't wildly pessimistic; both self-correct.
+    let mut measured_bps: f64 = if fast_sync { 80.0 } else { (pool_n as f64) * 1.5 };
 
     loop {
         // Check if superseded
@@ -590,37 +631,26 @@ async fn scan_loop<C: DaemonConnector>(
         emit_log(&app, "Sync", "info", &format!("📥 Fetching blocks {}-{} / {}", scan_height, batch_end, daemon_height));
 
         let fetch_start = std::time::Instant::now();
-        // The validated per-block path: contiguous_scannable_blocks is a serial
-        // per-block loop (~0.8s/block over clearnet → multi-hour syncs). buffered(N)
-        // pipelines N block fetches across the node pool, preserving height order
-        // and cutting wall-clock by ~Nx. This is the trustless default AND the
-        // fallback when a fast-sync bulk fetch fails.
-        let parallel_fetch = || async {
-            use futures::stream::StreamExt;
-            futures::stream::iter(range.clone().enumerate())
-                .map(|(i, n)| {
-                    let d = &pool[i % pool_n];
-                    async move { ProvidesScannableBlocks::scannable_block_by_number(d, n).await }
-                })
-                .buffered(pool_n)
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-        };
         // Fast sync: one bulk get_blocks.bin call for the whole batch (trusting the
-        // node). On ANY error, fall back to the validated per-block path so we never
-        // do worse than the default.
+        // node). On ANY error, fall back to the validated per-block path — building
+        // the multi-node pool lazily on first use — so we never do worse than the
+        // default. Normal mode uses the per-block path directly across the pool.
         let parallel_result = if fast_sync {
             match daemon.bulk_scannable_blocks_trusting_node(range.clone()).await {
                 Ok(blocks) => Ok(blocks),
                 Err(e) => {
                     emit_log(&app, "Sync", "warn", &format!("⚡ Fast-sync bulk fetch failed ({:?}) — falling back to validated per-block for this batch", e));
-                    parallel_fetch().await
+                    if pool.len() == 1 {
+                        // First fallback: spin up the multi-node pool now (deferred
+                        // from startup since the happy path never needed it).
+                        pool = build_fallback_pool(&app, connector, &daemon, &node_url, fetch_concurrency).await;
+                        emit_log(&app, "Sync", "info", &format!("🔗 Fallback pool ready: {} nodes", pool.len()));
+                    }
+                    parallel_per_block(&pool, range.clone()).await
                 }
             }
         } else {
-            parallel_fetch().await
+            parallel_per_block(&pool, range.clone()).await
         };
         match parallel_result {
             Ok(blocks) => {
