@@ -24,12 +24,16 @@ tauri-plugin-deep-link = "2"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
-# Monero wallet - pure Rust, no C++ FFI
-monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide" }
-monero-oxide = { git = "https://github.com/monero-oxide/monero-oxide" }
-monero-daemon-rpc = { git = "https://github.com/monero-oxide/monero-oxide", package = "monero-daemon-rpc" }
-monero-address = { git = "https://github.com/monero-oxide/monero-oxide", package = "monero-address" }
-monero-simple-request-rpc = { git = "https://github.com/monero-oxide/monero-oxide", package = "monero-simple-request-rpc" }
+# Monero wallet - pure Rust, no C++ FFI.
+# Pinned to our fork (base a941dff) which adds an OPT-IN fast bulk-sync path via
+# get_blocks.bin that trusts the node (bypasses the prunable_hash gate, monero
+# #10120, that forces slow per-block JSON). Additive only — see the fork's
+# FORK_NOTES.md. Rebase onto upstream = a clean cherry-pick of the one commit.
+monero-wallet = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e" }
+monero-oxide = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e" }
+monero-daemon-rpc = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e", package = "monero-daemon-rpc" }
+monero-address = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e", package = "monero-address" }
+monero-simple-request-rpc = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e", package = "monero-simple-request-rpc" }
 monero-seed = { git = "https://github.com/kayabaNerve/monero-wallet-util" }
 
 # Crypto primitives (matching monero-oxide's versions)

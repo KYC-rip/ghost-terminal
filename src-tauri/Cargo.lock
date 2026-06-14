@@ -3512,7 +3512,7 @@ dependencies = [
 [[package]]
 name = "monero-address"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "monero-base58",
  "monero-ed25519",
@@ -3525,7 +3525,7 @@ dependencies = [
 [[package]]
 name = "monero-base58"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "monero-primitives",
  "std-shims 0.1.5",
@@ -3534,7 +3534,7 @@ dependencies = [
 [[package]]
 name = "monero-borromean"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "monero-ed25519",
@@ -3546,7 +3546,7 @@ dependencies = [
 [[package]]
 name = "monero-bulletproofs"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "monero-bulletproofs-generators",
@@ -3562,7 +3562,7 @@ dependencies = [
 [[package]]
 name = "monero-bulletproofs-generators"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "monero-ed25519",
@@ -3574,7 +3574,7 @@ dependencies = [
 [[package]]
 name = "monero-clsag"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "group",
@@ -3591,7 +3591,7 @@ dependencies = [
 [[package]]
 name = "monero-daemon-rpc"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "hex",
  "monero-address",
@@ -3606,7 +3606,7 @@ dependencies = [
 [[package]]
 name = "monero-ed25519"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "crypto-bigint",
  "curve25519-dalek",
@@ -3621,12 +3621,12 @@ dependencies = [
 [[package]]
 name = "monero-epee"
 version = "0.2.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 
 [[package]]
 name = "monero-interface"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "hex",
  "monero-oxide",
@@ -3638,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "monero-io"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "std-shims 0.1.5",
 ]
@@ -3646,7 +3646,7 @@ dependencies = [
 [[package]]
 name = "monero-mlsag"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "monero-ed25519",
@@ -3659,7 +3659,7 @@ dependencies = [
 [[package]]
 name = "monero-oxide"
 version = "0.1.4-alpha"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "hex-literal",
@@ -3677,7 +3677,7 @@ dependencies = [
 [[package]]
 name = "monero-primitives"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "sha3",
 ]
@@ -3697,7 +3697,7 @@ dependencies = [
 [[package]]
 name = "monero-simple-request-rpc"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "digest_auth",
  "hex",
@@ -3710,7 +3710,7 @@ dependencies = [
 [[package]]
 name = "monero-wallet"
 version = "0.1.0"
-source = "git+https://github.com/monero-oxide/monero-oxide#a941dfff1a5333b6349d9a1ee5de49c158b0e3d2"
+source = "git+https://github.com/KYC-rip/monero-oxide?rev=31136bc913ebd8cc96b1e9048ce98c5c7c54de5e#31136bc913ebd8cc96b1e9048ce98c5c7c54de5e"
 dependencies = [
  "curve25519-dalek",
  "hex",

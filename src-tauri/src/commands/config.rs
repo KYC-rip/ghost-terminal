@@ -75,6 +75,7 @@ pub fn default_config() -> serde_json::Value {
         "hide_zero_balances": false,
         "include_prereleases": false,
         "sync_all_wallets": false,
+        "fast_sync": false,
         "shortcuts": {
             "LOCK": "Mod+L",
             "SEND": "Mod+S",

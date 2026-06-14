@@ -25,7 +25,8 @@ export function SettingsView() {
     shortcuts: {} as Record<string, string>,
     hide_zero_balances: false,
     include_prereleases: false,
-    sync_all_wallets: false
+    sync_all_wallets: false,
+    fast_sync: false
   });
 
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -87,7 +88,8 @@ export function SettingsView() {
         shortcuts: fullConfig.shortcuts || {},
         hide_zero_balances: fullConfig.hide_zero_balances || false,
         include_prereleases: fullConfig.include_prereleases || false,
-        sync_all_wallets: fullConfig.sync_all_wallets || false
+        sync_all_wallets: fullConfig.sync_all_wallets || false,
+        fast_sync: fullConfig.fast_sync || false
       });
 
       const info = await window.api.getAppInfo();
@@ -143,7 +145,8 @@ export function SettingsView() {
         localSettings.customNodeAddress !== config.customNodeAddress ||
         localSettings.useSystemProxy !== config.useSystemProxy ||
         localSettings.systemProxyAddress !== config.systemProxyAddress ||
-        localSettings.sync_all_wallets !== config.sync_all_wallets;
+        localSettings.sync_all_wallets !== config.sync_all_wallets ||
+        localSettings.fast_sync !== config.fast_sync;
 
       const newConfig = {
         ...config,
@@ -160,7 +163,8 @@ export function SettingsView() {
         shortcuts: localSettings.shortcuts,
         hide_zero_balances: localSettings.hide_zero_balances,
         include_prereleases: localSettings.include_prereleases,
-        sync_all_wallets: localSettings.sync_all_wallets
+        sync_all_wallets: localSettings.sync_all_wallets,
+        fast_sync: localSettings.fast_sync
       };
 
       if (needsPhysicalReload) {
@@ -423,6 +427,29 @@ export function SettingsView() {
                 className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.sync_all_wallets ? 'bg-xmr-green' : 'bg-xmr-base border border-xmr-border'}`}
               >
                 <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.sync_all_wallets ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
+              </button>
+            </div>
+
+            {/* Fast sync (trusts the node) */}
+            <div className="flex items-start justify-between border-t border-xmr-border/10 pt-6 gap-4">
+              <div className="space-y-1 flex-1">
+                <span className="text-xs text-amber-400 font-black uppercase">Fast_Sync ⚡</span>
+                <p className="text-[11px] text-xmr-dim uppercase font-black leading-relaxed">
+                  Sync dramatically faster (~50-100×) by bulk-downloading blocks.
+                </p>
+                <p className="text-[10px] text-xmr-dim/80 font-bold leading-relaxed normal-case">
+                  Restores in minutes instead of hours. The catch: this trusts your node — Ripley skips
+                  per-transaction validation. Your funds can NOT be stolen and a fake balance can never be
+                  spent (ownership is always verified by your keys). The only risk is a malicious node
+                  HIDING incoming transactions, which you'd recover by rescanning against another node.
+                  Use only with a node you trust. Off by default.
+                </p>
+              </div>
+              <button
+                onClick={() => setLocalSettings({ ...localSettings, fast_sync: !localSettings.fast_sync })}
+                className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.fast_sync ? 'bg-amber-400' : 'bg-xmr-base border border-xmr-border'}`}
+              >
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.fast_sync ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
               </button>
             </div>
           </Card>

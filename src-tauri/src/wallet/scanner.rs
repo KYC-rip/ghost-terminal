@@ -468,6 +468,14 @@ async fn scan_loop<C: DaemonConnector>(
     // streams perform better over Tor; clearnet keeps wide parallelism.
     let fetch_concurrency: usize = if connector.section() == "tor" { 4 } else { 12 };
 
+    // Opt-in "Fast sync" (Settings, default OFF): bulk-fetch each batch via
+    // get_blocks.bin, trusting the node for tx content. Skips the prunable_hash
+    // gate (monero #10120) that otherwise forces a slow per-block JSON fallback.
+    // Output ownership is still proven cryptographically; the residual trust is
+    // that the node doesn't hide/alter txs (recoverable by rescanning). On any
+    // bulk error we fall back to the validated multi-node per-block path below.
+    let fast_sync = read_config_bool(&app, "fast_sync");
+
     if scan_height == u64::MAX {
         emit_log(&app, "Sync", "info", "🔍 New wallet — will sync from daemon tip");
     } else {
@@ -505,7 +513,11 @@ async fn scan_loop<C: DaemonConnector>(
         }
     }
     let pool_n = pool.len();
-    emit_log(&app, "Sync", "info", &format!("🔗 Fetching across {} nodes in parallel", pool_n));
+    if fast_sync {
+        emit_log(&app, "Sync", "info", &format!("⚡ Fast sync ON — bulk get_blocks.bin, trusting {} (fallback: {} nodes)", node_label, pool_n));
+    } else {
+        emit_log(&app, "Sync", "info", &format!("🔗 Fetching across {} nodes in parallel", pool_n));
+    }
 
     // Rolling measured throughput (blocks/sec), seeded then EMA-smoothed from
     // real batch timings so the ETA reflects actual speed, not a guess.
@@ -547,11 +559,17 @@ async fn scan_loop<C: DaemonConnector>(
             continue;
         }
 
-        // contiguous_scannable_blocks fetches blocks one-by-one internally,
-        // so large batches don't speed things up. Keep batches reasonable
-        // for progress reporting without too much per-request overhead.
+        // In fast-sync the whole batch comes back in ONE get_blocks.bin call, so
+        // use a large batch. The validated per-block fallback gains nothing from
+        // big batches, so keep those modest for smooth progress reporting.
         let gap = daemon_height - scan_height;
-        let batch_size: u64 = if gap > 1_000 { 100 } else { base_batch };
+        let batch_size: u64 = if fast_sync {
+            1_000.min(gap)
+        } else if gap > 1_000 {
+            100
+        } else {
+            base_batch
+        };
 
         // Show ETA for large syncs, based on MEASURED throughput (updated
         // after each batch) rather than a hardcoded guess.
@@ -572,16 +590,15 @@ async fn scan_loop<C: DaemonConnector>(
         emit_log(&app, "Sync", "info", &format!("📥 Fetching blocks {}-{} / {}", scan_height, batch_end, daemon_height));
 
         let fetch_start = std::time::Instant::now();
-        // Fetch the batch CONCURRENTLY. The trait's contiguous_scannable_blocks
-        // is a serial per-block loop (~0.8s/block over clearnet → multi-hour
-        // syncs). buffered(N) pipelines N block fetches at once while
-        // preserving height order, cutting wall-clock by ~Nx.
-        let parallel_result = {
+        // The validated per-block path: contiguous_scannable_blocks is a serial
+        // per-block loop (~0.8s/block over clearnet → multi-hour syncs). buffered(N)
+        // pipelines N block fetches across the node pool, preserving height order
+        // and cutting wall-clock by ~Nx. This is the trustless default AND the
+        // fallback when a fast-sync bulk fetch fails.
+        let parallel_fetch = || async {
             use futures::stream::StreamExt;
-            futures::stream::iter(range.enumerate())
+            futures::stream::iter(range.clone().enumerate())
                 .map(|(i, n)| {
-                    // Round-robin across the connection pool so each in-flight
-                    // request hits a distinct (serialized) connection.
                     let d = &pool[i % pool_n];
                     async move { ProvidesScannableBlocks::scannable_block_by_number(d, n).await }
                 })
@@ -591,6 +608,20 @@ async fn scan_loop<C: DaemonConnector>(
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
         };
+        // Fast sync: one bulk get_blocks.bin call for the whole batch (trusting the
+        // node). On ANY error, fall back to the validated per-block path so we never
+        // do worse than the default.
+        let parallel_result = if fast_sync {
+            match daemon.bulk_scannable_blocks_trusting_node(range.clone()).await {
+                Ok(blocks) => Ok(blocks),
+                Err(e) => {
+                    emit_log(&app, "Sync", "warn", &format!("⚡ Fast-sync bulk fetch failed ({:?}) — falling back to validated per-block for this batch", e));
+                    parallel_fetch().await
+                }
+            }
+        } else {
+            parallel_fetch().await
+        };
         match parallel_result {
             Ok(blocks) => {
                 let fetch_ms = fetch_start.elapsed().as_millis();
@@ -599,7 +630,8 @@ async fn scan_loop<C: DaemonConnector>(
                     let batch_bps = blocks.len() as f64 / (fetch_ms as f64 / 1000.0);
                     measured_bps = measured_bps * 0.6 + batch_bps * 0.4;
                 }
-                emit_log(&app, "Sync", "info", &format!("✅ Got {} blocks in {}ms", blocks.len(), fetch_ms));
+                let blk_s = if fetch_ms > 0 { blocks.len() as f64 / (fetch_ms as f64 / 1000.0) } else { 0.0 };
+                emit_log(&app, "Sync", "info", &format!("✅ Got {} blocks in {}ms ({:.0} blk/s)", blocks.len(), fetch_ms, blk_s));
                 // Scan each block with the wallet's Scanner
                 let wallet_state = app.state::<WalletState>();
                 if let Some(mut scanner) = wallet_state.get_scanner().await {
@@ -737,6 +769,9 @@ async fn pool_loop<C: DaemonConnector>(
 
     let short = identity_id.chars().rev().take(7).collect::<String>().chars().rev().collect::<String>();
 
+    // Opt-in fast sync (same trade-off as the active scanner; see scan_loop).
+    let fast_sync = read_config_bool(&app, "fast_sync");
+
     'outer: loop {
         if cancel.load(Ordering::SeqCst) {
             return;
@@ -772,15 +807,29 @@ async fn pool_loop<C: DaemonConnector>(
                 continue;
             }
 
-            let batch_end = (scan_height + 100).min(daemon_height);
+            let batch_step: u64 = if fast_sync { 1000 } else { 100 };
+            let batch_end = (scan_height + batch_step).min(daemon_height);
             let range = (scan_height as usize)..=(batch_end as usize);
-            let fetched: Result<Vec<_>, _> = futures::stream::iter(range)
-                .map(|n| ProvidesScannableBlocks::scannable_block_by_number(&daemon, n))
-                .buffered(4)
-                .collect::<Vec<_>>()
-                .await
-                .into_iter()
-                .collect();
+            let per_block = || async {
+                let r: Result<Vec<_>, _> = futures::stream::iter(range.clone())
+                    .map(|n| ProvidesScannableBlocks::scannable_block_by_number(&daemon, n))
+                    .buffered(4)
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .collect();
+                r
+            };
+            // Fast sync: one bulk get_blocks.bin call (trusting node); fall back to
+            // the validated per-block path on any error.
+            let fetched = if fast_sync {
+                match daemon.bulk_scannable_blocks_trusting_node(range.clone()).await {
+                    Ok(b) => Ok(b),
+                    Err(_) => per_block().await,
+                }
+            } else {
+                per_block().await
+            };
             let blocks = match fetched {
                 Ok(b) => b,
                 Err(_) => continue 'outer, // re-race
@@ -829,5 +878,66 @@ mod connect_smoke {
             }
             Err(e) => panic!("❌ SimpleRequestTransport::new({url}) failed: {e:?}"),
         }
+    }
+
+    // Probe which nodes serve get_blocks.bin (bulk). 30-block contiguous fetch:
+    // fast (<2s) ⇒ bulk path; slow (>8s) ⇒ per-block JSON fallback.
+    // Run: cargo test -p ripley-terminal bulk_probe -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn bulk_probe() {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let nodes = [
+            "http://xmr-node.cakewallet.com:18081",
+            "http://node3-us.monero.love:18081",
+            "http://node2-eu.monero.love:18089",
+            "http://node.monerodevs.org:18089",
+            "http://nodes.hashvault.pro:18081",
+        ];
+        let start = 3_400_000usize;
+        for url in nodes {
+            let daemon = match SimpleRequestTransport::new(url.to_string()).await {
+                Ok(d) => d,
+                Err(e) => { println!("⚠️  {url}: connect failed {e:?}"); continue; }
+            };
+            let t = std::time::Instant::now();
+            let r = ProvidesScannableBlocks::contiguous_scannable_blocks(&daemon, start..=(start + 29)).await;
+            let ms = t.elapsed().as_millis();
+            match r {
+                Ok(b) => println!("{} {url}: {} blocks in {}ms ({:.0} blk/s)",
+                    if ms < 2500 { "🚀 BULK" } else { "🐌 FALLBACK" }, b.len(), ms,
+                    b.len() as f64 / (ms.max(1) as f64 / 1000.0)),
+                Err(e) => println!("❌ {url}: {e:?}"),
+            }
+        }
+    }
+
+    // Measures the FORK's trusting bulk path (get_blocks.bin without prunable_hash).
+    // Run: cargo test -p ripley-terminal fast_bulk_speed -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn fast_bulk_speed() {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let daemon = SimpleRequestTransport::new("http://xmr-node.cakewallet.com:18081".to_string())
+            .await
+            .expect("connect");
+        let start = 3_400_000usize;
+        let t = std::time::Instant::now();
+        let blocks = daemon
+            .bulk_scannable_blocks_trusting_node(start..=(start + 999))
+            .await
+            .expect("bulk trusting fetch");
+        let ms = t.elapsed().as_millis().max(1);
+        println!(
+            "⚡ fast bulk: {} blocks in {}ms ({:.0} blk/s)",
+            blocks.len(),
+            ms,
+            blocks.len() as f64 / (ms as f64 / 1000.0)
+        );
+        assert_eq!(blocks.len(), 1000);
+        let with_idx =
+            blocks.iter().filter(|b| b.output_index_for_first_ringct_output.is_some()).count();
+        println!("   {with_idx}/1000 blocks carry a first-ringct output index");
+        assert!(with_idx > 0, "no output indices populated — spending would break");
     }
 }
