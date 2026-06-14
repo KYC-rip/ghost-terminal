@@ -729,6 +729,38 @@ impl WalletState {
             .sum()
     }
 
+    /// (total, unlocked) atomic balances over unspent outputs. `total` excludes
+    /// spent; `unlocked` additionally excludes frozen and immature outputs (the
+    /// standard 10-block lock plus any explicit timelock). `tip` is the current
+    /// chain height. Amounts are atomic piconero.
+    pub async fn balances(&self, tip: u64) -> (u64, u64) {
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let inner = self.inner.read().await;
+        let mut total = 0u64;
+        let mut unlocked = 0u64;
+        for o in &inner.scanned_outputs {
+            let id = output_id(&o.output);
+            if inner.spent.contains(&id) {
+                continue;
+            }
+            let amt = o.output.commitment().amount;
+            total = total.saturating_add(amt);
+            if inner.frozen.contains(&id) {
+                continue;
+            }
+            let mature = tip >= o.height.saturating_add(10);
+            let timelock_ok = match o.output.additional_timelock() {
+                monero_oxide::transaction::Timelock::None => true,
+                monero_oxide::transaction::Timelock::Block(b) => (tip as usize) >= b,
+                monero_oxide::transaction::Timelock::Time(t) => now >= t,
+            };
+            if mature && timelock_ok {
+                unlocked = unlocked.saturating_add(amt);
+            }
+        }
+        (total, unlocked)
+    }
+
     /// Format piconero to XMR string.
     pub fn format_xmr(atomic: u64) -> String {
         let whole = atomic / 1_000_000_000_000;

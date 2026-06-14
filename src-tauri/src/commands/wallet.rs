@@ -107,7 +107,18 @@ pub async fn get_mnemonic(state: State<'_, WalletState>) -> Result<String, Strin
 
 #[tauri::command]
 pub async fn get_accounts(state: State<'_, WalletState>) -> Result<Vec<MoneroAccount>, String> {
-    Ok(state.get_accounts().await)
+    let mut accounts = state.get_accounts().await;
+    // Inject the live balance into the primary account as ATOMIC piconero strings
+    // (the renderer formats them). Without this the per-account card showed 0 even
+    // when the wallet held funds. Balance tracking is global today, so it maps to
+    // account 0.
+    let tip = state.tip_height().await;
+    let (total, unlocked) = state.balances(tip).await;
+    if let Some(primary) = accounts.get_mut(0) {
+        primary.balance = total.to_string();
+        primary.unlocked_balance = unlocked.to_string();
+    }
+    Ok(accounts)
 }
 
 #[tauri::command]
@@ -136,11 +147,14 @@ pub async fn get_balance(
     state: State<'_, WalletState>,
     _account_index: u32,
 ) -> Result<serde_json::Value, String> {
-    let total = state.compute_balance().await;
-    let formatted = WalletState::format_xmr(total);
+    // Return ATOMIC piconero — the renderer (tauriBridge → walletService.formatXmr)
+    // divides by 1e12 itself. Returning pre-formatted XMR here caused a double
+    // conversion that displayed every balance as ~0.
+    let tip = state.tip_height().await;
+    let (total, unlocked) = state.balances(tip).await;
     Ok(serde_json::json!({
-        "total": formatted,
-        "unlocked": formatted
+        "total": total,
+        "unlocked": unlocked
     }))
 }
 
