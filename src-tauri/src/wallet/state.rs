@@ -602,6 +602,35 @@ impl WalletState {
         self.inner.read().await.spend_key.is_some()
     }
 
+    /// (output_id, key_image_hex) for every currently-unspent owned output.
+    /// Empty if there's no spend key (view-only). Used to ask the daemon which
+    /// outputs are spent via `is_key_image_spent`.
+    pub async fn unspent_key_images(&self) -> Vec<(String, String)> {
+        let inner = self.inner.read().await;
+        let Some(sk) = inner.spend_key.as_ref() else {
+            return Vec::new();
+        };
+        inner
+            .scanned_outputs
+            .iter()
+            .filter(|o| !inner.spent.contains(&output_id(&o.output)))
+            .map(|o| (output_id(&o.output), hex::encode(output_key_image(sk, &o.output))))
+            .collect()
+    }
+
+    /// Mark the given output ids spent (from daemon reconciliation). Returns how
+    /// many were newly inserted.
+    pub async fn mark_ids_spent(&self, ids: &[String]) -> usize {
+        let mut inner = self.inner.write().await;
+        let mut n = 0;
+        for id in ids {
+            if inner.spent.insert(id.clone()) {
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Diagnostic: for the first owned output, report whether the spend key derives
     /// the output key (x·G == P) plus a sample key image. Returns None if there's no
     /// spend key or no owned outputs yet.

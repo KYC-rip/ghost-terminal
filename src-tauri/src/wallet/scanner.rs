@@ -477,6 +477,25 @@ where
         .collect()
 }
 
+/// Ask the daemon which key images are spent via the `is_key_image_spent` RPC.
+/// Returns the spent_status array (0 = unspent, 1 = spent on-chain, 2 = spent in
+/// pool), aligned with `kis_hex`. None on RPC/parse error. This is the
+/// authoritative way to detect spends — it consults the daemon's global key-image
+/// set, independent of which blocks we've scanned.
+async fn query_spent_status<T>(daemon: &MoneroDaemon<T>, kis_hex: &[String]) -> Option<Vec<u64>>
+where
+    T: HttpTransport + Clone + Send + Sync + 'static,
+{
+    let body = serde_json::json!({ "key_images": kis_hex }).to_string();
+    let resp = daemon
+        .rpc_call("is_key_image_spent", Some(body), 4 * 1024 * 1024)
+        .await
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&resp).ok()?;
+    let arr = v.get("spent_status")?.as_array()?;
+    Some(arr.iter().map(|x| x.as_u64().unwrap_or(0)).collect())
+}
+
 /// Build the multi-node fallback pool: spread ONE connection across many distinct
 /// nodes (each sees a single connection → no per-IP throttling). The primary daemon
 /// is always first. Historical blocks are identical across nodes and every per-block
@@ -601,6 +620,12 @@ async fn scan_loop<C: DaemonConnector>(
     let mut diag_inputs_logged = false;
     let mut diag_sanity_logged = false;
 
+    // Reconcile spends with the daemon once we reach the tip. The per-block
+    // scan-based detection can miss spends; this asks the daemon directly (via
+    // is_key_image_spent) which of our outputs are spent — authoritative, and it
+    // works on an already-synced wallet without rescanning.
+    let mut spend_reconciled = false;
+
     loop {
         // Check if superseded
         let ws = app.state::<WalletState>();
@@ -636,6 +661,35 @@ async fn scan_loop<C: DaemonConnector>(
         }
 
         if scan_height >= daemon_height {
+            // Reconcile spends with the daemon once we're at the tip (authoritative,
+            // catches spends made in any wallet — including before this feature).
+            if !spend_reconciled {
+                spend_reconciled = true;
+                let unspent = ws.unspent_key_images().await;
+                if !unspent.is_empty() {
+                    emit_log(&app, "Scan", "info", &format!("🔁 Reconciling spend status of {} outputs with the daemon…", unspent.len()));
+                    let kis: Vec<String> = unspent.iter().map(|(_, k)| k.clone()).collect();
+                    match query_spent_status(&daemon, &kis).await {
+                        Some(status) => {
+                            let spent_ids: Vec<String> = unspent
+                                .iter()
+                                .zip(status.iter())
+                                .filter(|(_, s)| **s != 0)
+                                .map(|((id, _), _)| id.clone())
+                                .collect();
+                            let n = ws.mark_ids_spent(&spent_ids).await;
+                            if n > 0 {
+                                ws.save_output_cache().await;
+                                let bal = WalletState::format_xmr(ws.compute_balance().await);
+                                emit_log(&app, "Scan", "success", &format!("📤 Reconciled spends: {} output(s) marked spent. Balance: {} XMR", n, bal));
+                            } else {
+                                emit_log(&app, "Scan", "info", "✓ No spent outputs found — balance already accurate");
+                            }
+                        }
+                        None => emit_log(&app, "Scan", "warn", "⚠️ Spend reconciliation RPC failed (is_key_image_spent) — balance may over-count"),
+                    }
+                }
+            }
             crate::emit_sync_status(&app, "SYNCED", scan_height, daemon_height, 100.0, &node_label);
             sleep(Duration::from_secs(10)).await;
             continue;
