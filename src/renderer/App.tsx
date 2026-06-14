@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown, Maximize2, Minimize2, Copy, Check, Clock } from 'lucide-react';
+import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown, Maximize2, Minimize2, Copy, Check, Clock, Search } from 'lucide-react';
 import { useVault } from './hooks/useVault';
 import { useStats } from './hooks/useStats';
 import { useTheme } from './hooks/useTheme';
@@ -38,6 +38,7 @@ function MainApp() {
   const [consoleMaximized, setConsoleMaximized] = useState(false);
   const [consoleCopied, setConsoleCopied] = useState(false);
   const [consoleTimestamps, setConsoleTimestamps] = useState(true);
+  const [consoleFilter, setConsoleFilter] = useState('');
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
   const [appVersion, setAppVersion] = useState('1.0');
@@ -62,7 +63,9 @@ function MainApp() {
   };
 
   const copyConsoleLogs = useCallback(async () => {
+    const q = consoleFilter.trim().toLowerCase();
     const text = logs
+      .filter((l: any) => !q || String(l.msg).toLowerCase().includes(q))
       .map((l: any) => (consoleTimestamps ? `[${fmtLogTime(l.timestamp)}] ${l.msg}` : l.msg))
       .join('\n');
     try {
@@ -78,7 +81,7 @@ function MainApp() {
     }
     setConsoleCopied(true);
     setTimeout(() => setConsoleCopied(false), 1500);
-  }, [logs, consoleTimestamps]);
+  }, [logs, consoleTimestamps, consoleFilter]);
 
   const { stats, loading: statsLoading } = useStats();
   const { mode, cycleTheme, resolvedTheme, skin, skinLabel, cycleSkin, contrast, toggleContrast } = useTheme();
@@ -606,12 +609,30 @@ function MainApp() {
                   >
                     {consoleMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
                   </button>
-                  <span className="text-[11px] text-xmr-dim uppercase font-black opacity-50 hidden sm:inline">[ ESC TO CLOSE ]</span>
                   <button onClick={() => setShowConsole(false)} title="Close" className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"><X size={14} /></button>
                 </div>
               </div>
+              {/* Filter bar */}
+              <div className="px-4 py-1.5 border-b border-xmr-green/10 flex items-center gap-2 bg-xmr-base/40">
+                <Search size={12} className="text-xmr-dim shrink-0" />
+                <input
+                  type="text"
+                  value={consoleFilter}
+                  onChange={(e) => setConsoleFilter(e.target.value)}
+                  placeholder="Filter logs… (e.g. spent, Detected, Scanned)"
+                  className="flex-grow bg-transparent text-[11px] font-mono text-xmr-green placeholder:text-xmr-dim/50 outline-none"
+                />
+                {consoleFilter && (
+                  <>
+                    <span className="text-[10px] text-xmr-dim font-black uppercase shrink-0">
+                      {logs.filter((l: any) => String(l.msg).toLowerCase().includes(consoleFilter.toLowerCase())).length} match
+                    </span>
+                    <button onClick={() => setConsoleFilter('')} title="Clear filter" className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer shrink-0"><X size={12} /></button>
+                  </>
+                )}
+              </div>
               <div className="flex-grow overflow-y-auto p-4 font-mono text-[11px] space-y-1.5 custom-scrollbar">
-                {logs.map((log, i) => (
+                {logs.filter((log: any) => !consoleFilter.trim() || String(log.msg).toLowerCase().includes(consoleFilter.toLowerCase())).map((log, i) => (
                   <div key={i} className="flex gap-3 group">
                     {consoleTimestamps && (
                       <span className="text-xmr-dim opacity-60 shrink-0 tabular-nums">[{fmtLogTime(log.timestamp)}]</span>
