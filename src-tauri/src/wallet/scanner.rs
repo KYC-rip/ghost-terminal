@@ -3,7 +3,7 @@
 //! Connects to a Monero daemon, fetches blocks in batches, and scans each block
 //! for outputs belonging to the wallet's ViewPair using monero-wallet's Scanner.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::future::Future;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -794,10 +794,12 @@ async fn scan_loop<C: DaemonConnector>(
                 if let Some(mut scanner) = wallet_state.get_scanner().await {
                     let mut new_output_count = 0u64;
                     let mut new_amount = 0u64;
-                    // Key images spent in this batch's transactions — used to detect
-                    // which of our owned outputs were spent (incl. spends made in
-                    // other wallets). Coinbase (miner) inputs have no key image.
-                    let mut batch_kis: HashSet<[u8; 32]> = HashSet::new();
+                    // Map each spent input key image in this batch to (spending txid,
+                    // height) — used to detect which owned outputs were spent (incl.
+                    // spends made in other wallets) AND to record the outgoing tx.
+                    // block.transactions[k] is the hash of the k-th parsed tx, which we
+                    // use as the txid (we can't recompute pruned-tx hashes ourselves).
+                    let mut ki_to_tx: HashMap<[u8; 32], ([u8; 32], u64)> = HashMap::new();
 
                     for (i, block) in blocks.iter().enumerate() {
                         // Blocks are fetched in range order starting at scan_height,
@@ -818,11 +820,12 @@ async fn scan_loop<C: DaemonConnector>(
                                 emit_log(&app, "Scan", "error", &format!("⚠️ Scan error at ~{}: {:?}", scan_height, e));
                             }
                         }
-                        // Collect the key images this block's (non-miner) transactions spend.
-                        for tx in &block.transactions {
+                        // Collect key image -> spending tx for this block's (non-miner) txs.
+                        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+                            let txid = block.block.transactions.get(tx_idx).copied().unwrap_or([0u8; 32]);
                             for input in &tx.prefix().inputs {
                                 if let monero_oxide::transaction::Input::ToKey { key_image, .. } = input {
-                                    batch_kis.insert(key_image.to_bytes());
+                                    ki_to_tx.insert(key_image.to_bytes(), (txid, block_height));
                                 }
                             }
                         }
@@ -834,7 +837,7 @@ async fn scan_loop<C: DaemonConnector>(
 
                     // Diagnostics (filter console for KIDIAG).
                     if !diag_inputs_logged {
-                        emit_log(&app, "Scan", "warn", &format!("🔧 KIDIAG-inputs first batch [{}-{}]: collected {} input key images, txs={}", scan_height, batch_end, batch_kis.len(), blocks.iter().map(|b| b.transactions.len()).sum::<usize>()));
+                        emit_log(&app, "Scan", "warn", &format!("🔧 KIDIAG-inputs first batch [{}-{}]: collected {} input key images, txs={}", scan_height, batch_end, ki_to_tx.len(), blocks.iter().map(|b| b.transactions.len()).sum::<usize>()));
                         diag_inputs_logged = true;
                     }
                     if !diag_sanity_logged {
@@ -844,9 +847,9 @@ async fn scan_loop<C: DaemonConnector>(
                         }
                     }
 
-                    // Detect spends: mark any owned output whose key image was spent
-                    // in this batch. Requires the spend key (active wallet only).
-                    let newly_spent = wallet_state.mark_spent_by_inputs(&batch_kis).await;
+                    // Detect spends + record outgoing ledger entries for the spending
+                    // txs. Requires the spend key (active wallet only).
+                    let newly_spent = wallet_state.detect_and_record_spends(&ki_to_tx, daemon_height).await;
                     if newly_spent > 0 {
                         emit_log(&app, "Scan", "info", &format!("📤 Detected {} spent output(s) in blocks {}-{}", newly_spent, scan_height, batch_end));
                     }

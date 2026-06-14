@@ -602,6 +602,85 @@ impl WalletState {
         self.inner.read().await.spend_key.is_some()
     }
 
+    /// Detect spends from a batch and record them as outgoing ledger entries.
+    /// `ki_to_tx` maps each on-chain input key image to (spending txid, height).
+    /// For every owned output whose key image appears, the output is marked spent
+    /// and — grouped by spending tx — an outgoing `SentTx` is recorded so the ledger
+    /// shows withdrawals (incl. those made in other wallets). The recorded amount is
+    /// net of change received in the same tx. Dedupes against existing sent entries
+    /// (e.g. our own broadcasts). Returns the number of outputs newly marked spent.
+    pub async fn detect_and_record_spends(
+        &self,
+        ki_to_tx: &HashMap<[u8; 32], ([u8; 32], u64)>,
+        tip: u64,
+    ) -> usize {
+        if ki_to_tx.is_empty() {
+            return 0;
+        }
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let mut inner = self.inner.write().await;
+        let Some(sk) = inner.spend_key.clone() else {
+            return 0;
+        };
+
+        // Group spent owned outputs by their spending tx: txid -> (gross, ids, height).
+        let mut by_tx: HashMap<[u8; 32], (u64, Vec<String>, u64)> = HashMap::new();
+        for o in &inner.scanned_outputs {
+            let id = output_id(&o.output);
+            if inner.spent.contains(&id) {
+                continue;
+            }
+            if let Some((txid, height)) = ki_to_tx.get(&output_key_image(&sk, &o.output)) {
+                let e = by_tx.entry(*txid).or_insert((0, Vec::new(), *height));
+                e.0 = e.0.saturating_add(o.output.commitment().amount);
+                e.1.push(id);
+            }
+        }
+        if by_tx.is_empty() {
+            return 0;
+        }
+
+        // Sum of our outputs received in each tx (change), to net the sent amount.
+        let mut received_by_tx: HashMap<String, u64> = HashMap::new();
+        for o in &inner.scanned_outputs {
+            let txh = hex::encode(o.output.transaction());
+            *received_by_tx.entry(txh).or_insert(0) += o.output.commitment().amount;
+        }
+
+        let existing: HashSet<String> = inner.sent.iter().map(|s| s.tx_hash.clone()).collect();
+        let mut to_mark: Vec<String> = Vec::new();
+        let mut to_record: Vec<storage::SentTx> = Vec::new();
+        for (txid, (gross, ids, height)) in by_tx {
+            let txid_hex = hex::encode(txid);
+            let change = received_by_tx.get(&txid_hex).copied().unwrap_or(0);
+            let net = gross.saturating_sub(change);
+            let timestamp = now.saturating_sub(tip.saturating_sub(height).saturating_mul(120));
+            to_mark.extend(ids);
+            if !existing.contains(&txid_hex) {
+                to_record.push(storage::SentTx {
+                    tx_hash: txid_hex,
+                    amount: net,
+                    fee: 0,
+                    destinations: Vec::new(),
+                    height,
+                    timestamp,
+                    tx_key: String::new(),
+                });
+            }
+        }
+
+        let mut newly = 0;
+        for id in to_mark {
+            if inner.spent.insert(id) {
+                newly += 1;
+            }
+        }
+        for s in to_record {
+            inner.sent.push(s);
+        }
+        newly
+    }
+
     /// (output_id, key_image_hex) for every currently-unspent owned output.
     /// Empty if there's no spend key (view-only). Used to ask the daemon which
     /// outputs are spent via `is_key_image_spent`.
