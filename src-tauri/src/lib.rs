@@ -46,6 +46,9 @@ pub fn run() {
             let tor_state = tor::TorState::new();
             app.manage(tor_state);
 
+            // Background sync pool ("Sync all wallets")
+            app.manage(wallet::SyncPool::new());
+
             log::info!("Ripley Terminal v2 initialized");
             Ok(())
         })

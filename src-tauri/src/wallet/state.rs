@@ -542,6 +542,40 @@ impl WalletState {
         self.inner.read().await.network
     }
 
+    pub async fn data_dir(&self) -> PathBuf {
+        self.inner.read().await.data_dir.clone()
+    }
+
+    /// (active_identity, password) if a wallet is currently unlocked — lets
+    /// settings changes reconcile the background sync pool without re-prompting.
+    pub async fn active_session(&self) -> Option<(String, String)> {
+        let inner = self.inner.read().await;
+        match (&inner.active_identity, &inner.password) {
+            (Some(id), Some(pw)) => Some((id.clone(), pw.clone())),
+            _ => None,
+        }
+    }
+
+    /// Derive the VIEW pair for another identity by decrypting its vault with
+    /// `password` (view-only — no spend key retained). Used to start background
+    /// sync of other wallets. Fails on wrong password.
+    pub async fn derive_view_pair_for(
+        &self,
+        identity_id: &str,
+        password: &str,
+    ) -> Result<ViewPair, String> {
+        let data_dir = self.inner.read().await.data_dir.clone();
+        let wallet_data = storage::load_wallet(&data_dir, identity_id, password)?;
+        let entropy: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
+            .map_err(|e| format!("Invalid seed entropy: {}", e))?
+            .try_into()
+            .map_err(|_| "Seed entropy must be 32 bytes".to_string())?;
+        let (spend_key, view_key) = keys::keys_from_entropy(&entropy)?;
+        let dalek_scalar: curve25519_dalek::Scalar = (*spend_key).into();
+        let spend_point = Point::from(&dalek_scalar * ED25519_BASEPOINT_POINT);
+        ViewPair::new(spend_point, view_key).map_err(|e| format!("Failed to create ViewPair: {:?}", e))
+    }
+
     /// Increment scanner generation — any running scanner with an older generation will stop.
     pub fn next_scanner_generation(&self) -> u64 {
         self.scanner_generation.fetch_add(1, Ordering::SeqCst) + 1

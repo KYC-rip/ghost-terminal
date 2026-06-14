@@ -33,6 +33,11 @@ pub async fn get_identities(app: AppHandle) -> Result<Vec<Identity>, String> {
     Ok(load_identities(&app))
 }
 
+/// All identity ids on disk — used to discover other wallets for background sync.
+pub(crate) fn identity_ids(app: &AppHandle) -> Vec<String> {
+    load_identities(app).into_iter().map(|i| i.id).collect()
+}
+
 #[tauri::command]
 pub async fn save_identities(app: AppHandle, ids: Vec<Identity>) -> Result<(), String> {
     save_identities_to_disk(&app, &ids)

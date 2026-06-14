@@ -74,6 +74,7 @@ pub fn default_config() -> serde_json::Value {
         "show_scanlines": true,
         "hide_zero_balances": false,
         "include_prereleases": false,
+        "sync_all_wallets": false,
         "shortcuts": {
             "LOCK": "Mod+L",
             "SEND": "Mod+S",
@@ -186,6 +187,20 @@ pub async fn save_config_and_reload(app: AppHandle, config: serde_json::Value) -
             "♻️ Routing changed — restarting uplink with the new configuration...",
         );
         BlockScanner::start(app.clone(), "", "", height).await?;
+    }
+
+    // Apply the "Sync all wallets" setting immediately: reconcile the background
+    // pool with the (possibly just-changed) toggle.
+    let pool = app.state::<crate::wallet::SyncPool>();
+    match state.active_session().await {
+        Some((id, pw)) => crate::commands::wallet::refresh_pool(&app, &state, &pool, &id, &pw).await,
+        // Locked: can't start background sync without a password; if the toggle
+        // is off, make sure nothing is left running.
+        None => {
+            if !crate::wallet::scanner::read_config_bool(&app, "sync_all_wallets") {
+                pool.stop_all().await;
+            }
+        }
     }
     Ok(())
 }

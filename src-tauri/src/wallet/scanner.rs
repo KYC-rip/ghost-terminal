@@ -4,6 +4,8 @@
 //! for outputs belonging to the wallet's ViewPair using monero-wallet's Scanner.
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::sleep;
@@ -14,11 +16,13 @@ use tor_rtcompat::PreferredRuntime;
 use monero_daemon_rpc::prelude::*;
 use monero_daemon_rpc::{HttpTransport, MoneroDaemon};
 use monero_simple_request_rpc::SimpleRequestTransport;
+use monero_wallet::{Scanner, ViewPair};
+use monero_address::SubaddressIndex;
 
 use crate::emit_log;
 use crate::tor::{ArtiTransport, SocksTransport, TorState};
 use super::state::WalletState;
-use super::types::SyncStatus;
+use super::{storage, types::SyncStatus};
 
 const GITHUB_NODES_URL: &str = "https://raw.githubusercontent.com/KYC-rip/ripley-terminal/main/resources/nodes.json";
 
@@ -39,6 +43,20 @@ pub(crate) fn read_proxy_address(app: &AppHandle) -> String {
         }
     }
     trimmed.to_string()
+}
+
+/// Read a boolean field from config.json (default false).
+pub(crate) fn read_config_bool(app: &AppHandle, key: &str) -> bool {
+    let path = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("config.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|v| v.get(key).and_then(|m| m.as_bool()))
+        .unwrap_or(false)
 }
 
 /// Read a string field from config.json, if present.
@@ -654,6 +672,140 @@ async fn scan_loop<C: DaemonConnector>(
             0.0
         };
         crate::emit_sync_status(&app, "SYNCING", scan_height, daemon_height, percent, &node_label);
+    }
+}
+
+// ── Background multi-wallet sync ("Sync all wallets") ──
+//
+// Scans a NON-active wallet from `view_pair` alone (no spend key), keeping its
+// <id>.cache warm so switching to it is instant. Independent of WalletState; it
+// owns its own scanner + cache and never touches the active wallet's state.
+
+/// Dispatch the background scan for one pooled wallet over the configured route.
+pub(crate) async fn run_pool_scan(
+    app: AppHandle,
+    identity_id: String,
+    view_pair: ViewPair,
+    from_height: u64,
+    cancel: Arc<AtomicBool>,
+) {
+    match read_routing_mode(&app).as_str() {
+        "tor" => {
+            if let Some(tor) = ensure_tor(&app).await {
+                pool_loop(app, identity_id, view_pair, from_height, cancel, TorConnector { tor }).await;
+            }
+        }
+        "custom" => {
+            let proxy = read_proxy_address(&app);
+            if !proxy.trim().is_empty() {
+                pool_loop(app, identity_id, view_pair, from_height, cancel, CustomProxyConnector { proxy }).await;
+            }
+        }
+        _ => pool_loop(app, identity_id, view_pair, from_height, cancel, ClearnetConnector).await,
+    }
+}
+
+async fn pool_loop<C: DaemonConnector>(
+    app: AppHandle,
+    identity_id: String,
+    view_pair: ViewPair,
+    mut scan_height: u64,
+    cancel: Arc<AtomicBool>,
+    connector: C,
+) {
+    use futures::stream::StreamExt;
+
+    let data_dir = app.state::<WalletState>().data_dir().await;
+
+    // Build a view-only scanner and register subaddresses (account 0). Generous
+    // fixed count so outputs to any reasonable subaddress are detected.
+    let mut scanner = Scanner::new(view_pair.clone());
+    for i in 1..=100u32 {
+        if let Some(idx) = SubaddressIndex::new(0, i) {
+            scanner.register_subaddress(idx);
+        }
+    }
+
+    // Resume from (and accumulate into) the wallet's own cache.
+    let mut cache = storage::load_output_cache(&data_dir, &identity_id);
+    if cache.scan_height > scan_height {
+        scan_height = cache.scan_height;
+    }
+    if scan_height < RINGCT_FORK_HEIGHT {
+        scan_height = RINGCT_FORK_HEIGHT;
+    }
+
+    let short = identity_id.chars().rev().take(7).collect::<String>().chars().rev().collect::<String>();
+
+    'outer: loop {
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        // The active wallet scans itself via WalletState — never double-scan it.
+        if app.state::<WalletState>().is_active_identity(&identity_id).await {
+            return;
+        }
+
+        let (_, _, daemon) = match race_nodes(&app, &connector).await {
+            Some(r) => r,
+            None => {
+                sleep(Duration::from_secs(15)).await;
+                continue;
+            }
+        };
+
+        loop {
+            if cancel.load(Ordering::SeqCst)
+                || app.state::<WalletState>().is_active_identity(&identity_id).await
+            {
+                return;
+            }
+            let daemon_height = match daemon.latest_block_number().await {
+                Ok(h) => h as u64,
+                Err(_) => continue 'outer, // re-race
+            };
+            if scan_height >= daemon_height {
+                cache.scan_height = scan_height;
+                let _ = storage::save_output_cache(&data_dir, &identity_id, &cache);
+                log::info!("[bg {short}] synced to {scan_height}");
+                sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+
+            let batch_end = (scan_height + 100).min(daemon_height);
+            let range = (scan_height as usize)..=(batch_end as usize);
+            let fetched: Result<Vec<_>, _> = futures::stream::iter(range)
+                .map(|n| ProvidesScannableBlocks::scannable_block_by_number(&daemon, n))
+                .buffered(4)
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect();
+            let blocks = match fetched {
+                Ok(b) => b,
+                Err(_) => continue 'outer, // re-race
+            };
+
+            for (i, block) in blocks.iter().enumerate() {
+                let h = scan_height + i as u64;
+                if let Ok(timelocked) = scanner.scan(block.clone()) {
+                    for o in timelocked.ignore_additional_timelock() {
+                        cache.outputs.push(storage::CachedOutput {
+                            data: o.serialize(),
+                            amount: o.commitment().amount,
+                            tx_hash: hex::encode(o.transaction()),
+                            tx_index: o.index_in_transaction(),
+                            subaddress: o.subaddress().map(|s| s.address()),
+                            height: h,
+                        });
+                    }
+                }
+            }
+            scan_height = batch_end + 1;
+            cache.scan_height = scan_height;
+            let _ = storage::save_output_cache(&data_dir, &identity_id, &cache);
+            log::info!("[bg {short}] {scan_height} / {daemon_height} ({} outputs)", cache.outputs.len());
+        }
     }
 }
 

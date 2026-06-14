@@ -25,6 +25,7 @@ pub async fn create_wallet(
 pub async fn open_wallet(
     app: AppHandle,
     state: State<'_, WalletState>,
+    pool: State<'_, crate::wallet::SyncPool>,
     name: String,
     password: String,
 ) -> Result<serde_json::Value, String> {
@@ -36,6 +37,7 @@ pub async fn open_wallet(
     // (which would reset the scan and lose progress).
     if state.is_active_identity(&name).await && state.has_scanner().await {
         state.restore_spend_key(&name, &password).await?;
+        refresh_pool(&app, &state, &pool, &name, &password).await;
         emit_log(&app, "Wallet", "success", "✅ Vault re-unlocked — background sync continued.");
         return Ok(serde_json::json!({ "success": true }));
     }
@@ -53,7 +55,41 @@ pub async fn open_wallet(
     let app_clone = app.clone();
     BlockScanner::start(app_clone, "", "", scan_height).await?;
 
+    refresh_pool(&app, &state, &pool, &name, &password).await;
+
     Ok(serde_json::json!({ "success": true }))
+}
+
+/// Reconcile the background sync pool with the "Sync all wallets" setting. When
+/// ON: stop the active wallet (WalletState scans it), then try the unlock
+/// password against every OTHER vault (in memory only — never stored) and start
+/// background sync for each that decrypts; also resume any wallet discovered
+/// earlier this session. When OFF: stop the whole pool.
+pub(crate) async fn refresh_pool(
+    app: &AppHandle,
+    state: &WalletState,
+    pool: &crate::wallet::SyncPool,
+    active_id: &str,
+    password: &str,
+) {
+    if !crate::wallet::scanner::read_config_bool(app, "sync_all_wallets") {
+        pool.stop_all().await;
+        return;
+    }
+    // The active wallet is scanned by WalletState — never double-scan it.
+    pool.stop(active_id).await;
+
+    for id in crate::commands::identity::identity_ids(app) {
+        if id == active_id {
+            continue;
+        }
+        // Same-password wallets decrypt; others are skipped (start when opened).
+        if let Ok(view_pair) = state.derive_view_pair_for(&id, password).await {
+            pool.start(app, id, view_pair, 0).await;
+        }
+    }
+    // Re-pool wallets discovered earlier this session (e.g. the previously-active one).
+    pool.resume_all_except(app, active_id).await;
 }
 
 #[tauri::command]

@@ -24,7 +24,8 @@ export function SettingsView() {
     skin_style: 'cover',
     shortcuts: {} as Record<string, string>,
     hide_zero_balances: false,
-    include_prereleases: false
+    include_prereleases: false,
+    sync_all_wallets: false
   });
 
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -85,7 +86,8 @@ export function SettingsView() {
         skin_style: fullConfig.skin_style || 'cover',
         shortcuts: fullConfig.shortcuts || {},
         hide_zero_balances: fullConfig.hide_zero_balances || false,
-        include_prereleases: fullConfig.include_prereleases || false
+        include_prereleases: fullConfig.include_prereleases || false,
+        sync_all_wallets: fullConfig.sync_all_wallets || false
       });
 
       const info = await window.api.getAppInfo();
@@ -140,7 +142,8 @@ export function SettingsView() {
         localSettings.network !== config.network ||
         localSettings.customNodeAddress !== config.customNodeAddress ||
         localSettings.useSystemProxy !== config.useSystemProxy ||
-        localSettings.systemProxyAddress !== config.systemProxyAddress;
+        localSettings.systemProxyAddress !== config.systemProxyAddress ||
+        localSettings.sync_all_wallets !== config.sync_all_wallets;
 
       const newConfig = {
         ...config,
@@ -156,7 +159,8 @@ export function SettingsView() {
         skin_style: localSettings.skin_style,
         shortcuts: localSettings.shortcuts,
         hide_zero_balances: localSettings.hide_zero_balances,
-        include_prereleases: localSettings.include_prereleases
+        include_prereleases: localSettings.include_prereleases,
+        sync_all_wallets: localSettings.sync_all_wallets
       };
 
       if (needsPhysicalReload) {
@@ -399,6 +403,27 @@ export function SettingsView() {
                 onChange={(e) => setLocalSettings({ ...localSettings, customNodeAddress: e.target.value })}
                 className="w-full bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
               />
+            </div>
+
+            {/* Sync all wallets */}
+            <div className="flex items-start justify-between border-t border-xmr-border/10 pt-6 gap-4">
+              <div className="space-y-1 flex-1">
+                <span className="text-xs text-xmr-green font-black uppercase">Sync_All_Wallets</span>
+                <p className="text-[11px] text-xmr-dim uppercase font-black leading-relaxed">
+                  Keep ALL your wallets syncing in the background, not just the open one.
+                </p>
+                <p className="text-[10px] text-xmr-dim/80 font-bold leading-relaxed normal-case">
+                  When you unlock one wallet, Ripley tries that password on your other wallets (in memory only —
+                  nothing is ever written to disk) and keeps the ones it can open syncing too, so switching to
+                  them is instant. View-only: spending always still requires that wallet's password.
+                </p>
+              </div>
+              <button
+                onClick={() => setLocalSettings({ ...localSettings, sync_all_wallets: !localSettings.sync_all_wallets })}
+                className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.sync_all_wallets ? 'bg-xmr-green' : 'bg-xmr-base border border-xmr-border'}`}
+              >
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.sync_all_wallets ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
+              </button>
             </div>
           </Card>
         </section>
