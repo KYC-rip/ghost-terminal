@@ -51,6 +51,17 @@ pub fn output_key_image(spend_key: &Scalar, o: &WalletOutput) -> [u8; 32] {
     Point::from(input_key * hp).compress().to_bytes()
 }
 
+/// Sanity check for spend-key correctness: returns true iff (spend_key + key_offset)·G
+/// equals the output's one-time public key. If this is false, the private spend key
+/// (or its conversion) is wrong, so the computed key image can't match the chain.
+pub fn output_key_image_sane(spend_key: &Scalar, o: &WalletOutput) -> bool {
+    let spend_dalek: curve25519_dalek::Scalar = (*spend_key).into();
+    let offset_dalek: curve25519_dalek::Scalar = o.key_offset().into();
+    let x = spend_dalek + offset_dalek;
+    let xg = Point::from(&x * ED25519_BASEPOINT_POINT);
+    xg.compress().to_bytes() == o.key().compress().to_bytes()
+}
+
 /// Stable key linking a prepared tx to its relay step. The tx metadata bytes are
 /// identical at prepare (serialized) and relay (passed back), so their keccak256
 /// is a reliable join key for the staged spend.
@@ -568,6 +579,26 @@ impl WalletState {
         let Some(spend_key) = inner.spend_key.clone() else {
             return 0;
         };
+        // One-shot diagnostic: confirm inputs are being collected AND the spend key
+        // derives the output key (x·G == P). Filter the console for "KIDIAG".
+        {
+            static DIAG: AtomicBool = AtomicBool::new(false);
+            if !DIAG.load(Ordering::SeqCst) {
+                if let Some(o) = inner.scanned_outputs.first() {
+                    let ki = output_key_image(&spend_key, &o.output);
+                    let sane = output_key_image_sane(&spend_key, &o.output);
+                    crate::emit_log(&self.app, "Scan", "warn", &format!(
+                        "🔧 KIDIAG inputs_in_batch={} owned={} sanity(xG==P)={} sample_ki={} sample_P={}",
+                        input_key_images.len(),
+                        inner.scanned_outputs.len(),
+                        sane,
+                        hex::encode(ki),
+                        hex::encode(o.output.key().compress().to_bytes()),
+                    ));
+                    DIAG.store(true, Ordering::SeqCst);
+                }
+            }
+        }
         let mut newly_spent = Vec::new();
         for o in &inner.scanned_outputs {
             let id = output_id(&o.output);
