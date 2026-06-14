@@ -564,6 +564,15 @@ async fn scan_loop<C: DaemonConnector>(
     // (bulk path) so the first ETA isn't wildly pessimistic; both self-correct.
     let mut measured_bps: f64 = if fast_sync { 80.0 } else { (pool_n as f64) * 1.5 };
 
+    // Public nodes routinely drop the keep-alive connection after a big
+    // get_blocks.bin response, so the next request fails with ConnectionReset.
+    // That's almost always cured by an immediate reconnect — NOT a reason to
+    // sleep 5s or abandon the node. We retry quickly a few times; only if the
+    // node stays unresponsive do we return Err so run_outer re-races to a fresh
+    // node (instead of looping forever on a dead one).
+    const MAX_NODE_FAILURES: u32 = 3;
+    let mut consecutive_failures = 0u32;
+
     loop {
         // Check if superseded
         let ws = app.state::<WalletState>();
@@ -576,8 +585,12 @@ async fn scan_loop<C: DaemonConnector>(
         let daemon_height = match daemon.latest_block_number().await {
             Ok(h) => h as u64,
             Err(e) => {
-                emit_log(&app, "Sync", "error", &format!("⚠️ Failed to get daemon height: {:?}", e));
-                sleep(Duration::from_secs(5)).await;
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_NODE_FAILURES {
+                    return Err(format!("{} unresponsive ({} consecutive failures): {:?}", node_label, consecutive_failures, e));
+                }
+                emit_log(&app, "Sync", "warn", &format!("⚠️ Height check failed ({}/{}) — reconnecting…", consecutive_failures, MAX_NODE_FAILURES));
+                sleep(Duration::from_millis(400)).await;
                 continue;
             }
         };
@@ -662,7 +675,12 @@ async fn scan_loop<C: DaemonConnector>(
                 }
                 let blk_s = if fetch_ms > 0 { blocks.len() as f64 / (fetch_ms as f64 / 1000.0) } else { 0.0 };
                 emit_log(&app, "Sync", "info", &format!("✅ Got {} blocks in {}ms ({:.0} blk/s)", blocks.len(), fetch_ms, blk_s));
-                // Scan each block with the wallet's Scanner
+                // A successful fetch means the node is healthy — reset the failure counter.
+                consecutive_failures = 0;
+                // Scan each block with the wallet's Scanner. This is CPU-bound and,
+                // for recent (dense) blocks, can dominate wall-clock — far exceeding
+                // the fetch time — so we time it separately to make the cost visible.
+                let scan_start = std::time::Instant::now();
                 let wallet_state = app.state::<WalletState>();
                 if let Some(mut scanner) = wallet_state.get_scanner().await {
                     let mut new_output_count = 0u64;
@@ -688,6 +706,10 @@ async fn scan_loop<C: DaemonConnector>(
                             }
                         }
                     }
+
+                    let scan_ms = scan_start.elapsed().as_millis();
+                    let scan_bps = if scan_ms > 0 { blocks.len() as f64 / (scan_ms as f64 / 1000.0) } else { 0.0 };
+                    emit_log(&app, "Scan", "info", &format!("🔬 Scanned {} blocks in {}ms ({:.0} blk/s)", blocks.len(), scan_ms, scan_bps));
 
                     if new_output_count > 0 {
                         emit_log(&app, "Scan", "success", &format!(
@@ -721,8 +743,12 @@ async fn scan_loop<C: DaemonConnector>(
                 ws.save_output_cache().await;
             }
             Err(e) => {
-                emit_log(&app, "Sync", "error", &format!("⚠️ Block fetch failed ({}-{}): {:?}", scan_height, batch_end, e));
-                sleep(Duration::from_secs(5)).await;
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_NODE_FAILURES {
+                    return Err(format!("{} block fetch failing ({} consecutive): {:?}", node_label, consecutive_failures, e));
+                }
+                emit_log(&app, "Sync", "warn", &format!("⚠️ Block fetch failed {}-{} ({}/{}) — reconnecting…", scan_height, batch_end, consecutive_failures, MAX_NODE_FAILURES));
+                sleep(Duration::from_millis(400)).await;
                 continue;
             }
         }
