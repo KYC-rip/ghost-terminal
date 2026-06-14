@@ -573,6 +573,16 @@ async fn scan_loop<C: DaemonConnector>(
     const MAX_NODE_FAILURES: u32 = 3;
     let mut consecutive_failures = 0u32;
 
+    // Adaptive bulk batch (fast sync). A bulk get_blocks.bin response for a dense
+    // near-tip range can be too big to transfer within the request timeout, so on a
+    // bulk failure we HALVE the batch and retry bulk (staying on the fast path) down
+    // to a floor. Only if even a floor-sized bulk fails do we serve one validated
+    // per-block batch and then re-race — never grinding the slow path forever on a
+    // node that can't bulk. Successful batches grow it back toward the max.
+    const MAX_BULK_BATCH: u64 = 1000;
+    const MIN_BULK_BATCH: u64 = 100;
+    let mut bulk_batch: u64 = MAX_BULK_BATCH;
+
     loop {
         // Check if superseded
         let ws = app.state::<WalletState>();
@@ -618,7 +628,7 @@ async fn scan_loop<C: DaemonConnector>(
         // big batches, so keep those modest for smooth progress reporting.
         let gap = daemon_height - scan_height;
         let batch_size: u64 = if fast_sync {
-            1_000.min(gap)
+            bulk_batch.min(gap)
         } else if gap > 1_000 {
             100
         } else {
@@ -644,21 +654,40 @@ async fn scan_loop<C: DaemonConnector>(
         emit_log(&app, "Sync", "info", &format!("📥 Fetching blocks {}-{} / {}", scan_height, batch_end, daemon_height));
 
         let fetch_start = std::time::Instant::now();
+        // When set, this batch was served by the slow per-block fallback because the
+        // node couldn't bulk even at the minimum size — re-race afterward to find a
+        // bulk-capable node instead of staying slow.
+        let mut reraise_for_bulk = false;
         // Fast sync: one bulk get_blocks.bin call for the whole batch (trusting the
-        // node). On ANY error, fall back to the validated per-block path — building
-        // the multi-node pool lazily on first use — so we never do worse than the
-        // default. Normal mode uses the per-block path directly across the pool.
+        // node). Normal mode uses the validated per-block path across the pool.
         let parallel_result = if fast_sync {
             match daemon.bulk_scannable_blocks_trusting_node(range.clone()).await {
-                Ok(blocks) => Ok(blocks),
+                Ok(blocks) => {
+                    // Grow the batch back toward the max after a clean fetch.
+                    if bulk_batch < MAX_BULK_BATCH {
+                        bulk_batch = (bulk_batch * 2).min(MAX_BULK_BATCH);
+                    }
+                    Ok(blocks)
+                }
+                Err(e) if bulk_batch > MIN_BULK_BATCH => {
+                    // Usually the response was too big/slow for the timeout — HALVE
+                    // the batch and retry bulk (stay on the fast path), don't downgrade.
+                    bulk_batch = (bulk_batch / 2).max(MIN_BULK_BATCH);
+                    emit_log(&app, "Sync", "warn", &format!("⚡ Bulk fetch failed ({:?}) — shrinking to {}-block batches and retrying bulk", e, bulk_batch));
+                    continue;
+                }
                 Err(e) => {
-                    emit_log(&app, "Sync", "warn", &format!("⚡ Fast-sync bulk fetch failed ({:?}) — falling back to validated per-block for this batch", e));
+                    // Even a floor-sized bulk failed: this node can't serve bulk. Serve
+                    // THIS batch via the validated per-block path so we still progress,
+                    // then re-race to hunt for a node that CAN bulk (resetting the batch
+                    // size) — never grinding the slow path forever.
+                    emit_log(&app, "Sync", "warn", &format!("⚡ Bulk unavailable on {} even at {} blocks ({:?}) — one validated per-block batch, then re-racing", node_label, MIN_BULK_BATCH, e));
                     if pool.len() == 1 {
-                        // First fallback: spin up the multi-node pool now (deferred
-                        // from startup since the happy path never needed it).
                         pool = build_fallback_pool(&app, connector, &daemon, &node_url, fetch_concurrency).await;
                         emit_log(&app, "Sync", "info", &format!("🔗 Fallback pool ready: {} nodes", pool.len()));
                     }
+                    reraise_for_bulk = true;
+                    bulk_batch = MAX_BULK_BATCH;
                     parallel_per_block(&pool, range.clone()).await
                 }
             }
@@ -751,6 +780,13 @@ async fn scan_loop<C: DaemonConnector>(
                 sleep(Duration::from_millis(400)).await;
                 continue;
             }
+        }
+
+        // This batch was served by per-block because the node couldn't bulk. We've
+        // persisted its progress above; now re-race for a bulk-capable node so fast
+        // sync resumes rather than crawling the slow path on a bulk-hostile node.
+        if reraise_for_bulk {
+            return Err(format!("{} can't serve bulk — re-racing for a faster node", node_label));
         }
 
         // Emit sync progress
