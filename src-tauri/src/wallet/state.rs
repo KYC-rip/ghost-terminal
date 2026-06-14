@@ -579,26 +579,6 @@ impl WalletState {
         let Some(spend_key) = inner.spend_key.clone() else {
             return 0;
         };
-        // One-shot diagnostic: confirm inputs are being collected AND the spend key
-        // derives the output key (x·G == P). Filter the console for "KIDIAG".
-        {
-            static DIAG: AtomicBool = AtomicBool::new(false);
-            if !DIAG.load(Ordering::SeqCst) {
-                if let Some(o) = inner.scanned_outputs.first() {
-                    let ki = output_key_image(&spend_key, &o.output);
-                    let sane = output_key_image_sane(&spend_key, &o.output);
-                    crate::emit_log(&self.app, "Scan", "warn", &format!(
-                        "🔧 KIDIAG inputs_in_batch={} owned={} sanity(xG==P)={} sample_ki={} sample_P={}",
-                        input_key_images.len(),
-                        inner.scanned_outputs.len(),
-                        sane,
-                        hex::encode(ki),
-                        hex::encode(o.output.key().compress().to_bytes()),
-                    ));
-                    DIAG.store(true, Ordering::SeqCst);
-                }
-            }
-        }
         let mut newly_spent = Vec::new();
         for o in &inner.scanned_outputs {
             let id = output_id(&o.output);
@@ -620,6 +600,24 @@ impl WalletState {
     /// View-only / locked wallets return false.
     pub async fn can_detect_spends(&self) -> bool {
         self.inner.read().await.spend_key.is_some()
+    }
+
+    /// Diagnostic: for the first owned output, report whether the spend key derives
+    /// the output key (x·G == P) plus a sample key image. Returns None if there's no
+    /// spend key or no owned outputs yet.
+    pub async fn first_output_kidiag(&self) -> Option<String> {
+        let inner = self.inner.read().await;
+        let spend_key = inner.spend_key.as_ref()?;
+        let o = inner.scanned_outputs.first()?;
+        let ki = output_key_image(spend_key, &o.output);
+        let sane = output_key_image_sane(spend_key, &o.output);
+        Some(format!(
+            "owned={} sanity(xG==P)={} sample_ki={} sample_P={}",
+            inner.scanned_outputs.len(),
+            sane,
+            hex::encode(ki),
+            hex::encode(o.output.key().compress().to_bytes()),
+        ))
     }
 
     pub async fn get_network(&self) -> Network {

@@ -594,6 +594,13 @@ async fn scan_loop<C: DaemonConnector>(
     const MIN_BULK_BATCH: u64 = 100;
     let mut bulk_batch: u64 = MAX_BULK_BATCH;
 
+    // One-shot spend-detection diagnostics (filter the console for "KIDIAG"):
+    // `diag_inputs` fires on the first batch (confirms input key images are being
+    // collected at all); `diag_sanity` fires once we have an owned output (checks
+    // x·G == P, i.e. the spend key is correct).
+    let mut diag_inputs_logged = false;
+    let mut diag_sanity_logged = false;
+
     loop {
         // Check if superseded
         let ws = app.state::<WalletState>();
@@ -762,6 +769,18 @@ async fn scan_loop<C: DaemonConnector>(
                     let scan_ms = scan_start.elapsed().as_millis();
                     let scan_bps = if scan_ms > 0 { blocks.len() as f64 / (scan_ms as f64 / 1000.0) } else { 0.0 };
                     emit_log(&app, "Scan", "info", &format!("🔬 Scanned {} blocks in {}ms ({:.0} blk/s)", blocks.len(), scan_ms, scan_bps));
+
+                    // Diagnostics (filter console for KIDIAG).
+                    if !diag_inputs_logged {
+                        emit_log(&app, "Scan", "warn", &format!("🔧 KIDIAG-inputs first batch [{}-{}]: collected {} input key images, txs={}", scan_height, batch_end, batch_kis.len(), blocks.iter().map(|b| b.transactions.len()).sum::<usize>()));
+                        diag_inputs_logged = true;
+                    }
+                    if !diag_sanity_logged {
+                        if let Some(diag) = wallet_state.first_output_kidiag().await {
+                            emit_log(&app, "Scan", "warn", &format!("🔧 KIDIAG-sanity {}", diag));
+                            diag_sanity_logged = true;
+                        }
+                    }
 
                     // Detect spends: mark any owned output whose key image was spent
                     // in this batch. Requires the spend key (active wallet only).

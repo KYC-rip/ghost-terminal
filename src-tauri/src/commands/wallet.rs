@@ -45,6 +45,12 @@ pub async fn open_wallet(
     state.unlock(&name, &password).await?;
     emit_log(&app, "Wallet", "success", "✅ Vault unlocked. Deriving keys...");
 
+    // Spend-detection sanity: log whether the spend key derives the (already cached)
+    // outputs' keys. Fires immediately on unlock — no rescan needed. Filter "KIDIAG".
+    if let Some(diag) = state.first_output_kidiag().await {
+        emit_log(&app, "Wallet", "warn", &format!("🔧 KIDIAG-sanity (on unlock) {}", diag));
+    }
+
     let scan_height = state.get_scan_height().await;
     if scan_height == u64::MAX {
         emit_log(&app, "Sync", "info", "📦 New wallet — starting scanner near daemon tip...");
