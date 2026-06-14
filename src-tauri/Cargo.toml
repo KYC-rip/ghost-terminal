@@ -93,3 +93,15 @@ hex = "0.4"
 tokio-socks = "0.5.3"
 # Base64 for the skin-background data URL (match the version already in-tree)
 base64 = "0.21"
+
+# Compile ALL dependencies with full optimization even in dev builds. Block
+# scanning is almost entirely ed25519/curve25519 work, which runs 10-50x slower
+# when unoptimized — so a debug `cargo tauri dev` makes scanning 1000 blocks take
+# MINUTES instead of seconds (the network fetch was never the bottleneck). Our own
+# crate stays at the default debug opt-level for fast incremental builds + debugging.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Optimize build scripts/proc-macros too (one-time, keeps the first build sane).
+[profile.dev.build-override]
+opt-level = 3
