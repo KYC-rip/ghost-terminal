@@ -29,6 +29,17 @@ pub async fn open_wallet(
     password: String,
 ) -> Result<serde_json::Value, String> {
     emit_log(&app, "Wallet", "info", &format!("🔓 Unlocking vault: {}...", name));
+
+    // Light re-unlock: if this same wallet is already resident with a live
+    // background scanner (soft-locked), just restore the spend key and keep the
+    // running scan + its in-memory progress — don't clear outputs or restart
+    // (which would reset the scan and lose progress).
+    if state.is_active_identity(&name).await && state.has_scanner().await {
+        state.restore_spend_key(&name, &password).await?;
+        emit_log(&app, "Wallet", "success", "✅ Vault re-unlocked — background sync continued.");
+        return Ok(serde_json::json!({ "success": true }));
+    }
+
     state.unlock(&name, &password).await?;
     emit_log(&app, "Wallet", "success", "✅ Vault unlocked. Deriving keys...");
 

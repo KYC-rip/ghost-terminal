@@ -310,6 +310,38 @@ impl WalletState {
         Ok((*seed.to_string()).clone())
     }
 
+    /// True if `identity_id` is the wallet currently resident in this state
+    /// (whether unlocked or soft-locked).
+    pub async fn is_active_identity(&self, identity_id: &str) -> bool {
+        self.inner.read().await.active_identity.as_deref() == Some(identity_id)
+    }
+
+    /// True if a scanner is resident — i.e. the background scan loop is alive
+    /// (soft-lock keeps it). Used to detect "same wallet, still syncing".
+    pub async fn has_scanner(&self) -> bool {
+        self.inner.read().await.scanner.is_some()
+    }
+
+    /// Light re-unlock for an already-resident, soft-locked wallet: restore only
+    /// the spend key (and password) the soft-lock zeroed, WITHOUT clearing
+    /// scanned outputs or touching the scan height. Lets the running background
+    /// scan keep its progress instead of being reset by a full unlock. Verifies
+    /// the password via decrypt and fails on mismatch.
+    pub async fn restore_spend_key(&self, identity_id: &str, password: &str) -> Result<(), String> {
+        let data_dir = self.inner.read().await.data_dir.clone();
+        let wallet_data = storage::load_wallet(&data_dir, identity_id, password)?;
+        let entropy: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
+            .map_err(|e| format!("Invalid seed entropy: {}", e))?
+            .try_into()
+            .map_err(|_| "Seed entropy must be 32 bytes".to_string())?;
+        let (spend_key, _view_key) = keys::keys_from_entropy(&entropy)?;
+        let mut inner = self.inner.write().await;
+        inner.spend_key = Some(spend_key);
+        inner.is_locked = false;
+        inner.password = Some(password.to_string());
+        Ok(())
+    }
+
     pub async fn lock(&self) {
         // Save output cache before taking exclusive lock
         self.save_output_cache().await;
