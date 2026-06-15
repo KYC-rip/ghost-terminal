@@ -666,6 +666,17 @@ async fn scan_loop<C: DaemonConnector>(
     // Tor `fetch_concurrency` (wider hurts over Tor per arti's lazy circuit build).
     const BULK_STREAMS: usize = 4;
 
+    // AIMD sizing to stop the batch from oscillating. A bulk timeout means K
+    // concurrent responses of this size overwhelmed the circuit, so we remember the
+    // largest size that WORKS (`bulk_ceiling`) and refuse to grow straight back into
+    // the size that just failed — otherwise every success doubles into the failing
+    // size, wasting ~half the fetches on doomed timeouts. We only probe ABOVE the
+    // ceiling after a streak of clean fetches (region got sparser / circuit improved),
+    // so the steady state settles at the sustainable size instead of bouncing.
+    let mut bulk_ceiling: u64 = MAX_BULK_BATCH;
+    let mut bulk_streak: u32 = 0;
+    const GROW_PROBE_STREAK: u32 = 6;
+
     // One-shot spend-detection diagnostics (filter the console for "KIDIAG"):
     // `diag_inputs` fires on the first batch (confirms input key images are being
     // collected at all); `diag_sanity` fires once we have an owned output (checks
@@ -809,16 +820,29 @@ async fn scan_loop<C: DaemonConnector>(
         let parallel_result = if fast_sync {
             match bulk_parallel(&daemon, range.clone(), bulk_batch as usize, BULK_STREAMS).await {
                 Ok(blocks) => {
-                    // Grow the sub-range size back toward the max after a clean fetch.
-                    if bulk_batch < MAX_BULK_BATCH {
-                        bulk_batch = (bulk_batch * 2).min(MAX_BULK_BATCH);
+                    // Grow the sub-range size after a clean fetch, but never straight
+                    // back into a size that just timed out (see bulk_ceiling). Stay
+                    // at/under the known-good ceiling; only probe above it after a
+                    // streak of clean fetches earns it (then a timeout knocks it back).
+                    bulk_streak = bulk_streak.saturating_add(1);
+                    let want = (bulk_batch * 2).min(MAX_BULK_BATCH);
+                    if want <= bulk_ceiling {
+                        bulk_batch = want;
+                    } else if bulk_streak >= GROW_PROBE_STREAK {
+                        bulk_batch = want;
+                        bulk_ceiling = want;
+                        bulk_streak = 0;
                     }
                     Ok(blocks)
                 }
                 Err(e) if bulk_batch > MIN_BULK_BATCH => {
-                    // Usually the response was too big/slow for the timeout — HALVE
-                    // the batch and retry bulk (stay on the fast path), don't downgrade.
+                    // K concurrent responses of this size overwhelmed the circuit/timeout.
+                    // HALVE and retry bulk (stay on the fast path), and remember the
+                    // halved size as the ceiling so we don't immediately grow back into
+                    // the size that just failed.
                     bulk_batch = (bulk_batch / 2).max(MIN_BULK_BATCH);
+                    bulk_ceiling = bulk_batch;
+                    bulk_streak = 0;
                     emit_log(&app, "Sync", "warn", &format!("⚡ Bulk fetch failed ({:?}) — shrinking to {}-block batches and retrying bulk", e, bulk_batch));
                     continue;
                 }
@@ -834,6 +858,8 @@ async fn scan_loop<C: DaemonConnector>(
                     }
                     reraise_for_bulk = true;
                     bulk_batch = MAX_BULK_BATCH;
+                    bulk_ceiling = MAX_BULK_BATCH;
+                    bulk_streak = 0;
                     parallel_per_block(&pool, range.clone()).await
                 }
             }
