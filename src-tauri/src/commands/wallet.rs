@@ -519,15 +519,26 @@ pub async fn get_transactions(
     state: State<'_, WalletState>,
     _account_index: u32,
 ) -> Result<serde_json::Value, String> {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use serde_json::json;
     let tip = state.tip_height().await;
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
-    // Incoming: group owned outputs (incl. spent) by txid.
+    // Txids of our own outgoing transactions. An owned output created by one of
+    // these is CHANGE returning to us — not an incoming payment — so it must be
+    // excluded from the incoming list (otherwise a send shows twice: once as
+    // DISPATCHED, once as a bogus RECEIVED for the change).
+    let sent_txids: HashSet<String> =
+        state.get_sent().await.iter().map(|s| s.tx_hash.clone()).collect();
+
+    // Incoming: group owned outputs (incl. spent) by txid, skipping our own
+    // change outputs.
     let mut incoming: HashMap<String, (u64, u64, u32)> = HashMap::new(); // txid -> (amount, min_height, account)
     for (owned, _spent, _frozen) in state.list_owned().await {
         let txid = hex::encode(owned.output.transaction());
+        if sent_txids.contains(&txid) {
+            continue; // change from our own send, not an incoming payment
+        }
         let amt = owned.output.commitment().amount;
         let acct = owned.output.subaddress().map(|s| s.account()).unwrap_or(0);
         let entry = incoming.entry(txid).or_insert((0, owned.height, acct));
