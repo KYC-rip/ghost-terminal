@@ -477,6 +477,52 @@ where
         .collect()
 }
 
+/// Fast-sync bulk fetch, parallelized. Splits `range` into consecutive sub-ranges
+/// of up to `sub_size` blocks and fetches them CONCURRENTLY (`streams` in flight)
+/// against the SAME trusted node, reassembled in order. Over Tor the bottleneck is
+/// circuit latency, not bandwidth, so overlapping fetches multiplies throughput
+/// while the scanner stays idle far less. `buffered` yields results in input
+/// (height) order, so the concatenated stream is contiguous from `range.start()` —
+/// the downstream scan loop (`block_height = scan_height + i`) is unchanged.
+///
+/// One trusted node × K circuits (rather than K different nodes): in fast-sync we
+/// already trust this node, so a single node keeps the trust model identical and
+/// avoids any cross-node tip/reorg mismatch in the reassembled stream. arti reuses
+/// circuits internally, so concurrent calls on clones spread across Tor streams.
+/// If ANY sub-range fails, the whole call errors → the caller's existing
+/// shrink-and-retry / per-block fallback handles it.
+async fn bulk_parallel<T>(
+    daemon: &MoneroDaemon<T>,
+    range: RangeInclusive<usize>,
+    sub_size: usize,
+    streams: usize,
+) -> Result<Vec<ScannableBlock>, InterfaceError>
+where
+    T: HttpTransport + Clone + Send + Sync + 'static,
+{
+    use futures::stream::StreamExt;
+    let (start, end) = (*range.start(), *range.end());
+    let sub_size = sub_size.max(1);
+    let mut subs: Vec<RangeInclusive<usize>> = Vec::new();
+    let mut s = start;
+    while s <= end {
+        let e = (s + sub_size - 1).min(end);
+        subs.push(s..=e);
+        s = e + 1;
+    }
+    let chunks: Vec<Vec<ScannableBlock>> = futures::stream::iter(subs)
+        .map(|sub| {
+            let d = daemon.clone();
+            async move { d.bulk_scannable_blocks_trusting_node(sub).await }
+        })
+        .buffered(streams.max(1))
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(chunks.into_iter().flatten().collect())
+}
+
 /// Ask the daemon which key images are spent via the `is_key_image_spent` RPC.
 /// Returns the spent_status array (0 = unspent, 1 = spent on-chain, 2 = spent in
 /// pool), aligned with `kis_hex`. None on RPC/parse error. This is the
@@ -613,6 +659,13 @@ async fn scan_loop<C: DaemonConnector>(
     const MIN_BULK_BATCH: u64 = 100;
     let mut bulk_batch: u64 = MAX_BULK_BATCH;
 
+    // Bulk fetches in flight per batch (fast sync). Over Tor the bottleneck is
+    // circuit latency, not bandwidth, so we fetch BULK_STREAMS sub-ranges of
+    // `bulk_batch` blocks concurrently against the trusted node and reassemble in
+    // order — overlapping the round-trips the sequential path wasted. 4 matches the
+    // Tor `fetch_concurrency` (wider hurts over Tor per arti's lazy circuit build).
+    const BULK_STREAMS: usize = 4;
+
     // One-shot spend-detection diagnostics (filter the console for "KIDIAG"):
     // `diag_inputs` fires on the first batch (confirms input key images are being
     // collected at all); `diag_sanity` fires once we have an owned output (checks
@@ -720,7 +773,8 @@ async fn scan_loop<C: DaemonConnector>(
         // automatically once the gap is small (and in the SYNCED branch above).
         app.state::<crate::wallet::SyncPool>().set_active_busy(gap > 2_000);
         let batch_size: u64 = if fast_sync {
-            bulk_batch.min(gap)
+            // K sub-ranges of `bulk_batch`, fetched concurrently (see bulk_parallel).
+            (bulk_batch * BULK_STREAMS as u64).min(gap)
         } else if gap > 1_000 {
             100
         } else {
@@ -753,9 +807,9 @@ async fn scan_loop<C: DaemonConnector>(
         // Fast sync: one bulk get_blocks.bin call for the whole batch (trusting the
         // node). Normal mode uses the validated per-block path across the pool.
         let parallel_result = if fast_sync {
-            match daemon.bulk_scannable_blocks_trusting_node(range.clone()).await {
+            match bulk_parallel(&daemon, range.clone(), bulk_batch as usize, BULK_STREAMS).await {
                 Ok(blocks) => {
-                    // Grow the batch back toward the max after a clean fetch.
+                    // Grow the sub-range size back toward the max after a clean fetch.
                     if bulk_batch < MAX_BULK_BATCH {
                         bulk_batch = (bulk_batch * 2).min(MAX_BULK_BATCH);
                     }
