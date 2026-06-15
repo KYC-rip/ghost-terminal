@@ -183,11 +183,23 @@ function createTauriApi() {
             break;
           }
           case 'get_balance':
-          case 'getbalance':
-            result = await invoke('get_balance', { accountIndex: p.account_index || 0 });
-            // Map to wallet-rpc format
-            result = { total_balance: result.total, unlocked_balance: result.unlocked, per_subaddress: [] };
+          case 'getbalance': {
+            const bal: any = await invoke('get_balance', { accountIndex: p.account_index || 0 });
+            // Populate per_subaddress from get_subaddresses (atomic piconero strings)
+            // so the Addresses tab shows real per-subaddress balances — walletService
+            // .getSubaddresses reads them from here. Was hardcoded [] → every row "--".
+            const subsForBal: any[] = await invoke('get_subaddresses', { accountIndex: p.account_index || 0 }) as any[];
+            result = {
+              total_balance: bal.total,
+              unlocked_balance: bal.unlocked,
+              per_subaddress: subsForBal.map((s: any) => ({
+                address_index: s.index,
+                balance: Number(s.balance) || 0,
+                unlocked_balance: Number(s.unlockedBalance ?? s.unlocked_balance) || 0,
+              })),
+            };
             break;
+          }
           case 'get_height':
             result = { height: await invoke('get_height') };
             break;
