@@ -277,8 +277,20 @@ function createTauriApi() {
               address: p.address,
               accountIndex: p.account_index || 0,
               priority: p.priority || 0,
+              // Forward the subaddress filter so "vanish subaddress" sweeps only that
+              // subaddress's outputs, not the whole wallet. null => sweep everything.
+              subaddrIndices: p.subaddr_indices || null,
             });
             result = { tx_hash_list: [sweepHash], tx_hash: sweepHash };
+            break;
+          }
+          case 'sweep_single': {
+            const singleHash = await invoke('sweep_single', {
+              address: p.address,
+              keyImage: p.key_image,
+              priority: p.priority || 0,
+            });
+            result = { tx_hash_list: [singleHash], tx_hash: singleHash };
             break;
           }
           default:

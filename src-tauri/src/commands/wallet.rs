@@ -443,11 +443,14 @@ pub async fn sweep_all(
     app: AppHandle,
     state: State<'_, WalletState>,
     address: String,
-    _account_index: u32,
+    account_index: u32,
     priority: Option<u8>,
+    // When Some, sweep only outputs belonging to these subaddress (minor) indices of
+    // `account_index` ("vanish subaddress"). When None, sweep the whole wallet.
+    subaddr_indices: Option<Vec<u32>>,
 ) -> Result<String, String> {
-    let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
     let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
+    let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
     let network = state.get_network().await;
     let daemon_url = state.get_daemon_url().await.ok_or("No daemon connected")?;
 
@@ -455,11 +458,64 @@ pub async fn sweep_all(
         .map_err(|e| format!("Invalid address {}: {:?}", address, e))?;
 
     let sweep_tip = state.tip_height().await;
-    let inputs = state.get_spendable_outputs(sweep_tip).await;
+    let mut inputs = state.get_spendable_outputs(sweep_tip).await;
+    if let Some(idxs) = &subaddr_indices {
+        inputs.retain(|o| {
+            o.subaddress()
+                .map(|s| s.account() as u32 == account_index && idxs.contains(&(s.address() as u32)))
+                .unwrap_or(false)
+        });
+    }
     if inputs.is_empty() {
         return Err("No spendable outputs to sweep".into());
     }
 
+    run_sweep(&app, &*state, view_pair, spend_key, daemon_url, dest, inputs, priority).await
+}
+
+/// Sweep exactly ONE spendable output to `address` ("vanish coin"). The output is
+/// identified by the synthetic output_id that `get_outputs` exposes to the UI as
+/// `key_image` (we can't derive real key images for arbitrary outputs client-side).
+#[tauri::command]
+pub async fn sweep_single(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    address: String,
+    key_image: String,
+    priority: Option<u8>,
+) -> Result<String, String> {
+    let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
+    let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
+    let network = state.get_network().await;
+    let daemon_url = state.get_daemon_url().await.ok_or("No daemon connected")?;
+
+    let dest = MoneroAddress::from_str(network, &address)
+        .map_err(|e| format!("Invalid address {}: {:?}", address, e))?;
+
+    let sweep_tip = state.tip_height().await;
+    let mut inputs = state.get_spendable_outputs(sweep_tip).await;
+    inputs.retain(|o| crate::wallet::state::output_id(o) == key_image);
+    if inputs.is_empty() {
+        return Err("Output not found among spendable outputs (already spent or still immature)".into());
+    }
+
+    run_sweep(&app, &*state, view_pair, spend_key, daemon_url, dest, inputs, priority).await
+}
+
+/// Shared sweep core for `sweep_all` / `sweep_single`: pick fee priority, build +
+/// sign + broadcast `inputs` to `dest` over the configured route, mark the swept
+/// outputs spent, record the ledger entry, and log. `inputs` is already the exact
+/// set to sweep (the callers do the selection/filtering).
+async fn run_sweep(
+    app: &AppHandle,
+    state: &WalletState,
+    view_pair: monero_wallet::ViewPair,
+    spend_key: zeroize::Zeroizing<monero_oxide::ed25519::Scalar>,
+    daemon_url: String,
+    dest: MoneroAddress,
+    inputs: Vec<monero_wallet::WalletOutput>,
+    priority: Option<u8>,
+) -> Result<String, String> {
     let fee_priority = match priority.unwrap_or(0) {
         1 => FeePriority::Unimportant,
         3 => FeePriority::Elevated,
@@ -468,19 +524,19 @@ pub async fn sweep_all(
         _ => FeePriority::Normal,
     };
 
-    emit_log(&app, "Tx", "info", &format!("🧹 Sweeping {} outputs to {}...", inputs.len(), address));
+    emit_log(app, "Tx", "info", &format!("🧹 Sweeping {} output(s)...", inputs.len()));
 
     let (tx_hash, fee, amount, spent_ids, destinations, tx_key) =
-        match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+        match crate::wallet::scanner::read_routing_mode(app).as_str() {
             "tor" => {
-                let tor = crate::wallet::scanner::ensure_tor(&app).await
+                let tor = crate::wallet::scanner::ensure_tor(app).await
                     .ok_or("Tor is not available — refusing to sweep over clearnet")?;
                 let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
                     .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
                 sweep_via_daemon(&daemon, &view_pair, inputs, dest, fee_priority, &spend_key).await?
             }
             "custom" => {
-                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                let proxy = crate::wallet::scanner::read_proxy_address(app);
                 if proxy.trim().is_empty() {
                     return Err("Custom routing selected but no proxy address is set".into());
                 }
@@ -508,7 +564,7 @@ pub async fn sweep_all(
         tx_key,
     }).await;
 
-    emit_log(&app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
+    emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
     Ok(tx_hash)
 }
 

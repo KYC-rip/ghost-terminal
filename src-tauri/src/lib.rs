@@ -89,6 +89,7 @@ pub fn run() {
             commands::wallet::prepare_transfer,
             commands::wallet::relay_transfer,
             commands::wallet::sweep_all,
+            commands::wallet::sweep_single,
             commands::wallet::get_transactions,
             commands::wallet::get_outputs,
             // Proof operations
