@@ -222,9 +222,10 @@ pub async fn prepare_transfer(
     let view_pair = state.get_view_pair().await
         .ok_or("Wallet is locked")?;
 
-    let mut outputs = state.get_spendable_outputs().await;
+    let tip = state.tip_height().await;
+    let mut outputs = state.get_spendable_outputs(tip).await;
     if outputs.is_empty() {
-        return Err("No spendable outputs. Wait for sync to complete.".into());
+        return Err("No spendable (unlocked) outputs yet — recent change may still be maturing.".into());
     }
 
     // Parse destination addresses
@@ -453,7 +454,8 @@ pub async fn sweep_all(
     let dest = MoneroAddress::from_str(network, &address)
         .map_err(|e| format!("Invalid address {}: {:?}", address, e))?;
 
-    let inputs = state.get_spendable_outputs().await;
+    let sweep_tip = state.tip_height().await;
+    let inputs = state.get_spendable_outputs(sweep_tip).await;
     if inputs.is_empty() {
         return Err("No spendable outputs to sweep".into());
     }

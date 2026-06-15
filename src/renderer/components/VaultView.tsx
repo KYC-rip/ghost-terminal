@@ -303,6 +303,13 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                 {usdValue && (
                   <div className="text-xs font-bold text-xmr-dim/60 uppercase tracking-[0.1em] mb-2">{usdValue} USD</div>
                 )}
+                {/* When some funds are locked (e.g. change still maturing), the headline
+                    shows the TOTAL; surface the spendable portion so it's clear. */}
+                {currentAcc?.unlockedBalance && currentAcc.unlockedBalance !== currentAccBalance && (
+                  <div className="text-[10px] font-bold text-amber-500/80 uppercase tracking-[0.1em] mb-2">
+                    {currentAcc.unlockedBalance} available · rest locked (maturing)
+                  </div>
+                )}
 
                 {/* Address */}
                 <div className="text-[10px] text-xmr-dim/30 tracking-wider mb-3">

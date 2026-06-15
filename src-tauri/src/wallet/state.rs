@@ -487,14 +487,29 @@ impl WalletState {
 
     /// Outputs available to spend: unspent and not frozen. (Locked-by-timelock
     /// outputs are left in; tx construction will reject any that aren't mature.)
-    pub async fn get_spendable_outputs(&self) -> Vec<WalletOutput> {
+    /// Outputs that can be used as transaction inputs RIGHT NOW: unspent, unfrozen,
+    /// AND unlocked (past the 10-block coinbase/standard lock + any explicit
+    /// timelock). `tip` is the current chain height. Excluding immature outputs is
+    /// essential — spending one (e.g. freshly-returned change) yields a tx the
+    /// daemon rejects.
+    pub async fn get_spendable_outputs(&self, tip: u64) -> Vec<WalletOutput> {
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
         let inner = self.inner.read().await;
         inner
             .scanned_outputs
             .iter()
             .filter(|o| {
                 let id = output_id(&o.output);
-                !inner.spent.contains(&id) && !inner.frozen.contains(&id)
+                if inner.spent.contains(&id) || inner.frozen.contains(&id) {
+                    return false;
+                }
+                let mature = tip >= o.height.saturating_add(10);
+                let timelock_ok = match o.output.additional_timelock() {
+                    monero_oxide::transaction::Timelock::None => true,
+                    monero_oxide::transaction::Timelock::Block(b) => (tip as usize) >= b,
+                    monero_oxide::transaction::Timelock::Time(t) => now >= t,
+                };
+                mature && timelock_ok
             })
             .map(|o| o.output.clone())
             .collect()
