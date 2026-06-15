@@ -883,22 +883,56 @@ impl WalletState {
     }
 
     /// Get all subaddresses (primary + derived).
-    pub async fn get_subaddresses(&self) -> Vec<SubaddressInfo> {
+    pub async fn get_subaddresses(&self, tip: u64) -> Vec<SubaddressInfo> {
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
         let inner = self.inner.read().await;
         let view_pair = match inner.view_pair.as_ref() {
             Some(vp) => vp,
             None => return vec![],
         };
 
+        // Sum unspent outputs per subaddress (minor) index of account 0 so the
+        // Addresses tab shows where funds actually live (was hardcoded "0" → every
+        // row read empty). Mirrors balances() for the unlocked figure: skip frozen,
+        // require the 10-block lock + any timelock. Outputs to the main address (no
+        // subaddress) and account-0 attribute to index 0.
+        let mut totals: std::collections::HashMap<u32, (u64, u64)> = std::collections::HashMap::new();
+        for o in &inner.scanned_outputs {
+            let id = output_id(&o.output);
+            if inner.spent.contains(&id) {
+                continue;
+            }
+            let (acct, minor) = match o.output.subaddress() {
+                Some(s) => (s.account() as u32, s.address() as u32),
+                None => (0, 0),
+            };
+            if acct != 0 {
+                continue; // single-account wallet
+            }
+            let amt = o.output.commitment().amount;
+            let entry = totals.entry(minor).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(amt);
+            let mature = tip >= o.height.saturating_add(10);
+            let timelock_ok = match o.output.additional_timelock() {
+                monero_oxide::transaction::Timelock::None => true,
+                monero_oxide::transaction::Timelock::Block(b) => (tip as usize) >= b,
+                monero_oxide::transaction::Timelock::Time(t) => now >= t,
+            };
+            if !inner.frozen.contains(&id) && mature && timelock_ok {
+                entry.1 = entry.1.saturating_add(amt);
+            }
+        }
+
         let mut result = vec![];
 
         // Index 0 = primary address
+        let (b0, u0) = totals.get(&0u32).copied().unwrap_or((0, 0));
         result.push(SubaddressInfo {
             index: 0,
             address: view_pair.legacy_address(inner.network).to_string(),
             label: "Primary".to_string(),
-            balance: "0".to_string(),
-            unlocked_balance: "0".to_string(),
+            balance: b0.to_string(),
+            unlocked_balance: u0.to_string(),
             is_used: true,
         });
 
@@ -911,13 +945,14 @@ impl WalletState {
                     .map(|(_, l)| l.clone())
                     .unwrap_or_else(|| format!("Subaddress #{}", i));
 
+                let (b, u) = totals.get(&i).copied().unwrap_or((0, 0));
                 result.push(SubaddressInfo {
                     index: i,
                     address: address.to_string(),
                     label,
-                    balance: "0".to_string(),
-                    unlocked_balance: "0".to_string(),
-                    is_used: false,
+                    balance: b.to_string(),
+                    unlocked_balance: u.to_string(),
+                    is_used: b > 0,
                 });
             }
         }

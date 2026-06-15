@@ -177,7 +177,8 @@ pub async fn get_subaddresses(
     state: State<'_, WalletState>,
     _account_index: u32,
 ) -> Result<Vec<SubaddressInfo>, String> {
-    Ok(state.get_subaddresses().await)
+    let tip = state.tip_height().await;
+    Ok(state.get_subaddresses(tip).await)
 }
 
 #[tauri::command]
