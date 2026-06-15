@@ -27,6 +27,10 @@ pub struct SyncPool {
     /// View pairs discovered (via password-reuse on unlock) this session, so a
     /// wallet can be re-pooled after it stops being active without re-decrypting.
     known: Mutex<HashMap<String, ViewPair>>,
+    /// Set while the ACTIVE wallet is doing a heavy catch-up (large block gap /
+    /// rescan). Background pool scanners back off while this is true, so they don't
+    /// compete with the active wallet for the node + CPU.
+    active_busy: Arc<AtomicBool>,
 }
 
 impl SyncPool {
@@ -34,7 +38,18 @@ impl SyncPool {
         Self {
             entries: Mutex::new(HashMap::new()),
             known: Mutex::new(HashMap::new()),
+            active_busy: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Signal whether the active wallet is mid heavy catch-up (pool backs off).
+    pub fn set_active_busy(&self, busy: bool) {
+        self.active_busy.store(busy, Ordering::SeqCst);
+    }
+
+    /// Whether background pool scanners should back off right now.
+    pub fn is_active_busy(&self) -> bool {
+        self.active_busy.load(Ordering::SeqCst)
     }
 
     /// Start background sync for a wallet (idempotent — no-op if already running).

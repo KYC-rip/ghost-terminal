@@ -665,6 +665,8 @@ async fn scan_loop<C: DaemonConnector>(
         }
 
         if scan_height >= daemon_height {
+            // Active wallet caught up — let the background pool run again.
+            app.state::<crate::wallet::SyncPool>().set_active_busy(false);
             // Reconcile spends with the daemon once we're at the tip (authoritative,
             // catches spends made in any wallet — including before this feature).
             if !spend_reconciled {
@@ -712,6 +714,11 @@ async fn scan_loop<C: DaemonConnector>(
         // use a large batch. The validated per-block fallback gains nothing from
         // big batches, so keep those modest for smooth progress reporting.
         let gap = daemon_height - scan_height;
+
+        // Pause the background "Sync all wallets" pool during a heavy catch-up so
+        // it doesn't compete with the active wallet for the node + CPU. Resumes
+        // automatically once the gap is small (and in the SYNCED branch above).
+        app.state::<crate::wallet::SyncPool>().set_active_busy(gap > 2_000);
         let batch_size: u64 = if fast_sync {
             bulk_batch.min(gap)
         } else if gap > 1_000 {
@@ -1007,6 +1014,12 @@ async fn pool_loop<C: DaemonConnector>(
                 || app.state::<WalletState>().is_active_identity(&identity_id).await
             {
                 return;
+            }
+            // Back off while the active wallet is doing a heavy catch-up, so we
+            // don't compete for the node + CPU (resumes when it's caught up).
+            if app.state::<crate::wallet::SyncPool>().is_active_busy() {
+                sleep(Duration::from_secs(5)).await;
+                continue;
             }
             let daemon_height = match daemon.latest_block_number().await {
                 Ok(h) => h as u64,
