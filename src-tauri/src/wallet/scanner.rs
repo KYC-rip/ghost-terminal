@@ -523,6 +523,32 @@ where
     Ok(chunks.into_iter().flatten().collect())
 }
 
+/// How long any single block-fetch attempt may run before the watchdog aborts it.
+/// Healthy bulk/per-block batches finish in ~10–50s even over Tor; this only trips
+/// on a genuinely stalled node/circuit.
+const FETCH_DEADLINE: Duration = Duration::from_secs(75);
+
+/// Watchdog wrapper: bound a fetch by FETCH_DEADLINE. Over Tor a dead circuit can
+/// make a request hang with NO transport-level timeout — `buffered()` then waits on
+/// the stuck future forever, the scan loop never returns, and the outer re-race
+/// never fires (a true deadlock, not a slow sync). Converting the hang into an Err
+/// lets the existing retry/shrink/re-race recover, so the app self-heals across
+/// flaky networks instead of freezing. Returns `String` errors so the caller's
+/// recovery is identical whether the cause was an RPC error or a stall.
+async fn with_deadline<F>(fut: F) -> Result<Vec<ScannableBlock>, String>
+where
+    F: Future<Output = Result<Vec<ScannableBlock>, InterfaceError>>,
+{
+    match tokio::time::timeout(FETCH_DEADLINE, fut).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(format!("{:?}", e)),
+        Err(_) => Err(format!(
+            "watchdog: fetch exceeded {}s — node/circuit stalled, recovering",
+            FETCH_DEADLINE.as_secs()
+        )),
+    }
+}
+
 /// Ask the daemon which key images are spent via the `is_key_image_spent` RPC.
 /// Returns the spent_status array (0 = unspent, 1 = spent on-chain, 2 = spent in
 /// pool), aligned with `kis_hex`. None on RPC/parse error. This is the
@@ -818,7 +844,7 @@ async fn scan_loop<C: DaemonConnector>(
         // Fast sync: one bulk get_blocks.bin call for the whole batch (trusting the
         // node). Normal mode uses the validated per-block path across the pool.
         let parallel_result = if fast_sync {
-            match bulk_parallel(&daemon, range.clone(), bulk_batch as usize, BULK_STREAMS).await {
+            match with_deadline(bulk_parallel(&daemon, range.clone(), bulk_batch as usize, BULK_STREAMS)).await {
                 Ok(blocks) => {
                     // Grow the sub-range size after a clean fetch, but never straight
                     // back into a size that just timed out (see bulk_ceiling). Stay
@@ -860,11 +886,11 @@ async fn scan_loop<C: DaemonConnector>(
                     bulk_batch = MAX_BULK_BATCH;
                     bulk_ceiling = MAX_BULK_BATCH;
                     bulk_streak = 0;
-                    parallel_per_block(&pool, range.clone()).await
+                    with_deadline(parallel_per_block(&pool, range.clone())).await
                 }
             }
         } else {
-            parallel_per_block(&pool, range.clone()).await
+            with_deadline(parallel_per_block(&pool, range.clone())).await
         };
         match parallel_result {
             Ok(blocks) => {
