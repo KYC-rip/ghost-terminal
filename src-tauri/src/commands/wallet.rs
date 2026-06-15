@@ -222,7 +222,7 @@ pub async fn prepare_transfer(
     let view_pair = state.get_view_pair().await
         .ok_or("Wallet is locked")?;
 
-    let outputs = state.get_spendable_outputs().await;
+    let mut outputs = state.get_spendable_outputs().await;
     if outputs.is_empty() {
         return Err("No spendable outputs. Wait for sync to complete.".into());
     }
@@ -239,6 +239,32 @@ pub async fn prepare_transfer(
 
     let total_amount: u64 = payments.iter().map(|(_, a)| a).sum();
     emit_log(&app, "Tx", "info", &format!("💰 Sending {} piconero to {} destination(s)", total_amount, payments.len()));
+
+    // Coin selection: spend a MINIMAL set of outputs (largest-first) covering the
+    // amount + a fee headroom. Previously ALL spendable outputs were passed as
+    // inputs, producing a huge many-input transaction with an absurd fee (~0.005
+    // XMR for a 0.01 send). Largest-first keeps the input count — and thus the
+    // fee — small. (Leaves smaller outputs unspent; churn/sweep to consolidate.)
+    outputs.sort_by(|a, b| b.commitment().amount.cmp(&a.commitment().amount));
+    const FEE_HEADROOM: u64 = 2_000_000_000; // 0.002 XMR — generous fee buffer
+    let target = total_amount.saturating_add(FEE_HEADROOM);
+    let mut selected = Vec::new();
+    let mut selected_sum = 0u64;
+    for o in outputs.drain(..) {
+        selected_sum = selected_sum.saturating_add(o.commitment().amount);
+        selected.push(o);
+        if selected_sum >= target {
+            break;
+        }
+    }
+    if selected_sum < total_amount {
+        return Err(format!(
+            "Insufficient balance: selected {} piconero, need {} + fee",
+            selected_sum, total_amount
+        ));
+    }
+    let outputs = selected;
+    emit_log(&app, "Tx", "info", &format!("🪙 Selected {} input(s) totaling {} piconero", outputs.len(), selected_sum));
 
     let fee_priority = match priority.unwrap_or(0) {
         0 => FeePriority::Normal,

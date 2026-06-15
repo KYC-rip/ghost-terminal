@@ -212,13 +212,21 @@ function createTauriApi() {
             await invoke('set_subaddress_label', { index: p.index?.minor || 0, label: p.label || '', accountIndex: p.account_index || 0 });
             result = {};
             break;
-          case 'transfer':
-            result = await invoke('prepare_transfer', {
+          case 'transfer': {
+            // wallet-rpc 'transfer' is one-call: prepare THEN relay. prepare_transfer
+            // only builds the unsigned tx (fee + metadata) and does NOT broadcast —
+            // so we chain relay_transfer and return the real broadcast tx hash.
+            // (Previously this only prepared, so tx_hash was undefined → EMPTY_TX_HASH
+            // and funds never moved.)
+            const prep: any = await invoke('prepare_transfer', {
               destinations: (p.destinations || []).map((d: any) => ({ address: d.address || d.destination, amount: String(d.amount) })),
               accountIndex: p.account_index || 0,
               priority: p.priority,
             });
+            const txid = await invoke('relay_transfer', { txMetadata: prep.txMetadata });
+            result = { tx_hash: txid, fee: prep.fee, amount: prep.amount };
             break;
+          }
           case 'relay_tx':
             result = { tx_hash: await invoke('relay_transfer', { txMetadata: p.hex }) };
             break;
