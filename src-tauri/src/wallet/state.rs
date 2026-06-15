@@ -456,9 +456,17 @@ impl WalletState {
         if self.scanner_generation.load(Ordering::SeqCst) != generation {
             return;
         }
-        inner
-            .scanned_outputs
-            .extend(outputs.into_iter().map(|output| OwnedOutput { output, height }));
+        // Dedupe by output id (txid:index). Re-scanning a block (e.g. a re-race or a
+        // restart overlapping the same range) would otherwise add the same output
+        // twice and inflate the balance. output_id is unique per real output.
+        let mut existing: HashSet<String> =
+            inner.scanned_outputs.iter().map(|o| output_id(&o.output)).collect();
+        for output in outputs {
+            let id = output_id(&output);
+            if existing.insert(id) {
+                inner.scanned_outputs.push(OwnedOutput { output, height });
+            }
+        }
     }
 
     pub async fn get_spend_key(&self) -> Option<Zeroizing<Scalar>> {

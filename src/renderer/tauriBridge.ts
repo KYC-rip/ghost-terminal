@@ -133,6 +133,19 @@ function createTauriApi() {
             });
           }
         }
+        if (p.source === 'BALANCE_DATA') {
+          // Parse: "total|unlocked" (atomic piconero)
+          const parts = (p.message as string).split('|');
+          if (parts.length >= 2) {
+            callback({
+              type: 'BALANCE_CHANGED',
+              payload: {
+                balance: parseInt(parts[0]),
+                unlocked: parseInt(parts[1]),
+              }
+            });
+          }
+        }
       }).then(fn => unlisten = fn);
 
       return () => { unlisten?.(); };

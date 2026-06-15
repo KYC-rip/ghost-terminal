@@ -693,6 +693,11 @@ async fn scan_loop<C: DaemonConnector>(
                         None => emit_log(&app, "Scan", "warn", "⚠️ Spend reconciliation RPC failed (is_key_image_spent) — balance may over-count"),
                     }
                 }
+                // Push the (now reconciled) balance to the UI — frontend polling
+                // stops once synced, so without this the displayed balance stays at
+                // the pre-reconcile over-count.
+                let (total, unlocked) = ws.balances(daemon_height).await;
+                crate::emit_balance(&app, total, unlocked);
             }
             crate::emit_sync_status(&app, "SYNCED", scan_height, daemon_height, 100.0, &node_label);
             sleep(Duration::from_secs(10)).await;
@@ -852,6 +857,8 @@ async fn scan_loop<C: DaemonConnector>(
                     let newly_spent = wallet_state.detect_and_record_spends(&ki_to_tx, daemon_height).await;
                     if newly_spent > 0 {
                         emit_log(&app, "Scan", "info", &format!("📤 Detected {} spent output(s) in blocks {}-{}", newly_spent, scan_height, batch_end));
+                        let (total, unlocked) = wallet_state.balances(daemon_height).await;
+                        crate::emit_balance(&app, total, unlocked);
                     }
 
                     if new_output_count > 0 {

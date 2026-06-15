@@ -9,13 +9,24 @@ pub fn emit_log(app: &AppHandle, source: &str, level: &str, message: &str) {
     // Mirror app-console logs to stdout so they're visible when running headless /
     // via the dev server (the emit below only reaches the frontend window). Skip
     // the high-frequency SYNC_DATA/TOR_STATUS machine channels to avoid spam.
-    if source != "SYNC_DATA" && source != "TOR_STATUS" {
+    if source != "SYNC_DATA" && source != "TOR_STATUS" && source != "BALANCE_DATA" {
         println!("[{}/{}] {}", source, level, message);
     }
     let _ = app.emit("core-log", serde_json::json!({
         "source": source,
         "level": level,
         "message": message,
+    }));
+}
+
+/// Push a balance update to the frontend (piconero). Piggybacked on core-log with
+/// source "BALANCE_DATA" (same workaround as sync status), message "total|unlocked".
+/// The renderer maps this to a BALANCE_CHANGED event.
+pub fn emit_balance(app: &AppHandle, total: u64, unlocked: u64) {
+    let _ = app.emit("core-log", serde_json::json!({
+        "source": "BALANCE_DATA",
+        "level": "info",
+        "message": format!("{}|{}", total, unlocked),
     }));
 }
 
