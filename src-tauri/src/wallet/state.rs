@@ -120,6 +120,11 @@ struct WalletInner {
     /// Spend staged at prepare time (spent ids + partial sent-log entry), keyed
     /// by a hash of the tx metadata; committed only after the broadcast succeeds.
     pending_spends: HashMap<String, (Vec<String>, storage::SentTx)>,
+    /// Optimistic change credit per outgoing txid (atomic). After a send, the
+    /// change returns to us but isn't scanned until the tx is mined, so we credit
+    /// it here (counted in the TOTAL, as locked) until the real output is scanned —
+    /// at which point add_outputs prunes the entry. In-memory only (not persisted).
+    pending_change: HashMap<String, u64>,
     scan_height: u64,
 
     // Active daemon URL (set by scanner after connecting)
@@ -162,6 +167,7 @@ impl WalletState {
                 frozen: HashSet::new(),
                 sent: vec![],
                 pending_spends: HashMap::new(),
+                pending_change: HashMap::new(),
                 scan_height: 0,
                 daemon_url: None,
                 data_dir,
@@ -297,6 +303,7 @@ impl WalletState {
         inner.frozen.clear();
         inner.sent.clear();
         inner.pending_spends.clear();
+        inner.pending_change.clear();
 
         // Load cached outputs (avoids full rescan on relaunch)
         let cache = storage::load_output_cache(&inner.data_dir, identity_id);
@@ -464,6 +471,9 @@ impl WalletState {
         for output in outputs {
             let id = output_id(&output);
             if existing.insert(id) {
+                // The real change output just arrived — drop its optimistic credit
+                // so the balance isn't double-counted (now counted via this output).
+                inner.pending_change.remove(&hex::encode(output.transaction()));
                 inner.scanned_outputs.push(OwnedOutput { output, height });
             }
         }
@@ -564,8 +574,30 @@ impl WalletState {
         {
             let mut inner = self.inner.write().await;
             if let Some((ids, mut sent)) = inner.pending_spends.remove(meta_key) {
+                // Derive the change = (sum of spent inputs) − sent − fee, BEFORE
+                // marking the inputs spent (they're still resident). Credit it
+                // optimistically as locked balance so the total doesn't visibly dip
+                // by the full input until the change output is mined + scanned.
+                let id_set: HashSet<String> = ids.iter().cloned().collect();
+                let spent_sum: u64 = inner
+                    .scanned_outputs
+                    .iter()
+                    .filter(|o| id_set.contains(&output_id(&o.output)))
+                    .map(|o| o.output.commitment().amount)
+                    .sum();
+                // Guard against the (rare) race where the change output is already
+                // scanned — don't double-credit; add_outputs would have pruned it.
+                let already_scanned = inner
+                    .scanned_outputs
+                    .iter()
+                    .any(|o| hex::encode(o.output.transaction()) == tx_hash);
+                let change = spent_sum.saturating_sub(sent.amount).saturating_sub(sent.fee);
+
                 for id in ids {
                     inner.spent.insert(id);
+                }
+                if change > 0 && !already_scanned {
+                    inner.pending_change.insert(tx_hash.clone(), change);
                 }
                 sent.tx_hash = tx_hash;
                 sent.height = height;
@@ -807,6 +839,7 @@ impl WalletState {
         // state and survive. This also clears any stale spent over-count.
         inner.spent.clear();
         inner.pending_spends.clear();
+        inner.pending_change.clear();
         inner.sync_status.status = "SYNCING".to_string();
         inner.sync_status.height = from_height;
         inner.sync_status.sync_percent = 0.0;
@@ -971,7 +1004,10 @@ impl WalletState {
                 unlocked = unlocked.saturating_add(amt);
             }
         }
-        (total, unlocked)
+        // Add optimistically-credited change (from sends whose change output isn't
+        // scanned yet). It's locked, so it counts toward TOTAL but not unlocked.
+        let pending: u64 = inner.pending_change.values().sum();
+        (total.saturating_add(pending), unlocked)
     }
 
     /// Format piconero to XMR string.
