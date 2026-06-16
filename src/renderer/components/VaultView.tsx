@@ -28,6 +28,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
   } = vault;
   const [tab, setTab] = useState<'ledger' | 'addresses' | 'coins' | 'contacts'>('ledger');
   const [modals, setModals] = useState({ seed: false, receive: false, send: false, splinter: false, churn: false });
+  const [reracing, setReracing] = useState(false);
   const [mnemonic, setMnemonic] = useState('');
   const [contacts, setContacts] = useState<any[]>([]);
   const [dispatchAddr, setDispatchAddr] = useState('');
@@ -354,11 +355,20 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                       {isSyncing && <Loader2 size={8} className="animate-spin" />}
                       {status}{nodeLabel ? ` (${nodeLabel})` : ''}
                       <button
-                        onClick={(e) => { e.stopPropagation(); window.api.reselectNode().catch(() => {}); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (reracing) return;
+                          setReracing(true);
+                          window.api.reselectNode().catch(() => {});
+                          // Spin while the race runs (it resolves async via sync-status);
+                          // keep it visible long enough to confirm the click registered.
+                          setTimeout(() => setReracing(false), 3000);
+                        }}
+                        disabled={reracing}
                         title="Re-select node — race the pool for a faster connection"
-                        className="ml-0.5 text-xmr-dim/50 hover:text-xmr-green transition-colors cursor-pointer"
+                        className="ml-0.5 text-xmr-dim/50 hover:text-xmr-green transition-colors cursor-pointer disabled:opacity-60"
                       >
-                        <RefreshCw size={9} />
+                        <RefreshCw size={9} className={reracing ? 'animate-spin text-xmr-accent' : ''} />
                       </button>
                     </span>
                   </div>
