@@ -353,6 +353,13 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                     <span className={`flex items-center gap-1 ${isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
                       {isSyncing && <Loader2 size={8} className="animate-spin" />}
                       {status}{nodeLabel ? ` (${nodeLabel})` : ''}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); window.api.reselectNode().catch(() => {}); }}
+                        title="Re-select node — race the pool for a faster connection"
+                        className="ml-0.5 text-xmr-dim/50 hover:text-xmr-green transition-colors cursor-pointer"
+                      >
+                        <RefreshCw size={9} />
+                      </button>
                     </span>
                   </div>
                   <div className="flex justify-between text-[10px] uppercase font-black">

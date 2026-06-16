@@ -102,6 +102,9 @@ export interface IApi {
   vigilGetSession: (identityId: string) => Promise<Record<string, any> | null>;
   vigilClearSession: (identityId: string) => Promise<{ success: boolean; error?: string }>;
 
+  // --- Network ---
+  reselectNode: () => Promise<void>;
+
   // --- App Info & Updates ---
   getAppInfo: () => Promise<{ version: string; appDataPath: string; walletsPath: string; platform: NodeJS.Platform; isPackaged: boolean }>;
   openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;

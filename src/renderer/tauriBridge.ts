@@ -372,6 +372,9 @@ function createTauriApi() {
     authorizeXmr402: (_id: string, _password: string | null) => Promise.resolve({ success: false }),
     clearCache: () => Promise.resolve(),
 
+    // Force the scanner to re-race the node pool (manual "re-select node").
+    reselectNode: () => invoke('reselect_node'),
+
     // ── Send (legacy IPC) ──
     sendXmr: async (address: string, amountAtomic: string, accountIndex?: number) => {
       try {
