@@ -162,11 +162,16 @@ pub async fn prepare_sweep(
     let outgoing_view_key = Zeroizing::new(view_pair.spend().compress().to_bytes());
 
     let build = |amount: u64, owds: Vec<OutputWithDecoys>| {
+        // Monero requires >= 2 outputs (SendError::NoChange otherwise). A sweep has
+        // no change, so split the swept amount across TWO outputs to the destination
+        // — the canonical sweep shape (matches monero-wallet-rpc sweep_all). One
+        // payment + no change = a single output and is rejected.
+        let half = amount / 2;
         SignableTransaction::new(
             RctType::ClsagBulletproofPlus,
             outgoing_view_key.clone(),
             owds,
-            vec![(destination, amount)],
+            vec![(destination, half), (destination, amount - half)],
             Change::fingerprintable(None), // no change output — sweep everything
             vec![],
             fee_rate,
