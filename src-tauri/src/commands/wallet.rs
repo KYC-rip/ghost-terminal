@@ -281,7 +281,7 @@ pub async fn prepare_transfer(
     // transport follows the configured routing mode so decoy selection never
     // leaks the user IP. prepare_transaction is generic over the transport.
     emit_log(&app, "Tx", "info", "🎲 Selecting decoys and computing fee...");
-    let prepared = tx_deadline("Prepare", async {
+    let prepared = tx_deadline(&app, "Prepare", async {
         Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(&app).as_str() {
             "tor" => {
                 emit_log(&app, "Tx", "info", "🔗 Connecting to daemon over Tor for decoy selection...");
@@ -377,7 +377,7 @@ pub async fn relay_transfer(
 
     // Broadcast over the configured routing mode so the originating IP for the
     // transaction is never exposed. broadcast_transaction is generic.
-    tx_deadline("Broadcast", async {
+    tx_deadline(&app, "Broadcast", async {
         match crate::wallet::scanner::read_routing_mode(&app).as_str() {
             "tor" => {
                 let tor = crate::wallet::scanner::ensure_tor(&app).await
@@ -427,17 +427,23 @@ pub async fn relay_transfer(
 /// caller surfaces a retryable error instead of deadlocking.
 const TX_DEADLINE_SECS: u64 = 90;
 
-async fn tx_deadline<T, F>(label: &str, fut: F) -> Result<T, String>
+async fn tx_deadline<T, F>(app: &AppHandle, label: &str, fut: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
 {
-    match tokio::time::timeout(std::time::Duration::from_secs(TX_DEADLINE_SECS), fut).await {
+    let r = match tokio::time::timeout(std::time::Duration::from_secs(TX_DEADLINE_SECS), fut).await {
         Ok(r) => r,
         Err(_) => Err(format!(
             "{} timed out after {}s — node/Tor circuit stalled, please try again",
             label, TX_DEADLINE_SECS
         )),
+    };
+    // Surface failures to the console — a command's Err otherwise returns silently to
+    // the UI (swallowed to the browser console) and reads as "nothing happened".
+    if let Err(e) = &r {
+        emit_log(app, "Tx", "error", &format!("❌ {} failed: {}", label, e));
     }
+    r
 }
 
 async fn sweep_via_daemon<D>(
@@ -552,7 +558,7 @@ async fn run_sweep(
 
     emit_log(app, "Tx", "info", &format!("🧹 Sweeping {} output(s)...", inputs.len()));
 
-    let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = tx_deadline("Sweep", async {
+    let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = tx_deadline(app, "Sweep", async {
         Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(app).as_str() {
             "tor" => {
                 let tor = crate::wallet::scanner::ensure_tor(app).await
