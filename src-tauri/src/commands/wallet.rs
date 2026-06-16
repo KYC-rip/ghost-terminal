@@ -281,32 +281,34 @@ pub async fn prepare_transfer(
     // transport follows the configured routing mode so decoy selection never
     // leaks the user IP. prepare_transaction is generic over the transport.
     emit_log(&app, "Tx", "info", "🎲 Selecting decoys and computing fee...");
-    let prepared = match crate::wallet::scanner::read_routing_mode(&app).as_str() {
-        "tor" => {
-            emit_log(&app, "Tx", "info", "🔗 Connecting to daemon over Tor for decoy selection...");
-            let tor = crate::wallet::scanner::ensure_tor(&app).await
-                .ok_or("Tor is not available — cannot select decoys without leaking your IP")?;
-            let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
-                .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
-            transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
-        }
-        "custom" => {
-            let proxy = crate::wallet::scanner::read_proxy_address(&app);
-            if proxy.trim().is_empty() {
-                return Err("Custom routing selected but no proxy address is set".into());
+    let prepared = tx_deadline("Prepare", async {
+        Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+            "tor" => {
+                emit_log(&app, "Tx", "info", "🔗 Connecting to daemon over Tor for decoy selection...");
+                let tor = crate::wallet::scanner::ensure_tor(&app).await
+                    .ok_or("Tor is not available — cannot select decoys without leaking your IP")?;
+                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
+                    .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
+                transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
             }
-            emit_log(&app, "Tx", "info", "🔗 Connecting to daemon via SOCKS proxy for decoy selection...");
-            let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
-                .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
-            transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
-        }
-        _ => {
-            emit_log(&app, "Tx", "info", "🔗 Connecting to daemon for decoy selection...");
-            let daemon = SimpleRequestTransport::new(daemon_url).await
-                .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
-            transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
-        }
-    };
+            "custom" => {
+                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                if proxy.trim().is_empty() {
+                    return Err("Custom routing selected but no proxy address is set".to_string());
+                }
+                emit_log(&app, "Tx", "info", "🔗 Connecting to daemon via SOCKS proxy for decoy selection...");
+                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
+                    .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
+                transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
+            }
+            _ => {
+                emit_log(&app, "Tx", "info", "🔗 Connecting to daemon for decoy selection...");
+                let daemon = SimpleRequestTransport::new(daemon_url).await
+                    .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
+                transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
+            }
+        })
+    }).await?;
 
     let fee_formatted = WalletState::format_xmr(prepared.fee);
     let amount_formatted = WalletState::format_xmr(prepared.amount);
@@ -375,29 +377,32 @@ pub async fn relay_transfer(
 
     // Broadcast over the configured routing mode so the originating IP for the
     // transaction is never exposed. broadcast_transaction is generic.
-    match crate::wallet::scanner::read_routing_mode(&app).as_str() {
-        "tor" => {
-            let tor = crate::wallet::scanner::ensure_tor(&app).await
-                .ok_or("Tor is not available — refusing to broadcast over clearnet")?;
-            let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
-                .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
-            transact::broadcast_transaction(&daemon, &signed_tx).await?;
-        }
-        "custom" => {
-            let proxy = crate::wallet::scanner::read_proxy_address(&app);
-            if proxy.trim().is_empty() {
-                return Err("Custom routing selected but no proxy address is set".into());
+    tx_deadline("Broadcast", async {
+        match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+            "tor" => {
+                let tor = crate::wallet::scanner::ensure_tor(&app).await
+                    .ok_or("Tor is not available — refusing to broadcast over clearnet")?;
+                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
+                    .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
+                transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
-            let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
-                .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
-            transact::broadcast_transaction(&daemon, &signed_tx).await?;
+            "custom" => {
+                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                if proxy.trim().is_empty() {
+                    return Err("Custom routing selected but no proxy address is set".to_string());
+                }
+                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
+                    .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
+                transact::broadcast_transaction(&daemon, &signed_tx).await?;
+            }
+            _ => {
+                let daemon = SimpleRequestTransport::new(daemon_url).await
+                    .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
+                transact::broadcast_transaction(&daemon, &signed_tx).await?;
+            }
         }
-        _ => {
-            let daemon = SimpleRequestTransport::new(daemon_url).await
-                .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
-            transact::broadcast_transaction(&daemon, &signed_tx).await?;
-        }
-    }
+        Ok::<(), String>(())
+    }).await?;
 
     let tx_hash = hex::encode(signed_tx.hash());
 
@@ -415,6 +420,26 @@ pub async fn relay_transfer(
 
 /// Prepare → sign → broadcast a sweep over one concrete daemon transport.
 /// Returns (tx_hash, fee, amount, spent_output_ids, destinations) on success.
+/// Bound a tx build/broadcast network op (decoy fetch + relay over the configured
+/// route) so a stalled Tor circuit can't hang the sweep/transfer commands forever —
+/// the scan-loop watchdog doesn't cover this path. Decoy selection + broadcast take
+/// longer than a single block fetch, so the deadline is generous; on timeout the
+/// caller surfaces a retryable error instead of deadlocking.
+const TX_DEADLINE_SECS: u64 = 90;
+
+async fn tx_deadline<T, F>(label: &str, fut: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(std::time::Duration::from_secs(TX_DEADLINE_SECS), fut).await {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "{} timed out after {}s — node/Tor circuit stalled, please try again",
+            label, TX_DEADLINE_SECS
+        )),
+    }
+}
+
 async fn sweep_via_daemon<D>(
     daemon: &D,
     view_pair: &monero_wallet::ViewPair,
@@ -527,8 +552,8 @@ async fn run_sweep(
 
     emit_log(app, "Tx", "info", &format!("🧹 Sweeping {} output(s)...", inputs.len()));
 
-    let (tx_hash, fee, amount, spent_ids, destinations, tx_key) =
-        match crate::wallet::scanner::read_routing_mode(app).as_str() {
+    let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = tx_deadline("Sweep", async {
+        Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(app).as_str() {
             "tor" => {
                 let tor = crate::wallet::scanner::ensure_tor(app).await
                     .ok_or("Tor is not available — refusing to sweep over clearnet")?;
@@ -539,7 +564,7 @@ async fn run_sweep(
             "custom" => {
                 let proxy = crate::wallet::scanner::read_proxy_address(app);
                 if proxy.trim().is_empty() {
-                    return Err("Custom routing selected but no proxy address is set".into());
+                    return Err("Custom routing selected but no proxy address is set".to_string());
                 }
                 let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
                     .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
@@ -550,7 +575,8 @@ async fn run_sweep(
                     .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
                 sweep_via_daemon(&daemon, &view_pair, inputs, dest, fee_priority, &spend_key).await?
             }
-        };
+        })
+    }).await?;
 
     // Mark every swept output spent + log the broadcast.
     let tip = state.tip_height().await;
