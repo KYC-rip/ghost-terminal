@@ -559,57 +559,82 @@ async fn run_sweep(
     inputs: Vec<monero_wallet::WalletOutput>,
     priority: Option<u8>,
 ) -> Result<String, String> {
-    let fee_priority = match priority.unwrap_or(0) {
-        1 => FeePriority::Unimportant,
-        3 => FeePriority::Elevated,
-        4 => FeePriority::Priority,
-        p if p > 4 => FeePriority::Custom { priority: p as u32 },
-        _ => FeePriority::Normal,
-    };
+    // Large input sets can't fit one tx — the node throttles the concurrent decoy
+    // fetches and a many-input tx is heavy to build/sign, blowing the tx watchdog.
+    // So sweep in BATCHES: multiple txs to the same destination (like
+    // monero-wallet-rpc sweep_all). Each batch is an independent sweep of a disjoint
+    // subset of inputs; the destination receives everything minus one fee per batch.
+    // Batches run sequentially; a mid-way failure leaves earlier batches broadcast
+    // (funds already at the destination) and the rest unswept — safe to re-run.
+    const MAX_SWEEP_INPUTS: usize = 24;
+    let batches: Vec<Vec<monero_wallet::WalletOutput>> =
+        inputs.chunks(MAX_SWEEP_INPUTS).map(|c| c.to_vec()).collect();
+    let total_batches = batches.len();
 
-    emit_log(app, "Tx", "info", &format!("🧹 Sweeping {} output(s)...", inputs.len()));
+    let mut last_hash = String::new();
+    for (bi, batch) in batches.into_iter().enumerate() {
+        let fee_priority = match priority.unwrap_or(0) {
+            1 => FeePriority::Unimportant,
+            3 => FeePriority::Elevated,
+            4 => FeePriority::Priority,
+            p if p > 4 => FeePriority::Custom { priority: p as u32 },
+            _ => FeePriority::Normal,
+        };
 
-    let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = tx_deadline(app, "Sweep", async {
-        Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(app).as_str() {
-            "tor" => {
-                let tor = crate::wallet::scanner::ensure_tor(app).await
-                    .ok_or("Tor is not available — refusing to sweep over clearnet")?;
-                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
-                sweep_via_daemon(&daemon, &view_pair, inputs, dest, fee_priority, &spend_key).await?
-            }
-            "custom" => {
-                let proxy = crate::wallet::scanner::read_proxy_address(app);
-                if proxy.trim().is_empty() {
-                    return Err("Custom routing selected but no proxy address is set".to_string());
+        if total_batches > 1 {
+            emit_log(app, "Tx", "info", &format!("🧹 Sweep batch {}/{} ({} output(s))…", bi + 1, total_batches, batch.len()));
+        } else {
+            emit_log(app, "Tx", "info", &format!("🧹 Sweeping {} output(s)...", batch.len()));
+        }
+
+        let daemon_url = daemon_url.clone();
+        let dest = dest.clone();
+        let label = if total_batches > 1 { format!("Sweep {}/{}", bi + 1, total_batches) } else { "Sweep".to_string() };
+
+        let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = tx_deadline(app, &label, async {
+            Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(app).as_str() {
+                "tor" => {
+                    let tor = crate::wallet::scanner::ensure_tor(app).await
+                        .ok_or("Tor is not available — refusing to sweep over clearnet")?;
+                    let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
+                        .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
+                    sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
                 }
-                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
-                sweep_via_daemon(&daemon, &view_pair, inputs, dest, fee_priority, &spend_key).await?
-            }
-            _ => {
-                let daemon = SimpleRequestTransport::new(daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
-                sweep_via_daemon(&daemon, &view_pair, inputs, dest, fee_priority, &spend_key).await?
-            }
-        })
-    }).await?;
+                "custom" => {
+                    let proxy = crate::wallet::scanner::read_proxy_address(app);
+                    if proxy.trim().is_empty() {
+                        return Err("Custom routing selected but no proxy address is set".to_string());
+                    }
+                    let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
+                        .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
+                    sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
+                }
+                _ => {
+                    let daemon = SimpleRequestTransport::new(daemon_url).await
+                        .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
+                    sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
+                }
+            })
+        }).await?;
 
-    // Mark every swept output spent + log the broadcast.
-    let tip = state.tip_height().await;
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
-    state.mark_spent(spent_ids, crate::wallet::storage::SentTx {
-        tx_hash: tx_hash.clone(),
-        amount,
-        fee,
-        destinations,
-        height: tip,
-        timestamp: now,
-        tx_key,
-    }).await;
+        // Mark this batch's outputs spent + log the broadcast.
+        let tip = state.tip_height().await;
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        state.mark_spent(spent_ids, crate::wallet::storage::SentTx {
+            tx_hash: tx_hash.clone(),
+            amount,
+            fee,
+            destinations,
+            height: tip,
+            timestamp: now,
+            tx_key,
+        }).await;
 
-    emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
-    Ok(tx_hash)
+        emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
+        last_hash = tx_hash;
+    }
+
+    Ok(last_hash)
 }
 
 /// Returns transaction history in the Monero-RPC `get_transfers` shape the
