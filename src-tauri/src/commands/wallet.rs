@@ -570,6 +570,10 @@ async fn run_sweep(
     let batches: Vec<Vec<monero_wallet::WalletOutput>> =
         inputs.chunks(MAX_SWEEP_INPUTS).map(|c| c.to_vec()).collect();
     let total_batches = batches.len();
+    // A sweep to our OWN address (churn / vanish) returns the funds to us, so credit
+    // the swept amount optimistically — otherwise the balance reads ~0 between
+    // broadcast and the next scan, which looks like lost funds to the user.
+    let dest_is_self = state.is_own_address(&dest).await;
 
     let mut last_hash = String::new();
     for (bi, batch) in batches.into_iter().enumerate() {
@@ -628,7 +632,7 @@ async fn run_sweep(
             height: tip,
             timestamp: now,
             tx_key,
-        }).await;
+        }, dest_is_self).await;
 
         emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
         last_hash = tx_hash;

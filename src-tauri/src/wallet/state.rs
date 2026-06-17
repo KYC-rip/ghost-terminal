@@ -609,16 +609,55 @@ impl WalletState {
     }
 
     /// Mark a set of output ids spent directly (used by sweep_all, which knows
-    /// its inputs up-front). Records the sent entry and persists.
-    pub async fn mark_spent(&self, ids: Vec<String>, sent: storage::SentTx) {
+    /// its inputs up-front). Records the sent entry and persists. When `credit_self`
+    /// (the sweep destination is one of OUR OWN addresses — churn / vanish), the swept
+    /// `amount` is credited optimistically as locked balance, keyed by tx_hash and
+    /// pruned in add_outputs once the real output is scanned. Without this a churn
+    /// drops the balance to ~0 between broadcast and the next scan — which reads as
+    /// "funds lost" to the user even though they're in-flight to their own address.
+    pub async fn mark_spent(&self, ids: Vec<String>, sent: storage::SentTx, credit_self: bool) {
         {
             let mut inner = self.inner.write().await;
             for id in ids {
                 inner.spent.insert(id);
             }
+            if credit_self && sent.amount > 0 {
+                // Guard the (rare) race where the swept output is already scanned —
+                // don't double-credit; add_outputs would have pruned it.
+                let already_scanned = inner
+                    .scanned_outputs
+                    .iter()
+                    .any(|o| hex::encode(o.output.transaction()) == sent.tx_hash);
+                if !already_scanned {
+                    inner.pending_change.insert(sent.tx_hash.clone(), sent.amount);
+                }
+            }
             inner.sent.push(sent);
         }
         self.save_output_cache().await;
+    }
+
+    /// Whether `addr` is one of THIS wallet's addresses (primary or a derived
+    /// subaddress of account 0) — i.e. a sweep to it returns the funds to us, so the
+    /// swept amount should be credited optimistically rather than shown as gone.
+    pub async fn is_own_address(&self, addr: &MoneroAddress) -> bool {
+        let inner = self.inner.read().await;
+        let vp = match inner.view_pair.as_ref() {
+            Some(v) => v,
+            None => return false,
+        };
+        let target = addr.to_string();
+        if vp.legacy_address(inner.network).to_string() == target {
+            return true;
+        }
+        for i in 1..inner.next_subaddress_index {
+            if let Some(idx) = monero_address::SubaddressIndex::new(0, i) {
+                if vp.subaddress(inner.network, idx).to_string() == target {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Detect spent outputs by matching their key images against a set of input
