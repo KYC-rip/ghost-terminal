@@ -593,11 +593,31 @@ impl WalletState {
                     .any(|o| hex::encode(o.output.transaction()) == tx_hash);
                 let change = spent_sum.saturating_sub(sent.amount).saturating_sub(sent.fee);
 
+                // Destinations that are OUR OWN addresses (splinter shatters the
+                // balance into fragments on our own subaddresses; also a send-to-self)
+                // return to us too — credit them optimistically, not just the change,
+                // so the balance doesn't read ~0 between broadcast and the next scan.
+                let self_dest_total: u64 = {
+                    let vp = inner.view_pair.as_ref();
+                    let net = inner.network;
+                    let next = inner.next_subaddress_index;
+                    sent.destinations.iter().filter(|(addr, _)| match vp {
+                        Some(v) => {
+                            v.legacy_address(net).to_string() == *addr
+                                || (1..next).any(|i| monero_address::SubaddressIndex::new(0, i)
+                                    .map(|idx| v.subaddress(net, idx).to_string() == *addr)
+                                    .unwrap_or(false))
+                        }
+                        None => false,
+                    }).map(|(_, amt)| *amt).sum()
+                };
+                let credit = change.saturating_add(self_dest_total);
+
                 for id in ids {
                     inner.spent.insert(id);
                 }
-                if change > 0 && !already_scanned {
-                    inner.pending_change.insert(tx_hash.clone(), change);
+                if credit > 0 && !already_scanned {
+                    inner.pending_change.insert(tx_hash.clone(), credit);
                 }
                 sent.tx_hash = tx_hash;
                 sent.height = height;
