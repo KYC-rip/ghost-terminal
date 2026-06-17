@@ -47,6 +47,35 @@ fn derive_tx_key_hex(outgoing_view_key: &Zeroizing<[u8; 32]>, inputs: &[OutputWi
     }
 }
 
+/// Concurrency for ring-decoy selection. Each decoy fetch is a small, latency-bound
+/// RPC, so selecting them in parallel turns a fragmented wallet's serial decoy loop
+/// (one round-trip per input — minutes, and >90s-timeout-prone, for a many-input
+/// sweep/send) into a few concurrent rounds. Kept modest so it doesn't overwhelm a
+/// Tor circuit.
+const DECOY_CONCURRENCY: usize = 8;
+
+/// Select ring decoys for every input concurrently, preserving input order. Each
+/// task uses its own OsRng (a shared `&mut rng` can't cross concurrent futures).
+async fn fetch_decoys_parallel(
+    daemon: &(impl ProvidesDecoys + Sync),
+    inputs: Vec<WalletOutput>,
+    ring_len: u8,
+    block_number: usize,
+) -> Result<Vec<OutputWithDecoys>, String> {
+    use futures::stream::StreamExt;
+    futures::stream::iter(inputs.into_iter())
+        .map(|input| async move {
+            let mut rng = OsRng;
+            OutputWithDecoys::new(&mut rng, daemon, ring_len, block_number, input).await
+        })
+        .buffered(DECOY_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Decoy selection failed: {:?}", e))
+}
+
 /// Construct a transaction (select decoys, compute fee), but don't sign yet.
 /// Returns a PreparedTransaction that can be reviewed before signing.
 pub async fn prepare_transaction(
@@ -56,8 +85,6 @@ pub async fn prepare_transaction(
     payments: Vec<(MoneroAddress, u64)>,
     priority: FeePriority,
 ) -> Result<PreparedTransaction, String> {
-    let mut rng = OsRng;
-
     // Record which owned outputs are being spent (every provided input is a real
     // spend; decoys are ring members, not inputs) before they're consumed.
     let spent_ids: Vec<String> = inputs.iter().map(crate::wallet::state::output_id).collect();
@@ -66,19 +93,9 @@ pub async fn prepare_transaction(
     let block_number = daemon.latest_block_number().await
         .map_err(|e| format!("Failed to get block number: {:?}", e))?;
 
-    // Select decoys for each input
+    // Select decoys for each input (concurrently — see fetch_decoys_parallel).
     let ring_len = 16u8; // Monero's current ring size
-    let mut inputs_with_decoys = Vec::with_capacity(inputs.len());
-    for input in inputs {
-        let owd = OutputWithDecoys::new(
-            &mut rng,
-            daemon,
-            ring_len,
-            block_number,
-            input,
-        ).await.map_err(|e| format!("Decoy selection failed: {:?}", e))?;
-        inputs_with_decoys.push(owd);
-    }
+    let inputs_with_decoys = fetch_decoys_parallel(daemon, inputs, ring_len, block_number).await?;
 
     // Get fee rate from daemon
     // max_per_weight: safety cap to prevent absurd fees from a malicious node
@@ -139,7 +156,6 @@ pub async fn prepare_sweep(
     destination: MoneroAddress,
     priority: FeePriority,
 ) -> Result<PreparedTransaction, String> {
-    let mut rng = OsRng;
     if inputs.is_empty() {
         return Err("No spendable outputs to sweep".into());
     }
@@ -149,14 +165,7 @@ pub async fn prepare_sweep(
     let block_number = daemon.latest_block_number().await
         .map_err(|e| format!("Failed to get block number: {:?}", e))?;
     let ring_len = 16u8;
-    let mut owds = Vec::with_capacity(inputs.len());
-    for input in inputs {
-        owds.push(
-            OutputWithDecoys::new(&mut rng, daemon, ring_len, block_number, input)
-                .await
-                .map_err(|e| format!("Decoy selection failed: {:?}", e))?,
-        );
-    }
+    let owds = fetch_decoys_parallel(daemon, inputs, ring_len, block_number).await?;
     let fee_rate = daemon.fee_rate(priority, 500_000).await
         .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
     let outgoing_view_key = Zeroizing::new(view_pair.spend().compress().to_bytes());
