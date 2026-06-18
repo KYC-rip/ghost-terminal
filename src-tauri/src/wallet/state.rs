@@ -250,8 +250,20 @@ impl WalletState {
         let network = inner.network;
         let primary_address = view_pair.legacy_address(network);
 
-        // Register existing subaddresses with the scanner so it can detect them
-        let num_subaddresses = wallet_data.subaddress_labels.len().max(20) as u32;
+        // Register existing subaddresses with the scanner so it can detect them.
+        // Cover the highest PERSISTED subaddress index, floored by a lookahead window
+        // so freshly-created subaddresses (receive / churn / splinter / vanish) — and
+        // any funds already sent to them — are still scanned + displayed even before
+        // their label is persisted. The old `len().max(20)` missed sparse high-index
+        // labels entirely (a label at index 21 with len()==1 still gave 20).
+        const SUBADDRESS_LOOKAHEAD: u32 = 50;
+        let num_subaddresses = wallet_data
+            .subaddress_labels
+            .iter()
+            .map(|s| s.index)
+            .max()
+            .unwrap_or(0)
+            .max(SUBADDRESS_LOOKAHEAD);
         for i in 1..=num_subaddresses {
             if let Some(idx) = monero_address::SubaddressIndex::new(0, i) {
                 scanner.register_subaddress(idx);
@@ -930,6 +942,30 @@ impl WalletState {
 
         inner.subaddress_labels.push((idx, label.to_string()));
         inner.next_subaddress_index = idx + 1;
+
+        // Persist to the encrypted wallet file so this subaddress survives relaunch —
+        // otherwise next_subaddress_index reloads short and funds sent here (churn /
+        // splinter / vanish targets, or a Receive address) become invisible in the
+        // per-address view and untracked on restore. Best-effort: needs the password,
+        // retained after a full unlock. We load → update labels → re-save so the
+        // seed/scan_height/accounts are preserved untouched.
+        if let (Some(id), Some(pw)) = (inner.active_identity.clone(), inner.password.clone()) {
+            match storage::load_wallet(&inner.data_dir, &id, &pw) {
+                Ok(mut wd) => {
+                    wd.subaddress_labels = inner
+                        .subaddress_labels
+                        .iter()
+                        .map(|(i, l)| storage::SubaddressLabel { account: 0, index: *i, label: l.clone() })
+                        .collect();
+                    if let Err(e) = storage::save_wallet(&inner.data_dir, &id, &wd, &pw) {
+                        log::warn!("Failed to persist subaddress #{}: {}", idx, e);
+                    }
+                }
+                Err(e) => log::warn!("Failed to load wallet to persist subaddress #{}: {}", idx, e),
+            }
+        } else {
+            log::warn!("Subaddress #{} not persisted (wallet locked / no password)", idx);
+        }
 
         Ok(SubaddressInfo {
             index: idx,
