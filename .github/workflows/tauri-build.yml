@@ -7,6 +7,11 @@ name: Tauri Build
 on:
   workflow_dispatch:
   push:
+    branches:
+      # Build the migration branch on every push so release-build breaks (e.g. the
+      # recursion_limit overflow) surface in CI immediately. Scope down to `main`
+      # once the migration merges.
+      - feat/tauri-migration
     tags:
       - 'tauri-v*'
 
