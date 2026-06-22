@@ -78,7 +78,11 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend deps
-        run: pnpm install
+        # --ignore-scripts skips the root `postinstall` (electron-builder
+        # install-app-deps) — Electron-only, fails on CI runners, irrelevant to the
+        # Tauri build. Vite/esbuild/rollup ship platform binaries via optional deps,
+        # not install scripts, so the frontend build (beforeBuildCommand) is unaffected.
+        run: pnpm install --ignore-scripts
 
       # tauri-action runs the frontend build (beforeBuildCommand: `npm run build:renderer`)
       # + `tauri build` + bundling, and (on a tag) uploads bundles to a draft release.
