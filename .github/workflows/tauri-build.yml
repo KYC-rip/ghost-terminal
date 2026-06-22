@@ -23,12 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest      # Apple Silicon (aarch64) — verified locally: 15 MB dmg
-            rust_target: aarch64-apple-darwin
-            args: '--target aarch64-apple-darwin'
-          - platform: macos-13           # Intel (x86_64)
-            rust_target: x86_64-apple-darwin
-            args: '--target x86_64-apple-darwin'
+          # ONE universal build (arm64 + Intel, lipo'd) on the arm64 runner. Drops the
+          # separate macos-13 (Intel) leg, whose free-tier runner sits in GitHub's queue
+          # for 30+ min and stalls the checksums job (needs: ALL legs). Universal =>
+          # one .dmg that runs on every Mac, and no Intel-runner wait.
+          - platform: macos-latest      # universal-apple-darwin — verified locally: 15 MB dmg
+            rust_target: aarch64-apple-darwin,x86_64-apple-darwin
+            args: '--target universal-apple-darwin'
           - platform: ubuntu-22.04       # Linux AppImage + .deb (22.04 → broad glibc compat)
             rust_target: x86_64-unknown-linux-gnu
             args: ''
