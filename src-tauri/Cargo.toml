@@ -40,6 +40,13 @@ monero-seed = { git = "https://github.com/kayabaNerve/monero-wallet-util" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = { version = "1.5", features = ["zeroize_derive"] }
 
+# arti (Tor) pulls in rusqlite/libsqlite3-sys for its directory-state store. Windows
+# has no system sqlite3.lib (build fails: LNK1181 cannot open input file 'sqlite3.lib'),
+# so force the `bundled` feature to compile SQLite from source. Cargo feature
+# unification applies it to arti's transitive rusqlite too; also makes the Linux
+# AppImage more self-contained. Not imported directly — present only to enable bundled.
+libsqlite3-sys = { version = "0.36", features = ["bundled"] }
+
 # Tor as library (no bundled binary)
 # onion-service-client is REQUIRED to dial .onion nodes (all our mainnet.tor
 # nodes are .onion); without it arti rejects onion addresses at runtime.
