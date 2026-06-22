@@ -1,3 +1,9 @@
+// Release-mode layout computation of the deeply-nested async commands (e.g.
+// prepare_transfer's tx_deadline(async { match { …await? } }) watchdog) exceeds the
+// default query depth of 128. Raise it so `cargo tauri build` (release) compiles —
+// dev builds compute shallower layouts and didn't surface this.
+#![recursion_limit = "512"]
+
 mod commands;
 mod wallet;
 mod tor;
