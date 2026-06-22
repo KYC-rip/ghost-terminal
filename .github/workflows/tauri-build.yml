@@ -77,17 +77,8 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      # @kyc-rip/stealth-engines is a PRIVATE git dependency; pnpm fetches it via
-      # `git fetch`, and CI's default GITHUB_TOKEN is scoped to THIS repo only — it
-      # can't read another private repo. Inject a PAT with read access to
-      # KYC-rip/stealth-engines. REQUIRED SECRET: create a fine-grained PAT with
-      # Contents:Read on KYC-rip/stealth-engines (or a classic PAT with `repo`) and add
-      # it as the `GH_PAT` repo secret. Without it pnpm fails: "could not read Username
-      # for https://github.com".
-      - name: Configure git auth for private @kyc-rip deps
-        shell: bash
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
-
+      # The @kyc-rip/stealth-engines git dependency is now a PUBLIC repo, so pnpm's
+      # `git fetch` needs no credentials — no PAT/secret required.
       - name: Install frontend deps
         # --ignore-scripts skips the root `postinstall` (electron-builder
         # install-app-deps) — Electron-only, fails on CI runners, irrelevant to the
