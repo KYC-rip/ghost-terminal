@@ -3,30 +3,37 @@
 Ripley Terminal ships as **unsigned** builds — on purpose. Code-signing (an Apple
 Developer ID, or a Windows CA certificate) would tie every release to a legal
 identity, which defeats the point of a privacy wallet. Instead, authenticity is
-proven with **GPG-signed checksums** and **reproducible builds** — the same trust
-model Monero, Tor, and Tails use. Trust comes from *verification*, not a certificate.
+proven with **build-provenance attestation** and **reproducible builds** — the same
+spirit Monero, Tor, and Tails use. Trust comes from *verification*, not a certificate.
 
 ## 1. Verify your download (do this first)
 
-Every release includes `SHA256SUMS` and a detached signature `SHA256SUMS.asc`.
+Every binary is **attested** in CI: a keyless cryptographic proof (GitHub OIDC +
+the Sigstore public transparency log) that *this exact file* was built by this
+repository's public workflow, from a known commit — and not swapped or tampered with
+afterward. Verify it with the GitHub CLI ([`gh`](https://cli.github.com)):
 
 ```sh
-# Import the maintainer's signing key (replace with the published fingerprint)
-gpg --recv-keys <MAINTAINER_GPG_FINGERPRINT>
-
-# Confirm the checksums file itself is authentic (signed by that key)
-gpg --verify SHA256SUMS.asc SHA256SUMS
-
-# Confirm your downloaded file matches the (now-trusted) checksums
-sha256sum --ignore-missing -c SHA256SUMS
+# Proves the file was built by KYC-rip/ripley-terminal's CI (substitute your filename)
+gh attestation verify "Ripley Terminal_2.0.0_universal.dmg" --repo KYC-rip/ripley-terminal
 ```
 
-Install **only if both** the GPG verify and the hash check pass. If either fails,
-the download is corrupt or tampered with — do not run it.
+A passing check prints the workflow and commit that produced the file. Install
+**only if it passes**. If it fails, the download is corrupt or tampered with — do
+not run it.
 
-> The maintainer signs `SHA256SUMS` offline with a pseudonymous key; the private key
-> never touches CI. Publish the key fingerprint somewhere cross-referenceable
-> (project site, repo, socials) so users can pin it.
+You can also cross-check integrity against the published checksums:
+
+```sh
+sha256sum  --ignore-missing -c SHA256SUMS    # Linux
+shasum -a 256 --ignore-missing -c SHA256SUMS # macOS
+```
+
+> Trust here is rooted in GitHub + Sigstore (that their signing/transparency
+> infrastructure and this repo's account are not compromised), backed by reproducible
+> builds that let anyone rebuild and compare. An author-held **GPG signature may be
+> added in a future release** as an additional, independent layer — it is not required
+> to verify a build today.
 
 ## 2. Install + first launch
 
@@ -57,5 +64,6 @@ SmartScreen will warn ("Windows protected your PC"). Click **More info → Run a
 
 Releases are built in CI from pinned dependencies (`.github/workflows/tauri-build.yml`)
 on the open-source tree. You — or anyone — can rebuild from source and compare the
-resulting hashes against `SHA256SUMS`. That independent reproducibility, not a vendor
-signature, is the real guarantee of what you're running.
+resulting hashes against `SHA256SUMS`. That independent reproducibility, combined with
+the build-provenance attestation, is the real guarantee of what you're running — no
+vendor signature required.
