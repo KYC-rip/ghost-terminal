@@ -37,7 +37,9 @@ use tokio_rustls::TlsConnector;
 
 /// Hard ceiling on a single Tor request — circuits can be slow, but we must not
 /// hang a background fetch forever. Applies to connect + TLS + HTTP round-trip.
-const TOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// 60s (not 30s) because decoy selection downloads the full ~20MB RingCT output
+/// distribution, which over Tor's limited bandwidth can take well past 30s.
+const TOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 use monero_daemon_rpc::prelude::InterfaceError;
 use monero_daemon_rpc::{HttpTransport, MoneroDaemon};

@@ -345,12 +345,26 @@ impl BlockScanner {
             match mode.as_str() {
                 "tor" => {
                     emit_log(&app_clone, "Network", "info", "🧅 Routing mode: Tor (arti, pure Rust)");
-                    match ensure_tor(&app_clone).await {
-                        Some(tor) => run_outer(app_clone, generation, TorConnector { tor }).await,
-                        // ensure_tor already logged the failure; do not start a
-                        // clearnet fallback — that would leak the IP the user
-                        // asked us to hide.
-                        None => {}
+                    // Never fall back to clearnet (would leak the IP the user asked us
+                    // to hide). ensure_tor now bounds + retries each bootstrap; if it
+                    // still fails, wait and retry the WHOLE thing so a transient network
+                    // issue self-recovers instead of sync sitting dead forever. Abort if
+                    // a newer scan supersedes us (re-select / relock / relaunch).
+                    let ws = app_clone.state::<WalletState>();
+                    loop {
+                        if ws.current_scanner_generation() != generation {
+                            break;
+                        }
+                        match ensure_tor(&app_clone).await {
+                            Some(tor) => {
+                                run_outer(app_clone.clone(), generation, TorConnector { tor }).await;
+                                break;
+                            }
+                            None => {
+                                emit_log(&app_clone, "Network", "warn", "🧅 Tor unavailable — retrying bootstrap in 15s (check your network if this persists)…");
+                                sleep(Duration::from_secs(15)).await;
+                            }
+                        }
                     }
                 }
                 "custom" => {

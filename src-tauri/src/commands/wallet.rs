@@ -251,7 +251,10 @@ async fn prepare_with_failover(
     // A warm/willing node serves the distribution + get_outs in a few seconds; a
     // stalling node never responds. 25s cleanly abandons stallers while allowing
     // a node that must compute a cold distribution a fair chance.
-    const PER_NODE_SECS: u64 = 25;
+    // Tor/custom bandwidth makes the ~20MB distribution + circuit build far slower
+    // than clearnet, so give them a much larger per-node budget; clearnet stays tight
+    // so a dead node is abandoned fast.
+    let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 90 };
     const MAX_NODES: usize = 4;
 
     let total = candidates.len().min(MAX_NODES);
@@ -261,7 +264,7 @@ async fn prepare_with_failover(
         let outs = outputs.to_vec();
         let pays = payments.to_vec();
         let build_url = url.clone();
-        let attempt = tokio::time::timeout(std::time::Duration::from_secs(PER_NODE_SECS), async {
+        let attempt = tokio::time::timeout(std::time::Duration::from_secs(per_node_secs), async {
             match mode.as_str() {
                 "tor" => {
                     let tor = crate::wallet::scanner::ensure_tor(app).await
@@ -282,7 +285,7 @@ async fn prepare_with_failover(
                 _ => {
                     // Clearnet: reqwest transport (reads the large distribution body
                     // reliably, unlike simple-request). Timeout bounds the whole call.
-                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(PER_NODE_SECS)).await?;
+                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(per_node_secs)).await?;
                     transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
                 }
             }
@@ -300,7 +303,7 @@ async fn prepare_with_failover(
                 emit_log(app, "Tx", "warn", &format!("⚠️ {} couldn't serve decoy selection ({}). Trying next node…", url, last_err));
             }
             Err(_) => {
-                last_err = format!("{} stalled >{}s on get_output_distribution.bin", url, PER_NODE_SECS);
+                last_err = format!("{} stalled >{}s on get_output_distribution.bin", url, per_node_secs);
                 emit_log(app, "Tx", "warn", &format!("⚠️ {} — failing over to next node…", last_err));
             }
         }
@@ -571,7 +574,10 @@ async fn sweep_with_failover(
         }
     }
 
-    const PER_NODE_SECS: u64 = 25;
+    // Tor/custom bandwidth makes the ~20MB distribution + circuit build far slower
+    // than clearnet, so give them a much larger per-node budget; clearnet stays tight
+    // so a dead node is abandoned fast.
+    let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 90 };
     const MAX_NODES: usize = 4;
     let total = candidates.len().min(MAX_NODES);
     let mut last_err = String::from("no candidate nodes available");
@@ -580,7 +586,7 @@ async fn sweep_with_failover(
         let batch_c = batch.clone();
         let dest_c = dest.clone();
         let build_url = url.clone();
-        let attempt = tokio::time::timeout(std::time::Duration::from_secs(PER_NODE_SECS), async {
+        let attempt = tokio::time::timeout(std::time::Duration::from_secs(per_node_secs), async {
             match mode.as_str() {
                 "tor" => {
                     let tor = crate::wallet::scanner::ensure_tor(app).await
@@ -599,7 +605,7 @@ async fn sweep_with_failover(
                     sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
                 }
                 _ => {
-                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(PER_NODE_SECS)).await?;
+                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(per_node_secs)).await?;
                     sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
                 }
             }
@@ -615,7 +621,7 @@ async fn sweep_with_failover(
                 emit_log(app, "Tx", "warn", &format!("⚠️ {} couldn't sweep ({}). Trying next node…", url, last_err));
             }
             Err(_) => {
-                last_err = format!("{} stalled >{}s", url, PER_NODE_SECS);
+                last_err = format!("{} stalled >{}s", url, per_node_secs);
                 emit_log(app, "Tx", "warn", &format!("⚠️ {} — failing over to next node…", last_err));
             }
         }
