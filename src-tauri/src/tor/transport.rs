@@ -89,9 +89,27 @@ impl HttpTransport for ArtiTransport {
             format!("/{route}")
         };
         async move {
-            tor_http(&tor, Method::POST, &host, port, &path, body, response_size_limit)
-                .await
-                .map_err(InterfaceError::InterfaceError)
+            // Fresh-circuit retry. A large response (get_output_distribution.bin,
+            // ~20MB) frequently drops mid-stream over a single Tor circuit
+            // ("error reading a body from connection"). Each tor_http call opens a
+            // NEW arti stream, so retrying gives the transfer another circuit — which
+            // is what lets the currently-syncing node actually complete the download
+            // instead of the failover abandoning it after one try.
+            const TOR_POST_ATTEMPTS: u32 = 3;
+            let mut last_err = String::new();
+            for attempt in 1 ..= TOR_POST_ATTEMPTS {
+                match tor_http(&tor, Method::POST, &host, port, &path, body.clone(), response_size_limit).await {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(e) => {
+                        last_err = e;
+                        if attempt < TOR_POST_ATTEMPTS {
+                            log::warn!("Tor POST {path} to {host}:{port} attempt {attempt}/{TOR_POST_ATTEMPTS} failed ({last_err}); retrying on a fresh circuit");
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+            }
+            Err(InterfaceError::InterfaceError(format!("{last_err} (after {TOR_POST_ATTEMPTS} Tor attempts)")))
         }
     }
 }

@@ -255,11 +255,13 @@ async fn prepare_with_failover(
     // than clearnet, so give them a much larger per-node budget; clearnet stays tight
     // so a dead node is abandoned fast.
     let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 90 };
-    const MAX_NODES: usize = 4;
+    // Tor's .onion pool has many dead hidden services to skip, so try more nodes
+    // to reach a healthy one; clearnet nodes are mostly up, so 4 is plenty.
+    let max_nodes: usize = if mode == "clearnet" { 4 } else { 10 };
 
-    let total = candidates.len().min(MAX_NODES);
+    let total = candidates.len().min(max_nodes);
     let mut last_err = String::from("no candidate nodes available");
-    for (i, url) in candidates.into_iter().take(MAX_NODES).enumerate() {
+    for (i, url) in candidates.into_iter().take(max_nodes).enumerate() {
         emit_log(app, "Tx", "info", &format!("🔗 Decoy selection — node {}/{}: {}", i + 1, total, url));
         let outs = outputs.to_vec();
         let pays = payments.to_vec();
@@ -578,10 +580,12 @@ async fn sweep_with_failover(
     // than clearnet, so give them a much larger per-node budget; clearnet stays tight
     // so a dead node is abandoned fast.
     let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 90 };
-    const MAX_NODES: usize = 4;
-    let total = candidates.len().min(MAX_NODES);
+    // Tor's .onion pool has many dead hidden services to skip, so try more nodes
+    // to reach a healthy one; clearnet nodes are mostly up, so 4 is plenty.
+    let max_nodes: usize = if mode == "clearnet" { 4 } else { 10 };
+    let total = candidates.len().min(max_nodes);
     let mut last_err = String::from("no candidate nodes available");
-    for (i, url) in candidates.into_iter().take(MAX_NODES).enumerate() {
+    for (i, url) in candidates.into_iter().take(max_nodes).enumerate() {
         emit_log(app, "Tx", "info", &format!("🔗 Sweep — node {}/{}: {}", i + 1, total, url));
         let batch_c = batch.clone();
         let dest_c = dest.clone();
