@@ -2,7 +2,6 @@ use tauri::{AppHandle, Manager, State};
 use crate::emit_log;
 use crate::wallet::{WalletState, BlockScanner, MoneroAccount, SubaddressInfo, Transaction, WalletOutput, PreparedTx, SyncStatus, TxDestination};
 use crate::wallet::transact;
-use monero_simple_request_rpc::SimpleRequestTransport;
 use monero_daemon_rpc::prelude::*;
 use monero_address::MoneroAddress;
 use monero_oxide::transaction::Timelock;
@@ -215,6 +214,100 @@ pub async fn set_subaddress_label(
 
 // ── Transaction Operations ──
 
+use crate::wallet::reqwest_transport::ReqwestTransport;
+
+/// Prepare a transaction with NODE FAILOVER for decoy selection.
+///
+/// Decoy selection calls `get_output_distribution.bin` (the full RingCT output
+/// distribution). Many public nodes serve `get_blocks.bin` (sync) fine but
+/// stall/refuse that heavy binary RPC, so which node the scanner happened to
+/// race onto determined whether a send worked — flaky by luck. We try the
+/// currently-connected node first, then rotate through the pool, giving each a
+/// short budget so a stalling node is abandoned quickly. The first node that
+/// serves it wins AND becomes the persisted daemon (bias future ops toward a
+/// proven-good node). We do NOT probe the distribution during the sync race —
+/// that would download ~30MB per node and cripple sync.
+async fn prepare_with_failover(
+    app: &AppHandle,
+    view_pair: &monero_wallet::ViewPair,
+    outputs: &[monero_wallet::WalletOutput],
+    payments: &[(MoneroAddress, u64)],
+    fee_priority: FeePriority,
+    primary_url: String,
+) -> Result<transact::PreparedTransaction, String> {
+    let mode = crate::wallet::scanner::read_routing_mode(app);
+    // ClearnetConnector reads the "clearnet" node section; Tor and custom-proxy
+    // both dial the .onion ("tor") section.
+    let section = if mode == "clearnet" { "clearnet" } else { "tor" };
+
+    // Candidate URLs: the connected node first, then the rest of the pool.
+    let mut candidates: Vec<String> = vec![primary_url.clone()];
+    for (_label, url) in crate::wallet::scanner::load_nodes(app, section).await {
+        if !candidates.contains(&url) {
+            candidates.push(url);
+        }
+    }
+
+    // A warm/willing node serves the distribution + get_outs in a few seconds; a
+    // stalling node never responds. 25s cleanly abandons stallers while allowing
+    // a node that must compute a cold distribution a fair chance.
+    const PER_NODE_SECS: u64 = 25;
+    const MAX_NODES: usize = 4;
+
+    let total = candidates.len().min(MAX_NODES);
+    let mut last_err = String::from("no candidate nodes available");
+    for (i, url) in candidates.into_iter().take(MAX_NODES).enumerate() {
+        emit_log(app, "Tx", "info", &format!("🔗 Decoy selection — node {}/{}: {}", i + 1, total, url));
+        let outs = outputs.to_vec();
+        let pays = payments.to_vec();
+        let build_url = url.clone();
+        let attempt = tokio::time::timeout(std::time::Duration::from_secs(PER_NODE_SECS), async {
+            match mode.as_str() {
+                "tor" => {
+                    let tor = crate::wallet::scanner::ensure_tor(app).await
+                        .ok_or("Tor is not available — cannot select decoys without leaking your IP")?;
+                    let daemon = crate::tor::ArtiTransport::connect(tor, build_url).await
+                        .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
+                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
+                }
+                "custom" => {
+                    let proxy = crate::wallet::scanner::read_proxy_address(app);
+                    if proxy.trim().is_empty() {
+                        return Err("Custom routing selected but no proxy address is set".to_string());
+                    }
+                    let daemon = crate::tor::SocksTransport::connect(proxy, build_url).await
+                        .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
+                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
+                }
+                _ => {
+                    // Clearnet: reqwest transport (reads the large distribution body
+                    // reliably, unlike simple-request). Timeout bounds the whole call.
+                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(PER_NODE_SECS)).await?;
+                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
+                }
+            }
+        }).await;
+
+        match attempt {
+            Ok(Ok(prepared)) => {
+                emit_log(app, "Tx", "success", &format!("✅ Decoys selected via {}", url));
+                // Bias future sends/sync toward this proven-good node.
+                app.state::<WalletState>().set_daemon_url(&url).await;
+                return Ok(prepared);
+            }
+            Ok(Err(e)) => {
+                last_err = e;
+                emit_log(app, "Tx", "warn", &format!("⚠️ {} couldn't serve decoy selection ({}). Trying next node…", url, last_err));
+            }
+            Err(_) => {
+                last_err = format!("{} stalled >{}s on get_output_distribution.bin", url, PER_NODE_SECS);
+                emit_log(app, "Tx", "warn", &format!("⚠️ {} — failing over to next node…", last_err));
+            }
+        }
+    }
+    Err(format!("Decoy selection failed on every node tried ({} attempted). Last error: {}", total, last_err))
+}
+
 /// Step 1: Prepare transaction — select inputs, fetch decoys, compute fee.
 /// Returns a PreparedTx with fee details for user review. No signing yet.
 #[tauri::command]
@@ -288,38 +381,15 @@ pub async fn prepare_transfer(
         p => FeePriority::Custom { priority: p as u32 },
     };
 
-    // Prepare the transaction (decoy selection + fee computation). The daemon
-    // transport follows the configured routing mode so decoy selection never
-    // leaks the user IP. prepare_transaction is generic over the transport.
+    // Prepare the transaction (decoy selection + fee computation) with NODE
+    // FAILOVER. Decoy selection needs get_output_distribution.bin; many public
+    // nodes serve get_blocks.bin (sync) fine but stall/refuse the heavy
+    // distribution RPC, so a send that landed on such a node used to hang for
+    // 30s then fail ("timeout reached: Elapsed"). We now try the connected node,
+    // then rotate through the pool, abandoning any node that stalls, until one
+    // actually serves it. prepare_transaction is generic over the transport.
     emit_log(&app, "Tx", "info", "🎲 Selecting decoys and computing fee...");
-    let prepared = tx_deadline(&app, "Prepare", async {
-        Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(&app).as_str() {
-            "tor" => {
-                emit_log(&app, "Tx", "info", "🔗 Connecting to daemon over Tor for decoy selection...");
-                let tor = crate::wallet::scanner::ensure_tor(&app).await
-                    .ok_or("Tor is not available — cannot select decoys without leaking your IP")?;
-                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
-                transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
-            }
-            "custom" => {
-                let proxy = crate::wallet::scanner::read_proxy_address(&app);
-                if proxy.trim().is_empty() {
-                    return Err("Custom routing selected but no proxy address is set".to_string());
-                }
-                emit_log(&app, "Tx", "info", "🔗 Connecting to daemon via SOCKS proxy for decoy selection...");
-                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
-                transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
-            }
-            _ => {
-                emit_log(&app, "Tx", "info", "🔗 Connecting to daemon for decoy selection...");
-                let daemon = SimpleRequestTransport::new(daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
-                transact::prepare_transaction(&daemon, &view_pair, outputs, payments, fee_priority).await?
-            }
-        })
-    }).await?;
+    let prepared = prepare_with_failover(&app, &view_pair, &outputs, &payments, fee_priority, daemon_url).await?;
 
     let fee_formatted = WalletState::format_xmr(prepared.fee);
     let amount_formatted = WalletState::format_xmr(prepared.amount);
@@ -407,8 +477,7 @@ pub async fn relay_transfer(
                 transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
             _ => {
-                let daemon = SimpleRequestTransport::new(daemon_url).await
-                    .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
+                let daemon = ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
                 transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
         }
@@ -614,8 +683,9 @@ async fn run_sweep(
                     sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
                 }
                 _ => {
-                    let daemon = SimpleRequestTransport::new(daemon_url).await
-                        .map_err(|e| format!("Failed to connect to daemon: {:?}", e))?;
+                    // reqwest transport: sweep decoy selection fetches the same
+                    // ~20MB distribution that hangs simple-request. See prepare path.
+                    let daemon = ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
                     sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
                 }
             })
@@ -879,3 +949,5 @@ pub async fn rescan(
     emit_log(&app, "Sync", "success", &format!("✅ Rescan started from height {}", height));
     Ok(())
 }
+
+

@@ -134,12 +134,15 @@ pub trait DaemonConnector: Clone + Send + Sync + 'static {
 struct ClearnetConnector;
 
 impl DaemonConnector for ClearnetConnector {
-    type Transport = SimpleRequestTransport;
+    // reqwest, not simple-request: the latter hangs reading large response bodies
+    // (multi-block get_blocks.bin catch-ups, and get_output_distribution.bin during
+    // sends). See wallet::reqwest_transport. 60s bounds even a large bulk batch.
+    type Transport = crate::wallet::reqwest_transport::ReqwestTransport;
     fn section(&self) -> &'static str {
         "clearnet"
     }
-    async fn connect(&self, url: String) -> Option<MoneroDaemon<SimpleRequestTransport>> {
-        SimpleRequestTransport::new(url).await.ok()
+    async fn connect(&self, url: String) -> Option<MoneroDaemon<Self::Transport>> {
+        crate::wallet::reqwest_transport::ReqwestTransport::connect(url, std::time::Duration::from_secs(60)).await.ok()
     }
 }
 
@@ -193,7 +196,7 @@ const FORCE_NODE: Option<(&str, &str)> = None;
 
 /// Load nodes for the given section ("clearnet" | "tor"): try fresh GitHub fetch
 /// → cached disk copy → bundled fallback.
-async fn load_nodes(app: &AppHandle, section: &str) -> Vec<(String, String)> {
+pub(crate) async fn load_nodes(app: &AppHandle, section: &str) -> Vec<(String, String)> {
     if let Some((label, url)) = FORCE_NODE {
         return vec![(label.to_string(), url.to_string())];
     }
@@ -757,6 +760,13 @@ async fn scan_loop<C: DaemonConnector>(
         if scan_height >= daemon_height {
             // Active wallet caught up — let the background pool run again.
             app.state::<crate::wallet::SyncPool>().set_active_busy(false);
+            // Persist the tip here too. update_sync_status is otherwise only called in
+            // the batch-scan path below, which runs solely when there are NEW blocks to
+            // scan. A wallet that resumes already at/near the tip goes straight to this
+            // branch every iteration and never sets sync_status.daemon_height — leaving
+            // tip_height() at 0, so balances()/get_spendable_outputs() treat EVERY output
+            // as immature: unlocked balance reads 0, no spendable inputs, sends fail.
+            ws.update_sync_status(scan_height, daemon_height).await;
             // Reconcile spends with the daemon once we're at the tip (authoritative,
             // catches spends made in any wallet — including before this feature).
             if !spend_reconciled {

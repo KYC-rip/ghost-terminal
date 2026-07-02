@@ -422,6 +422,18 @@ export function DirectSendTab({
               </div>
             </div>
 
+            {/* Live USD equivalent of the entered amount (same street price the fee uses) */}
+            {(() => {
+              const amt = parseFloat(sendAmount);
+              const streetPrice = parseFloat((stats?.price?.street || '0').replace(/[$,]/g, ''));
+              if (!isFinite(amt) || amt <= 0 || !streetPrice) return null;
+              return (
+                <div className="mt-1 text-[11px] text-xmr-dim font-mono">
+                  ≈ ${(amt * streetPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                </div>
+              );
+            })()}
+
             {/* Percentage Slider / Quick Select */}
             <div className="grid grid-cols-4 gap-1 mt-2">
               {[25, 50, 75, 100].map(pct => (
