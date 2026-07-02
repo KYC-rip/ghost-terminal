@@ -548,6 +548,81 @@ where
     Ok((hex::encode(signed.hash()), fee, amount, spent_ids, destinations, tx_key))
 }
 
+/// Sweep one batch with NODE FAILOVER — the sweep analogue of `prepare_with_failover`.
+/// Sweep decoy selection fetches the same ~20 MB distribution as a send, and a
+/// transient node error (502, stalled distribution) shouldn't kill a churn/sweep:
+/// try the connected node, then rotate the pool, persisting the first that works.
+#[allow(clippy::too_many_arguments)]
+async fn sweep_with_failover(
+    app: &AppHandle,
+    view_pair: &monero_wallet::ViewPair,
+    batch: Vec<monero_wallet::WalletOutput>,
+    dest: MoneroAddress,
+    fee_priority: FeePriority,
+    spend_key: &zeroize::Zeroizing<monero_oxide::ed25519::Scalar>,
+    primary_url: String,
+) -> Result<(String, u64, u64, Vec<String>, Vec<(String, u64)>, String), String> {
+    let mode = crate::wallet::scanner::read_routing_mode(app);
+    let section = if mode == "clearnet" { "clearnet" } else { "tor" };
+    let mut candidates: Vec<String> = vec![primary_url.clone()];
+    for (_label, url) in crate::wallet::scanner::load_nodes(app, section).await {
+        if !candidates.contains(&url) {
+            candidates.push(url);
+        }
+    }
+
+    const PER_NODE_SECS: u64 = 25;
+    const MAX_NODES: usize = 4;
+    let total = candidates.len().min(MAX_NODES);
+    let mut last_err = String::from("no candidate nodes available");
+    for (i, url) in candidates.into_iter().take(MAX_NODES).enumerate() {
+        emit_log(app, "Tx", "info", &format!("🔗 Sweep — node {}/{}: {}", i + 1, total, url));
+        let batch_c = batch.clone();
+        let dest_c = dest.clone();
+        let build_url = url.clone();
+        let attempt = tokio::time::timeout(std::time::Duration::from_secs(PER_NODE_SECS), async {
+            match mode.as_str() {
+                "tor" => {
+                    let tor = crate::wallet::scanner::ensure_tor(app).await
+                        .ok_or("Tor is not available — refusing to sweep over clearnet")?;
+                    let daemon = crate::tor::ArtiTransport::connect(tor, build_url).await
+                        .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
+                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
+                }
+                "custom" => {
+                    let proxy = crate::wallet::scanner::read_proxy_address(app);
+                    if proxy.trim().is_empty() {
+                        return Err("Custom routing selected but no proxy address is set".to_string());
+                    }
+                    let daemon = crate::tor::SocksTransport::connect(proxy, build_url).await
+                        .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
+                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
+                }
+                _ => {
+                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(PER_NODE_SECS)).await?;
+                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
+                }
+            }
+        }).await;
+
+        match attempt {
+            Ok(Ok(res)) => {
+                app.state::<WalletState>().set_daemon_url(&url).await;
+                return Ok(res);
+            }
+            Ok(Err(e)) => {
+                last_err = e;
+                emit_log(app, "Tx", "warn", &format!("⚠️ {} couldn't sweep ({}). Trying next node…", url, last_err));
+            }
+            Err(_) => {
+                last_err = format!("{} stalled >{}s", url, PER_NODE_SECS);
+                emit_log(app, "Tx", "warn", &format!("⚠️ {} — failing over to next node…", last_err));
+            }
+        }
+    }
+    Err(format!("Sweep failed on every node tried ({} attempted). Last error: {}", total, last_err))
+}
+
 /// Sweep ALL spendable outputs to a single address (no change). One command:
 /// builds, signs, and broadcasts over the configured routing mode.
 #[tauri::command]
@@ -662,34 +737,12 @@ async fn run_sweep(
 
         let daemon_url = daemon_url.clone();
         let dest = dest.clone();
-        let label = if total_batches > 1 { format!("Sweep {}/{}", bi + 1, total_batches) } else { "Sweep".to_string() };
 
-        let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = tx_deadline(app, &label, async {
-            Ok::<_, String>(match crate::wallet::scanner::read_routing_mode(app).as_str() {
-                "tor" => {
-                    let tor = crate::wallet::scanner::ensure_tor(app).await
-                        .ok_or("Tor is not available — refusing to sweep over clearnet")?;
-                    let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
-                        .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
-                    sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
-                }
-                "custom" => {
-                    let proxy = crate::wallet::scanner::read_proxy_address(app);
-                    if proxy.trim().is_empty() {
-                        return Err("Custom routing selected but no proxy address is set".to_string());
-                    }
-                    let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
-                        .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
-                    sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
-                }
-                _ => {
-                    // reqwest transport: sweep decoy selection fetches the same
-                    // ~20MB distribution that hangs simple-request. See prepare path.
-                    let daemon = ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
-                    sweep_via_daemon(&daemon, &view_pair, batch, dest, fee_priority, &spend_key).await?
-                }
-            })
-        }).await?;
+        // Node failover, same as the send path: a sweep decoy fetch that stalls or
+        // hits a transient node error (e.g. 502) rotates to the next node instead of
+        // failing the whole sweep/churn.
+        let (tx_hash, fee, amount, spent_ids, destinations, tx_key) =
+            sweep_with_failover(app, &view_pair, batch, dest, fee_priority, &spend_key, daemon_url).await?;
 
         // Mark this batch's outputs spent + log the broadcast.
         let tip = state.tip_height().await;
