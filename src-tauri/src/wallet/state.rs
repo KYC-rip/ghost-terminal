@@ -750,12 +750,15 @@ impl WalletState {
         };
 
         // Group spent owned outputs by their spending tx: txid -> (gross, ids, height).
+        // NOTE: we do NOT skip outputs already in `spent`. The tip reconcile
+        // (is_key_image_spent) marks inputs spent as soon as a tx hits the mempool —
+        // before its block is scanned — but it can't record an outgoing ledger entry
+        // (it only learns spent/unspent, not the txid). So a spend made in ANOTHER
+        // client would drop the balance but never show as DISPATCHED. Recording here
+        // regardless (deduped by txid via `existing`) closes that gap.
         let mut by_tx: HashMap<[u8; 32], (u64, Vec<String>, u64)> = HashMap::new();
         for o in &inner.scanned_outputs {
             let id = output_id(&o.output);
-            if inner.spent.contains(&id) {
-                continue;
-            }
             if let Some((txid, height)) = ki_to_tx.get(&output_key_image(&sk, &o.output)) {
                 let e = by_tx.entry(*txid).or_insert((0, Vec::new(), *height));
                 e.0 = e.0.saturating_add(o.output.commitment().amount);
@@ -801,10 +804,14 @@ impl WalletState {
                 newly += 1;
             }
         }
+        let recorded = to_record.len();
         for s in to_record {
             inner.sent.push(s);
         }
-        newly
+        // Report nonzero when we recorded a new outgoing entry even if nothing was
+        // newly-marked-spent (the reconcile-pre-marked case) — so the scanner still
+        // emits the balance + persists the sent log.
+        newly.max(recorded)
     }
 
     /// (output_id, key_image_hex) for every currently-unspent owned output.
