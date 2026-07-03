@@ -216,6 +216,17 @@ pub async fn set_subaddress_label(
 
 use crate::wallet::reqwest_transport::ReqwestTransport;
 
+/// On-disk path for the RingCT output-distribution cache, per active network.
+/// See wallet::decoy_cache — this cache is what makes Tor sends viable (fetch the
+/// ~20MB distribution once in chunks, then only the new-block delta).
+async fn dist_cache_path(app: &AppHandle) -> std::path::PathBuf {
+    let network = app.state::<WalletState>().get_network().await;
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(format!("ringct_dist_{:?}.cache", network))
+}
+
 /// Prepare a transaction with NODE FAILOVER for decoy selection.
 ///
 /// Decoy selection calls `get_output_distribution.bin` (the full RingCT output
@@ -254,10 +265,12 @@ async fn prepare_with_failover(
     // Tor/custom bandwidth makes the ~20MB distribution + circuit build far slower
     // than clearnet, so give them a much larger per-node budget; clearnet stays tight
     // so a dead node is abandoned fast.
-    let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 90 };
+    let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 180 };
     // Tor's .onion pool has many dead hidden services to skip, so try more nodes
     // to reach a healthy one; clearnet nodes are mostly up, so 4 is plenty.
     let max_nodes: usize = if mode == "clearnet" { 4 } else { 10 };
+
+    let cache_path = dist_cache_path(app).await;
 
     let total = candidates.len().min(max_nodes);
     let mut last_err = String::from("no candidate nodes available");
@@ -266,13 +279,20 @@ async fn prepare_with_failover(
         let outs = outputs.to_vec();
         let pays = payments.to_vec();
         let build_url = url.clone();
+        let cache_path = cache_path.clone();
         let attempt = tokio::time::timeout(std::time::Duration::from_secs(per_node_secs), async {
+            // Wrap every transport in the distribution cache: decoy selection fetches
+            // the ~20MB RingCT distribution once (chunked, Tor-safe) and only the
+            // new-block delta thereafter — the difference between Tor sends working
+            // and dying on the 20MB pull.
+            use crate::wallet::decoy_cache::CachingDecoys;
             match mode.as_str() {
                 "tor" => {
                     let tor = crate::wallet::scanner::ensure_tor(app).await
                         .ok_or("Tor is not available — cannot select decoys without leaking your IP")?;
                     let daemon = crate::tor::ArtiTransport::connect(tor, build_url).await
                         .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
+                    let daemon = CachingDecoys::new(daemon, cache_path);
                     transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
                 }
                 "custom" => {
@@ -282,12 +302,14 @@ async fn prepare_with_failover(
                     }
                     let daemon = crate::tor::SocksTransport::connect(proxy, build_url).await
                         .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
+                    let daemon = CachingDecoys::new(daemon, cache_path);
                     transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
                 }
                 _ => {
                     // Clearnet: reqwest transport (reads the large distribution body
                     // reliably, unlike simple-request). Timeout bounds the whole call.
                     let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(per_node_secs)).await?;
+                    let daemon = CachingDecoys::new(daemon, cache_path);
                     transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
                 }
             }
@@ -579,10 +601,11 @@ async fn sweep_with_failover(
     // Tor/custom bandwidth makes the ~20MB distribution + circuit build far slower
     // than clearnet, so give them a much larger per-node budget; clearnet stays tight
     // so a dead node is abandoned fast.
-    let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 90 };
+    let per_node_secs: u64 = if mode == "clearnet" { 25 } else { 180 };
     // Tor's .onion pool has many dead hidden services to skip, so try more nodes
     // to reach a healthy one; clearnet nodes are mostly up, so 4 is plenty.
     let max_nodes: usize = if mode == "clearnet" { 4 } else { 10 };
+    let cache_path = dist_cache_path(app).await;
     let total = candidates.len().min(max_nodes);
     let mut last_err = String::from("no candidate nodes available");
     for (i, url) in candidates.into_iter().take(max_nodes).enumerate() {
@@ -590,13 +613,16 @@ async fn sweep_with_failover(
         let batch_c = batch.clone();
         let dest_c = dest.clone();
         let build_url = url.clone();
+        let cache_path = cache_path.clone();
         let attempt = tokio::time::timeout(std::time::Duration::from_secs(per_node_secs), async {
+            use crate::wallet::decoy_cache::CachingDecoys;
             match mode.as_str() {
                 "tor" => {
                     let tor = crate::wallet::scanner::ensure_tor(app).await
                         .ok_or("Tor is not available — refusing to sweep over clearnet")?;
                     let daemon = crate::tor::ArtiTransport::connect(tor, build_url).await
                         .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
+                    let daemon = CachingDecoys::new(daemon, cache_path);
                     sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
                 }
                 "custom" => {
@@ -606,10 +632,12 @@ async fn sweep_with_failover(
                     }
                     let daemon = crate::tor::SocksTransport::connect(proxy, build_url).await
                         .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
+                    let daemon = CachingDecoys::new(daemon, cache_path);
                     sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
                 }
                 _ => {
                     let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(per_node_secs)).await?;
+                    let daemon = CachingDecoys::new(daemon, cache_path);
                     sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
                 }
             }
