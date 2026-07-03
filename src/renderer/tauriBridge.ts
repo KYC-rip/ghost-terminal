@@ -24,6 +24,7 @@ function createTauriApi() {
 
     // ── Identity ──
     getIdentities: () => invoke('get_identities'),
+    detectLegacyWallets: () => invoke('detect_legacy_wallets'),
     saveIdentities: async (ids: any) => {
       // The frontend sends the full identity list after modifications.
       // We need to persist this since Rust commands also manage identities.

@@ -43,6 +43,96 @@ pub async fn save_identities(app: AppHandle, ids: Vec<Identity>) -> Result<(), S
     save_identities_to_disk(&app, &ids)
 }
 
+/// A wallet from a previous (Electron) Ripley install, offered for seed-restore.
+#[derive(serde::Serialize)]
+pub struct LegacyWallet {
+    id: String,
+    name: String,
+    /// Suggested restore height derived from the wallet's creation time (so the
+    /// restore scan starts near creation, not from the RingCT fork).
+    est_restore_height: u64,
+}
+
+/// Candidate old-Electron data dirs. Electron stored under `<userData>/ripley-terminal`;
+/// Tauri uses `run.ripley.terminal` — a sibling on macOS/Windows, but a different base
+/// on Linux (config vs data dir), so we check several.
+fn legacy_dir_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = Vec::new();
+    if let Ok(add) = app.path().app_data_dir() {
+        if let Some(parent) = add.parent() {
+            v.push(parent.join("ripley-terminal"));
+        }
+    }
+    if let Some(base) = directories::BaseDirs::new() {
+        v.push(base.data_dir().join("ripley-terminal"));
+        v.push(base.config_dir().join("ripley-terminal"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    v.into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .filter(|p| p.join("config.json").is_file() && p.join("wallets").is_dir())
+        .collect()
+}
+
+/// Detect wallets from a previous (Electron) Ripley install that aren't imported
+/// here yet, so the user can bring them over via seed-restore. Reads ONLY the
+/// public identity names + creation times from the old config — never key material.
+#[tauri::command]
+pub async fn detect_legacy_wallets(
+    app: AppHandle,
+    state: tauri::State<'_, crate::wallet::WalletState>,
+) -> Result<Vec<LegacyWallet>, String> {
+    let already: std::collections::HashSet<String> = identity_ids(&app).into_iter().collect();
+    let tip = state.tip_height().await;
+
+    // Reference (height, time) for estimating a restore height from a wallet's
+    // creation timestamp. Use the live tip when synced; otherwise a fixed anchor
+    // (mainnet ~block 3.709M at 2026-07-03, unix 1_783_000_000 s) — legacy wallets
+    // were all created before it, so the estimate stays safely in the past.
+    // ~120s/block. An anchor that's too EARLY makes the estimate too HIGH, which
+    // would miss funds — so this must track real mainnet.
+    const ANCHOR_HEIGHT: u64 = 3_709_000;
+    const ANCHOR_TS_MS: i64 = 1_783_000_000_000;
+    const RINGCT_FORK: u64 = 1_220_516;
+    let (ref_height, ref_ts_ms) = if tip > 0 {
+        (tip, chrono::Utc::now().timestamp_millis())
+    } else {
+        (ANCHOR_HEIGHT, ANCHOR_TS_MS)
+    };
+
+    let est_height = |created_ms: i64| -> u64 {
+        let ms_ago = (ref_ts_ms - created_ms).max(0);
+        let blocks_ago = (ms_ago / 1000 / 120) as u64;
+        // ~2-day safety margin so the scan starts safely before any first tx,
+        // clamped to the RingCT fork (nothing scannable before it).
+        ref_height.saturating_sub(blocks_ago).saturating_sub(1440).max(RINGCT_FORK)
+    };
+
+    let mut out = Vec::new();
+    for dir in legacy_dir_candidates(&app) {
+        let Ok(cfg) = std::fs::read_to_string(dir.join("config.json")) else { continue };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&cfg) else { continue };
+        let Some(ids) = json.get("identities").and_then(|v| v.as_array()) else { continue };
+        for it in ids {
+            let id = it.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            if id.is_empty() || already.contains(&id) {
+                continue;
+            }
+            // Only offer wallets whose encrypted keys file is actually present.
+            if !dir.join("wallets").join(format!("{id}.keys")).is_file() {
+                continue;
+            }
+            let name = it.get("name").and_then(|v| v.as_str()).unwrap_or("Wallet").to_string();
+            let created_ms = it.get("created").and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
+            out.push(LegacyWallet { id, name, est_restore_height: est_height(created_ms) });
+        }
+        if !out.is_empty() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub async fn create_identity(app: AppHandle, name: String) -> Result<Identity, String> {
     let id = format!("vault_{}_{}", std::time::SystemTime::now()
@@ -117,3 +207,4 @@ pub async fn rename_identity(app: AppHandle, id: String, name: String) -> Result
     }
     save_identities_to_disk(&app, &ids)
 }
+

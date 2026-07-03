@@ -1,5 +1,5 @@
 import React from 'react';
-import { Lock, Skull, RefreshCw, Key, Download, Sparkles, ArrowLeft, Calendar } from 'lucide-react';
+import { Lock, Skull, RefreshCw, Key, Download, Sparkles, ArrowLeft, Calendar, ChevronDown } from 'lucide-react';
 
 interface LogEntry {
   msg: string;
@@ -81,24 +81,18 @@ export function AuthForm({
             </div>
             <div className="space-y-1">
               <label className="text-[11px] font-black text-xmr-dim uppercase ml-1">Seed_Language</label>
-              <select
-                value={seedLanguage}
-                onChange={(e) => setSeedLanguage(e.target.value)}
-                className="w-full bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none cursor-pointer"
-              >
-                <option value="English">English</option>
-                <option value="Chinese (Simplified)">Chinese (Simplified)</option>
-                <option value="Japanese">Japanese</option>
-                <option value="Spanish">Spanish</option>
-                <option value="Portuguese">Portuguese</option>
-                <option value="German">German</option>
-                <option value="French">French</option>
-                <option value="Italian">Italian</option>
-                <option value="Dutch">Dutch</option>
-                <option value="Russian">Russian</option>
-                <option value="Esperanto">Esperanto</option>
-                <option value="Lojban">Lojban</option>
-              </select>
+              <div className="relative">
+                <select
+                  value={seedLanguage}
+                  onChange={(e) => setSeedLanguage(e.target.value)}
+                  className="w-full appearance-none bg-xmr-base border border-xmr-border p-3 pr-9 text-xs text-xmr-green focus:border-xmr-green outline-none cursor-pointer"
+                >
+                  {['English','Chinese (Simplified)','Japanese','Spanish','Portuguese','German','French','Italian','Dutch','Russian','Esperanto','Lojban'].map(lang => (
+                    <option key={lang} value={lang} className="bg-xmr-base text-xmr-green">{lang}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-xmr-dim pointer-events-none" />
+              </div>
             </div>
           </div>
         </div>
@@ -139,11 +133,17 @@ export function AuthForm({
         {!isProcessing && step === 'NEW_PASSWORD' && isInitialSetup && (
            <button type="button" onClick={() => setStep('RESTORE')} className="w-full text-[11px] text-xmr-dim hover:text-xmr-green uppercase flex items-center justify-center gap-2 transition-colors cursor-pointer"><Download size={12}/> Restore from Seed</button>
         )}
+        {/* When existing wallets are present, EVERY setup step must offer an escape
+            back to Unlock — otherwise a user who enters create/restore is stranded
+            (and could accidentally CREATE a new empty wallet). */}
+        {!isProcessing && step === 'NEW_PASSWORD' && !isInitialSetup && (
+           <button type="button" onClick={() => setStep('AUTH')} className="w-full text-[11px] text-xmr-dim hover:text-xmr-green uppercase flex items-center justify-center gap-2 transition-colors cursor-pointer"><ArrowLeft size={12}/> Back to Unlock</button>
+        )}
         {!isProcessing && step === 'RESTORE' && (
-           <button type="button" onClick={() => setStep('NEW_PASSWORD')} className="w-full text-[11px] text-xmr-dim hover:text-xmr-green uppercase flex items-center justify-center gap-2 transition-colors cursor-pointer"><ArrowLeft size={12}/> Back</button>
+           <button type="button" onClick={() => setStep(isInitialSetup ? 'MODE' : 'AUTH')} className="w-full text-[11px] text-xmr-dim hover:text-xmr-green uppercase flex items-center justify-center gap-2 transition-colors cursor-pointer"><ArrowLeft size={12}/> {isInitialSetup ? 'Back' : 'Back to Unlock'}</button>
         )}
         {!isProcessing && step !== 'AUTH' && step !== 'NEW_PASSWORD' && step !== 'RESTORE' && (
-           <button type="button" onClick={() => setStep('MODE')} className="w-full text-[11px] text-xmr-dim hover:text-xmr-green uppercase flex items-center justify-center gap-2 transition-colors cursor-pointer"><ArrowLeft size={12}/> Back</button>
+           <button type="button" onClick={() => setStep(isInitialSetup ? 'MODE' : 'AUTH')} className="w-full text-[11px] text-xmr-dim hover:text-xmr-green uppercase flex items-center justify-center gap-2 transition-colors cursor-pointer"><ArrowLeft size={12}/> {isInitialSetup ? 'Back' : 'Back to Unlock'}</button>
         )}
       </div>
     </form>

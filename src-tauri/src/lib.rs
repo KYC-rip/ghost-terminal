@@ -128,6 +128,7 @@ pub fn run() {
             // Identity
             commands::identity::get_identities,
             commands::identity::save_identities,
+            commands::identity::detect_legacy_wallets,
             commands::identity::create_identity,
             commands::identity::delete_identity,
             commands::identity::switch_identity,

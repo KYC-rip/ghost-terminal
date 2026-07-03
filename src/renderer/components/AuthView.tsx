@@ -70,6 +70,14 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
   // "INVALID PASSWORD" must not linger on the create/restore screens.
   useEffect(() => { setError(''); }, [step]);
 
+  // Wallets from a previous (Electron) Ripley install, not yet imported here.
+  const [legacy, setLegacy] = useState<{ id: string; name: string; est_restore_height: number }[]>([]);
+  const [importDismissed, setImportDismissed] = useState(() => localStorage.getItem('ripley_legacy_import_dismissed') === '1');
+  const [showImportList, setShowImportList] = useState(false);
+  useEffect(() => {
+    window.api.detectLegacyWallets?.().then((w: any) => setLegacy(w || [])).catch(() => {});
+  }, [identities.length]);
+
   useEffect(() => {
     window.api.getAppInfo().then(info => setAppVersion(info.version));
   }, []);
@@ -165,6 +173,57 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
             )}
           </div>
         </div>
+
+        {/* 🔁 MIGRATION BANNER: wallets from a previous (Electron) Ripley install */}
+        {!isProcessing && step === 'AUTH' && legacy.length > 0 && !importDismissed && (
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-xmr-green/5 border border-xmr-green/30 rounded-lg">
+            <span className="text-[11px] text-xmr-dim leading-snug">
+              <span className="text-xmr-green font-black">↦ {legacy.length}</span> wallet{legacy.length > 1 ? 's' : ''} from your previous Ripley
+            </span>
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                onClick={() => setShowImportList(v => !v)}
+                className="text-[10px] font-black uppercase tracking-widest text-xmr-green hover:underline cursor-pointer"
+              >
+                {showImportList ? 'Hide' : 'Import'}
+              </button>
+              <button
+                onClick={() => { setImportDismissed(true); setShowImportList(false); localStorage.setItem('ripley_legacy_import_dismissed', '1'); }}
+                className="text-xmr-dim/50 hover:text-xmr-dim cursor-pointer text-sm leading-none"
+                aria-label="Dismiss"
+                title="Dismiss (you can still restore any wallet by seed)"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Expanded import list (only when the banner's Import is clicked) */}
+        {!isProcessing && step === 'AUTH' && showImportList && !importDismissed && legacy.length > 0 && (
+          <div className="px-4 py-3 bg-xmr-surface/40 border border-xmr-border/30 rounded-lg flex flex-col gap-2">
+            <div className="text-[10px] text-xmr-dim/70 mb-1 leading-relaxed">
+              Your funds are safe on disk — restore each with its seed phrase to use it here.
+            </div>
+            {legacy.map(w => (
+              <button
+                key={w.id}
+                onClick={() => {
+                  setNewName(w.name);
+                  setRestoreHeight(w.est_restore_height ? String(w.est_restore_height) : '');
+                  setRestoreSeed('');
+                  setPassword('');
+                  setConfirmPassword('');
+                  setStep('RESTORE');
+                }}
+                className="flex items-center justify-between px-3 py-2 bg-xmr-base border border-xmr-border/30 hover:border-xmr-green hover:text-xmr-green transition-all cursor-pointer text-left"
+              >
+                <span className="text-xs font-black">{w.name}</span>
+                <span className="text-[9px] uppercase tracking-widest text-xmr-dim">Restore ↦</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         <Card topGradientAccentColor={step === 'AUTH' ? 'xmr-accent' : 'xmr-green'} className="p-8 shadow-2xl relative">
           <AuthForm

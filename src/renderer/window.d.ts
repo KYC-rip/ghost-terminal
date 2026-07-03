@@ -63,6 +63,7 @@ export interface IApi {
 
   // --- Identity & Vault Management ---
   getIdentities: () => Promise<VaultIdentity[]>;
+  detectLegacyWallets: () => Promise<{ id: string; name: string; est_restore_height: number }[]>;
   saveIdentities: (identities: VaultIdentity[]) => Promise<boolean>;
   getActiveIdentity: () => Promise<string>;
   setActiveIdentity: (id: string) => Promise<boolean>;
