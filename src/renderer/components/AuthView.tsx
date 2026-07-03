@@ -66,6 +66,10 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
   const [appVersion, setAppVersion] = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
+  // Clear any stale error when navigating between auth steps — a failed unlock's
+  // "INVALID PASSWORD" must not linger on the create/restore screens.
+  useEffect(() => { setError(''); }, [step]);
+
   useEffect(() => {
     window.api.getAppInfo().then(info => setAppVersion(info.version));
   }, []);
@@ -117,9 +121,23 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
       );
     } catch (err: any) {
       const msg = err.message || '';
-      if (msg.includes('INVALID_SECRET')) setError('ACCESS_DENIED: WRONG PASSWORD');
-      else if (msg.includes('UPLINK_TIMEOUT')) setError('UPLINK_TIMEOUT: TOR CIRCUIT FAILED');
-      else setError(`ENGINE_ERROR: ${msg.toUpperCase()}`);
+      const lower = msg.toLowerCase();
+      // A decrypt failure is almost always a wrong password (the AEAD check can't
+      // tell a wrong key from a corrupt file). Show a clean, non-alarming message
+      // and clear the field so the user retypes fresh.
+      const badPassword =
+        lower.includes('invalid_secret') ||
+        lower.includes('invalid password') ||
+        lower.includes('corrupted wallet');
+      if (badPassword) {
+        setError('ACCESS_DENIED: WRONG PASSWORD');
+        setPassword('');
+      } else if (msg.includes('UPLINK_TIMEOUT')) {
+        // Transient — keep the (likely-correct) password so retry needs no retype.
+        setError('UPLINK_TIMEOUT: TOR CIRCUIT FAILED');
+      } else {
+        setError(`ENGINE_ERROR: ${msg.toUpperCase()}`);
+      }
       setIsProcessing(false);
     }
   };
