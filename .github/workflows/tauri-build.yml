@@ -106,7 +106,9 @@ jobs:
           tagName: ${{ startsWith(github.ref, 'refs/tags/tauri-v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/tauri-v') && format('Ripley Terminal {0}', github.ref_name) || '' }}
           releaseDraft: true
-          prerelease: false
+          # Mark -beta / -rc tags as prereleases so the website (and the GitHub UI)
+          # can keep them OFF the main/stable download and behind a beta channel.
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
 
       # Always attach the bundles as workflow artifacts: lets you download any platform
       # (e.g. the Linux .AppImage for #406) without cutting a release, AND feeds the
