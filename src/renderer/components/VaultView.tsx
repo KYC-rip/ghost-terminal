@@ -10,6 +10,7 @@ import { ReceiveModal } from './vault/ReceiveModal';
 import { type VaultContextType } from '../contexts/VaultContext';
 import { WalletService } from '../services/walletService';
 import { useFiatValue } from '../hooks/useFiatValue';
+import { useStats } from '../hooks/useStats';
 
 interface VaultViewProps {
   setView: (v: any) => void;
@@ -29,6 +30,29 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
   const [tab, setTab] = useState<'ledger' | 'addresses' | 'coins' | 'contacts'>('ledger');
   const [modals, setModals] = useState({ seed: false, receive: false, send: false, splinter: false, churn: false });
   const [reracing, setReracing] = useState(false);
+  const { stats } = useStats();
+  // A node can report "synced to my tip" while the tip itself lags the real
+  // network (a stale node) — then the wallet would falsely read SYNCED and miss
+  // recent txs. Compare the node's height against the network stats height.
+  const netHeight = parseInt((stats?.network?.height as any) || '0', 10) || 0;
+  const nodeLag = (netHeight > 0 && totalHeight > 0) ? netHeight - totalHeight : 0;
+  const nodeStale = status === 'SYNCED' && nodeLag >= 5;
+
+  // Auto-heal: when the connected node lags the network, re-race the pool for a
+  // caught-up one — no need for the user to notice + click ↻. Cooldown-gated so a
+  // pool that's broadly behind doesn't get hammered (and re-race can transiently
+  // land on another stale node before settling).
+  const lastAutoReselect = useRef(0);
+  useEffect(() => {
+    if (!nodeStale) return;
+    const now = Date.now();
+    if (now - lastAutoReselect.current < 60000) return;
+    lastAutoReselect.current = now;
+    setReracing(true);
+    window.api.reselectNode?.().catch(() => {});
+    const t = setTimeout(() => setReracing(false), 3000);
+    return () => clearTimeout(t);
+  }, [nodeStale]);
   const [mnemonic, setMnemonic] = useState('');
   const [contacts, setContacts] = useState<any[]>([]);
   const [dispatchAddr, setDispatchAddr] = useState('');
@@ -351,9 +375,9 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                 <div className="space-y-1 mt-3 pt-3 border-t border-xmr-border/15">
                   <div className="flex justify-between text-[10px] uppercase font-black">
                     <span className="text-xmr-dim/40">Uplink:</span>
-                    <span className={`flex items-center gap-1 ${isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
+                    <span className={`flex items-center gap-1 ${nodeStale ? 'text-yellow-500' : isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
                       {isSyncing && <Loader2 size={8} className="animate-spin" />}
-                      {status}{nodeLabel ? ` (${nodeLabel})` : ''}
+                      {nodeStale ? `Node stale −${nodeLag}` : status}{nodeLabel ? ` (${nodeLabel})` : ''}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
