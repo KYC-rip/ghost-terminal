@@ -453,6 +453,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
             onClose={() => { setActivePanel(null); setDispatchSubIndex(undefined); }}
             initialAddress={dispatchAddr}
             sourceSubaddressIndex={dispatchSubIndex}
+            contacts={contacts}
           />
         ) : activePanel === 'receive' ? (
           <ReceiveModal

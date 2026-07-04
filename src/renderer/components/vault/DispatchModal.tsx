@@ -9,12 +9,13 @@ interface DispatchModalProps {
   onClose: () => void;
   initialAddress?: string;
   sourceSubaddressIndex?: number;
+  contacts?: { name: string; address: string }[];
   inline?: boolean;
 }
 
 type Tab = 'direct' | 'ghost';
 
-export function DispatchModal({ onClose, initialAddress = '', sourceSubaddressIndex, inline }: DispatchModalProps) {
+export function DispatchModal({ onClose, initialAddress = '', sourceSubaddressIndex, contacts, inline }: DispatchModalProps) {
   const { activeId, outputs } = useVault();
   const [tab, setTab] = useState<Tab>('direct');
 
@@ -98,6 +99,7 @@ export function DispatchModal({ onClose, initialAddress = '', sourceSubaddressIn
               initialAddress={initialAddress}
               sourceSubaddressIndex={sourceSubaddressIndex}
               outputs={outputs}
+              contacts={contacts}
               onRequirePassword={requirePassword}
               onClose={onClose}
             />

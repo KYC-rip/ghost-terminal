@@ -38,6 +38,7 @@ interface DirectSendTabProps {
   initialAddress: string;
   sourceSubaddressIndex?: number;
   outputs: any[];
+  contacts?: { name: string; address: string }[];
   onRequirePassword: (action: () => Promise<void>) => void;
   onClose: () => void;
 }
@@ -46,6 +47,7 @@ export function DirectSendTab({
   initialAddress,
   sourceSubaddressIndex,
   outputs,
+  contacts = [],
   onRequirePassword,
   onClose,
 }: DirectSendTabProps) {
@@ -57,6 +59,8 @@ export function DirectSendTab({
 
   const [sendMode, setSendMode] = useState<'single' | 'multi'>('single');
   const [destAddr, setDestAddr] = useState(initialAddress);
+  const [showContacts, setShowContacts] = useState(false);
+  const [contactSearch, setContactSearch] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   const [multiText, setMultiText] = useState('');
   const [isBanned, setIsBanned] = useState(false);
@@ -339,7 +343,18 @@ export function DirectSendTab({
                 <Wallet size={10} /> Destination
                 {isResolvingBio && <Loader2 size={10} className="animate-spin text-xmr-accent ml-1" />}
               </label>
-              {isBanned && <span className="text-xs text-red-500 animate-pulse uppercase">Intercepted</span>}
+              <div className="flex items-center gap-2">
+                {isBanned && <span className="text-xs text-red-500 animate-pulse uppercase">Intercepted</span>}
+                {contacts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowContacts(v => !v)}
+                    className="text-[10px] font-black uppercase tracking-widest text-xmr-accent hover:text-xmr-green transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    Contacts <ChevronDown size={10} className={`transition-transform ${showContacts ? 'rotate-180' : ''}`} />
+                  </button>
+                )}
+              </div>
             </div>
             <input
               type="text"
@@ -350,6 +365,43 @@ export function DirectSendTab({
                 isBanned ? 'border-red-600' : 'border-xmr-border'
               }`}
             />
+
+            {/* Contact picker — fill the destination from the address book.
+                Searchable so it scales to a large address book without a drawer. */}
+            {showContacts && contacts.length > 0 && (() => {
+              const q = contactSearch.trim().toLowerCase();
+              const filtered = q
+                ? contacts.filter(c => c.name.toLowerCase().includes(q) || c.address.toLowerCase().includes(q))
+                : contacts;
+              return (
+                <div className="mt-1 border border-xmr-border/40 bg-xmr-surface/50 animate-in fade-in slide-in-from-top-1">
+                  {contacts.length > 6 && (
+                    <input
+                      autoFocus
+                      value={contactSearch}
+                      onChange={(e) => setContactSearch(e.target.value)}
+                      placeholder="Search contacts…"
+                      className="w-full bg-xmr-base border-b border-xmr-border/40 px-3 py-2 text-[11px] text-xmr-green placeholder:text-xmr-dim/40 focus:outline-none"
+                    />
+                  )}
+                  <div className="max-h-44 overflow-y-auto divide-y divide-xmr-border/20">
+                    {filtered.length === 0 ? (
+                      <div className="px-3 py-3 text-[10px] text-xmr-dim/60 uppercase tracking-widest text-center">No matches</div>
+                    ) : filtered.map((c, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => { setDestAddr(c.address); setShowContacts(false); setContactSearch(''); }}
+                        className="w-full flex flex-col items-start px-3 py-2 hover:bg-xmr-green/10 transition-colors cursor-pointer text-left"
+                      >
+                        <span className="text-xs font-black text-xmr-green uppercase">{c.name}</span>
+                        <code className="text-[10px] opacity-40 truncate w-full">{c.address}</code>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* xmr.bio Profile Card */}
             {bioProfile && (
