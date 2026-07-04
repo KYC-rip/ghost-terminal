@@ -163,7 +163,12 @@ jobs:
       - name: Compute SHA256SUMS
         run: |
           mkdir -p out
-          find dist-artifacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -exec cp -n {} out/ \;
+          find dist-artifacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -exec cp -n {} out/ \;
+          # GitHub replaces spaces with dots in release asset filenames (e.g.
+          # "Ripley Terminal_...dmg" -> "Ripley.Terminal_...dmg"). Match that so a
+          # user's `sha256sum -c SHA256SUMS` verifies the FILE THEY DOWNLOADED by
+          # name — otherwise the space/dot mismatch makes -c silently skip them.
+          for f in out/*\ *; do [ -e "$f" ] && mv "$f" "${f// /.}"; done
           ( cd out && sha256sum * > ../SHA256SUMS )
           echo "----- SHA256SUMS -----"; cat SHA256SUMS
 
