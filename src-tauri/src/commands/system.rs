@@ -259,13 +259,19 @@ async fn ros_reqwest(
     Ok((status, bytes))
 }
 
-/// Open (or navigate) a real native browser window at `url`. The ROS Browser app
-/// uses this when hosted so ANY site renders — no X-Frame-Options / iframe limits
-/// (an iframe can't show google.com etc.). Reuses one "ros-browser" window.
+/// Open a real native browser window at `url`. The ROS Browser app uses this when
+/// hosted so ANY site renders — no X-Frame-Options / iframe limits (an iframe can't
+/// show google.com etc.).
 ///
 /// Egress follows the user's routing `mode` (same switch as the rest of the shell):
 /// "tor" → our loopback arti SOCKS proxy (Tor); "custom" → the user's proxy;
 /// anything else → clearnet/direct. The user decides — we never force Tor.
+///
+/// The webview proxy is fixed at CREATE time (can't be changed later), so we close
+/// any prior browser window and open a fresh one each time — that guarantees the
+/// current routing mode is applied (a reused window would keep its old proxy).
+static BROWSER_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[tauri::command]
 pub async fn open_native_browser(
     app: AppHandle,
@@ -285,20 +291,24 @@ pub async fn open_native_browser(
         }),
         _ => None, // clearnet
     };
-    if let Some(win) = app.get_webview_window("ros-browser") {
-        // Reuse: navigate the existing window (keeps its original proxy — a routing
-        // change applies to a freshly opened window).
-        win.navigate(parsed).map_err(|e| e.to_string())?;
-        let _ = win.set_focus();
-    } else {
-        let mut b = tauri::WebviewWindowBuilder::new(&app, "ros-browser", tauri::WebviewUrl::External(parsed))
-            .title("RipleyOS Browser")
-            .inner_size(1100.0, 780.0);
-        if let Some(pu) = proxy_url {
-            b = b.proxy_url(pu);
-        }
-        b.build().map_err(|e| e.to_string())?;
+    // Surface what routing the browser actually got — so "not using Tor" is diagnosable.
+    let via = proxy_url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "direct".into());
+    crate::emit_log(&app, "BROWSER", "info",
+        &format!("open {} · mode={} · via {}", parsed.host_str().unwrap_or("?"), mode.as_deref().unwrap_or("?"), via));
+
+    // Close any previous browser window so the fresh one takes the current proxy.
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("ros-browser") { let _ = win.destroy(); }
     }
+    let seq = BROWSER_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let label = format!("ros-browser-{seq}");
+    let mut b = tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(parsed))
+        .title("RipleyOS Browser")
+        .inner_size(1100.0, 780.0);
+    if let Some(pu) = proxy_url {
+        b = b.proxy_url(pu);
+    }
+    b.build().map_err(|e| e.to_string())?;
     Ok(())
 }
 
