@@ -5,8 +5,8 @@
   "identifier": "run.ripley.terminal",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run dev:renderer",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "",
     "beforeBuildCommand": "npm run build:renderer"
   },
   "app": {
