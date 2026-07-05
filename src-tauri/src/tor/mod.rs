@@ -5,6 +5,8 @@ use arti_client::{TorClient, TorClientConfig};
 use tauri::AppHandle;
 use tor_rtcompat::PreferredRuntime;
 
+mod socks;
+pub use socks::socks_port;
 mod transport;
 pub use transport::{ArtiTransport, SocksTransport};
 // tor_get/socks_get route HTTPS GETs (nodes.json, price) over Tor / an external
@@ -127,6 +129,12 @@ impl TorState {
                     inner.client = Some(client);
                     inner.status = TorStatus::Connected;
                     drop(inner);
+                    // Bring up the loopback SOCKS proxy (once) so the native ROS
+                    // browser can route over these same Tor circuits when the user
+                    // picks "tor" routing. Best-effort — never blocks connect().
+                    if let Err(e) = socks::ensure(self.inner.clone()).await {
+                        log::warn!("[tor-socks] proxy start failed: {e}");
+                    }
                     emit_tor_status(app, "connected", Some(100), None);
                     log::info!("Tor connected via arti (pure Rust) on attempt {attempt}");
                     return Ok(());

@@ -262,20 +262,42 @@ async fn ros_reqwest(
 /// Open (or navigate) a real native browser window at `url`. The ROS Browser app
 /// uses this when hosted so ANY site renders — no X-Frame-Options / iframe limits
 /// (an iframe can't show google.com etc.). Reuses one "ros-browser" window.
-/// PRIVACY NOTE: this webview uses its own network stack (clearnet); routing it
-/// over Tor needs a SOCKS proxy that arti doesn't expose — a follow-up.
+///
+/// Egress follows the user's routing `mode` (same switch as the rest of the shell):
+/// "tor" → our loopback arti SOCKS proxy (Tor); "custom" → the user's proxy;
+/// anything else → clearnet/direct. The user decides — we never force Tor.
 #[tauri::command]
-pub async fn open_native_browser(app: AppHandle, url: String) -> Result<(), String> {
+pub async fn open_native_browser(
+    app: AppHandle,
+    url: String,
+    mode: Option<String>,
+    proxy: Option<String>,
+) -> Result<(), String> {
     let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
+    let proxy_url: Option<tauri::Url> = match mode.as_deref() {
+        Some("tor") => {
+            let p = crate::tor::socks_port();
+            // Tor not up yet → open direct rather than fail (best-effort).
+            if p != 0 { format!("socks5://127.0.0.1:{p}").parse().ok() } else { None }
+        }
+        Some("custom") => proxy.filter(|s| !s.is_empty()).and_then(|s| {
+            if s.contains("://") { s } else { format!("socks5://{s}") }.parse().ok()
+        }),
+        _ => None, // clearnet
+    };
     if let Some(win) = app.get_webview_window("ros-browser") {
+        // Reuse: navigate the existing window (keeps its original proxy — a routing
+        // change applies to a freshly opened window).
         win.navigate(parsed).map_err(|e| e.to_string())?;
         let _ = win.set_focus();
     } else {
-        tauri::WebviewWindowBuilder::new(&app, "ros-browser", tauri::WebviewUrl::External(parsed))
+        let mut b = tauri::WebviewWindowBuilder::new(&app, "ros-browser", tauri::WebviewUrl::External(parsed))
             .title("RipleyOS Browser")
-            .inner_size(1100.0, 780.0)
-            .build()
-            .map_err(|e| e.to_string())?;
+            .inner_size(1100.0, 780.0);
+        if let Some(pu) = proxy_url {
+            b = b.proxy_url(pu);
+        }
+        b.build().map_err(|e| e.to_string())?;
     }
     Ok(())
 }
