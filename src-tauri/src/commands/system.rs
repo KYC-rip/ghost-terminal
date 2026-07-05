@@ -163,6 +163,102 @@ pub async fn proxied_get(app: AppHandle, url: String) -> Result<String, String> 
     String::from_utf8(bytes?).map_err(|e| format!("non-UTF-8 response: {e}"))
 }
 
+#[derive(serde::Deserialize)]
+pub struct RosFetchReq {
+    pub url: String,
+    pub method: Option<String>,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    pub body: Option<String>,
+}
+
+/// General HTTP behind a hosted RipleyOS renderer (window.__rosNative.fetch).
+/// Routes through the CONFIGURED uplink like `proxied_get`, but supports any method
+/// + body so ROS's rosFetch() works (e.g. POST /v2/exchange/create) over Tor with
+/// NO CORS. api.kyc.rip is rewritten to its .onion in Tor/custom mode (no exit
+/// node, no IP leak). Returns { ok, status, body }; status is exact for clearnet/
+/// custom (reqwest) and coarse for the Tor arti path (the transport treats non-2xx
+/// as an error → surfaced as ok:false).
+#[tauri::command]
+pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value, String> {
+    let mode = crate::wallet::scanner::read_routing_mode(&app);
+    let method = req.method.as_deref().unwrap_or("GET").to_uppercase();
+    let body = req.body.clone().unwrap_or_default().into_bytes();
+    let has_body = !body.is_empty();
+    let target = if mode != "clearnet" {
+        req.url.replace("https://api.kyc.rip", &format!("http://{KYC_API_ONION}/api"))
+    } else {
+        req.url.clone()
+    };
+
+    let outcome: Result<(u16, Vec<u8>), String> = match mode.as_str() {
+        "tor" => match app.state::<crate::tor::TorState>().get_client().await {
+            Some(tor) => {
+                if method == "GET" && !has_body {
+                    crate::tor::tor_get(&tor, &target).await.map(|b| (200u16, b))
+                } else {
+                    let (https, host, port, path) = crate::tor::parse_url(&target)?;
+                    if https {
+                        // POST-over-Tor+TLS isn't in the arti transport yet; ROS's
+                        // writes go to api.kyc.rip → onion (plain HTTP), so this only
+                        // bites non-kyc.rip https POSTs.
+                        Err(format!("{method} to https over Tor not supported yet: {host}"))
+                    } else {
+                        let m = hyper::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+                        crate::tor::tor_http(&tor, m, &host, port, &path, body, None).await.map(|b| (200u16, b))
+                    }
+                }
+            }
+            None => Err("Tor is enabled but not connected yet".into()),
+        },
+        "custom" => {
+            let proxy = crate::wallet::scanner::read_proxy_address(&app);
+            if proxy.trim().is_empty() {
+                Err("Custom routing selected but no proxy address is set".into())
+            } else {
+                // reqwest's `socks` feature routes any method through the SOCKS5 proxy.
+                match reqwest::Proxy::all(&proxy) {
+                    Ok(px) => ros_reqwest(reqwest::Client::builder().proxy(px), &method, &target, &req.headers, &body, has_body).await,
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+        }
+        _ => ros_reqwest(reqwest::Client::builder(), &method, &target, &req.headers, &body, has_body).await,
+    };
+
+    match outcome {
+        Ok((status, bytes)) => Ok(json!({ "ok": status < 400, "status": status, "body": String::from_utf8_lossy(&bytes) })),
+        Err(e) => Ok(json!({ "ok": false, "status": 502, "body": e })),
+    }
+}
+
+/// Shared reqwest send (clearnet + custom-SOCKS): full method/headers/body → (status, body).
+async fn ros_reqwest(
+    builder: reqwest::ClientBuilder,
+    method: &str,
+    url: &str,
+    headers: &Option<std::collections::HashMap<String, String>>,
+    body: &[u8],
+    has_body: bool,
+) -> Result<(u16, Vec<u8>), String> {
+    let client = builder.timeout(Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
+    let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+    let mut rb = client
+        .request(m, url)
+        .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")));
+    if let Some(hs) = headers {
+        for (k, v) in hs {
+            rb = rb.header(k, v);
+        }
+    }
+    if has_body {
+        rb = rb.body(body.to_vec());
+    }
+    let resp = rb.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
+    Ok((status, bytes))
+}
+
 /// Compare two dotted versions numerically (ignoring any -prerelease/+build
 /// suffix). Returns true if `a` is strictly newer than `b`.
 fn version_gt(a: &str, b: &str) -> bool {

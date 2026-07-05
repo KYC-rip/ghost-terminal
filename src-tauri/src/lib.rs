@@ -139,6 +139,7 @@ pub fn run() {
             commands::system::select_background_image,
             commands::system::check_for_updates,
             commands::system::proxied_get,
+            commands::system::ros_native_fetch,
             // Identity
             commands::identity::get_identities,
             commands::identity::save_identities,

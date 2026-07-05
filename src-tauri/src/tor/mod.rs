@@ -10,7 +10,7 @@ pub use transport::{ArtiTransport, SocksTransport};
 // tor_get/socks_get route HTTPS GETs (nodes.json, price) over Tor / an external
 // SOCKS proxy with TLS; tor_http is the shared hyper-over-arti helper.
 #[allow(unused_imports)]
-pub use transport::{socks_get, tor_get, tor_http};
+pub use transport::{parse_url, socks_get, tor_get, tor_http};
 
 /// Surface Tor bootstrap status to the renderer's status chip. Piggybacks on
 /// core-log with source="TOR_STATUS" because Tauri v2 custom events don't reach

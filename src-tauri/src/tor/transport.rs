@@ -386,7 +386,7 @@ fn tls_connector() -> TlsConnector {
 
 /// Parse an http(s) URL into (is_https, host, port, path-with-query). Defaults
 /// port to 443 (https) / 80 (http). Path defaults to "/".
-fn parse_url(url: &str) -> Result<(bool, String, u16, String), String> {
+pub fn parse_url(url: &str) -> Result<(bool, String, u16, String), String> {
     let (https, rest) = if let Some(r) = url.strip_prefix("https://") {
         (true, r)
     } else if let Some(r) = url.strip_prefix("http://") {

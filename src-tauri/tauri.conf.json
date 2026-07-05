@@ -10,6 +10,7 @@
     "beforeBuildCommand": "npm run build:renderer"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Ripley Terminal",
