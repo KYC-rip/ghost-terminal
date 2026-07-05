@@ -14,7 +14,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Core framework
-tauri = { version = "2", features = ["tray-icon", "devtools"] }
+# macos-proxy → wry/mac-proxy: without it WebviewWindowBuilder::proxy_url is a
+# silent no-op on macOS (the SOCKS/HTTP proxy code is cfg-gated). Needs macOS 14+.
+tauri = { version = "2", features = ["tray-icon", "devtools", "macos-proxy"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
