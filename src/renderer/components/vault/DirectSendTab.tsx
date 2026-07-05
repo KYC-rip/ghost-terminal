@@ -100,19 +100,17 @@ export function DirectSendTab({
 
       resolveBioRef.current = setTimeout(async () => {
         try {
-          const res = await fetch(`https://api.xmr.bio/${handle}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.address) {
-              setBioProfile(data);
-            } else {
-              setBioError('No address found for this user.');
-            }
+          // Routed through the uplink so resolving an @handle doesn't leak the
+          // user's IP (or who they're paying) to xmr.bio over clearnet.
+          const body = await window.api.proxiedGet(`https://api.xmr.bio/${handle}`);
+          const data = JSON.parse(body);
+          if (data && data.address) {
+            setBioProfile(data);
           } else {
-            setBioError('User not found on xmr.bio');
+            setBioError('No address found for this user.');
           }
         } catch (e) {
-          setBioError('Failed to contact xmr.bio');
+          setBioError('User not found on xmr.bio');
         } finally {
           setIsResolvingBio(false);
         }
@@ -136,12 +134,12 @@ export function DirectSendTab({
     }
   }, [deepLinkData, clearDeepLinkData]);
 
-  // Ban check
+  // Ban check — routed through the uplink so the payee address isn't sent to a
+  // clearnet server (which would reveal who you're paying) while on Tor.
   useEffect(() => {
     if (sendMode === 'single' && destAddr.length > 30) {
-      fetch(`https://api.kyc.rip/v1/tools/ban-list?address=${destAddr}`)
-        .then((res) => res.json())
-        .then((data: any) => setIsBanned(data.results && data.results.length > 0))
+      window.api.proxiedGet(`https://api.kyc.rip/v1/tools/ban-list?address=${destAddr}`)
+        .then((body: string) => { const data = JSON.parse(body); setIsBanned(data.results && data.results.length > 0); })
         .catch(() => setIsBanned(false));
     } else setIsBanned(false);
   }, [destAddr, sendMode]);

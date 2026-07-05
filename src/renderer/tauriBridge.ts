@@ -25,6 +25,9 @@ function createTauriApi() {
     // ── Identity ──
     getIdentities: () => invoke('get_identities'),
     detectLegacyWallets: () => invoke('detect_legacy_wallets'),
+    // Fetch an external URL through the configured uplink (Tor/SOCKS/clearnet) so
+    // the renderer never leaks the user's IP with a direct clearnet fetch.
+    proxiedGet: (url: string) => invoke('proxied_get', { url }),
     saveIdentities: async (ids: any) => {
       // The frontend sends the full identity list after modifications.
       // We need to persist this since Rust commands also manage identities.

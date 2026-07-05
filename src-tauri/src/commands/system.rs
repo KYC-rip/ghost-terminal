@@ -112,6 +112,57 @@ pub async fn check_for_updates(app: AppHandle, include_prereleases: bool) -> Res
     }))
 }
 
+/// The kyc.rip API .onion mirror. In Tor/custom mode, api.kyc.rip requests are
+/// rewritten to this hidden service so no exit node is used and nothing leaks the
+/// user's IP. The onion serves the same API under a `/api` prefix (clearnet
+/// `https://api.kyc.rip/v1/x` → `http://<onion>/api/v1/x`).
+const KYC_API_ONION: &str = "kycripxmrmlmkfaqf4hwchilhtrp36nu6vyjoh3e7rmsgmyylxfm25ad.onion";
+
+/// Fetch a URL through the CONFIGURED uplink (Tor / SOCKS / clearnet), returning the
+/// body as a string. The renderer routes its external API calls (stats/price,
+/// address ban-check, market validate, xmr.bio, …) through this so none of them
+/// leak the user's IP via a direct clearnet `fetch()` while Tor is enabled.
+#[tauri::command]
+pub async fn proxied_get(app: AppHandle, url: String) -> Result<String, String> {
+    let mode = crate::wallet::scanner::read_routing_mode(&app);
+    // Route kyc.rip through its onion when not on clearnet (no exit node, no IP leak).
+    let target = if mode != "clearnet" {
+        url.replace("https://api.kyc.rip", &format!("http://{KYC_API_ONION}/api"))
+    } else {
+        url.clone()
+    };
+
+    let bytes: Result<Vec<u8>, String> = match mode.as_str() {
+        "tor" => match app.state::<crate::tor::TorState>().get_client().await {
+            Some(tor) => crate::tor::tor_get(&tor, &target).await,
+            None => Err("Tor is enabled but not connected yet".into()),
+        },
+        "custom" => {
+            let proxy = crate::wallet::scanner::read_proxy_address(&app);
+            if proxy.trim().is_empty() {
+                Err("Custom routing selected but no proxy address is set".into())
+            } else {
+                crate::tor::socks_get(&proxy, &target).await
+            }
+        }
+        _ => {
+            async {
+                let resp = reqwest::Client::new()
+                    .get(&target)
+                    .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
+                    .timeout(Duration::from_secs(15))
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
+            }
+            .await
+        }
+    };
+
+    String::from_utf8(bytes?).map_err(|e| format!("non-UTF-8 response: {e}"))
+}
+
 /// Compare two dotted versions numerically (ignoring any -prerelease/+build
 /// suffix). Returns true if `a` is strictly newer than `b`.
 fn version_gt(a: &str, b: &str) -> bool {

@@ -77,9 +77,8 @@ export function useFiatValue(ticker?: string, amount?: string | number, withPref
     // renderer; CoinGecko allows CORS and serves as the only direct fallback.
     const fetchKycRip = async (): Promise<number | null> => {
       const base = getApiBase().replace(/\/$/, '');
-      const res = await fetch(`${base}/v1/price/${sym}`);
-      if (!res.ok) return null;
-      const data = await res.json();
+      const body = await window.api.proxiedGet(`${base}/v1/price/${sym}`);
+      const data = JSON.parse(body);
       return data?.usd > 0 ? data.usd : null;
     };
 
@@ -93,8 +92,9 @@ export function useFiatValue(ticker?: string, amount?: string | number, withPref
     const fetchCoinGecko = async (): Promise<number | null> => {
       const id = COINGECKO_IDS[sym];
       if (!id) return null;
-      const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd`);
-      const data = await res.json();
+      // Over Tor exit (CoinGecko has no onion) — hides the user's IP.
+      const body = await window.api.proxiedGet(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd`);
+      const data = JSON.parse(body);
       const price = data?.[id]?.usd;
       return price > 0 ? price : null;
     };

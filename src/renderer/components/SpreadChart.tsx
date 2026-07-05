@@ -59,11 +59,9 @@ export default function SpreadChart() {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const response = await fetch(`https://api.kyc.rip/v1/history?period=${timeframe}`, {
-          method: 'GET'
-        });
-
-        const result = await response.json();
+        // Routed through the uplink (Tor .onion mirror / clearnet) — no IP leak.
+        const body = await window.api.proxiedGet(`https://api.kyc.rip/v1/history?period=${timeframe}`);
+        const result = JSON.parse(body);
         
         if (active && Array.isArray(result)) {
           const cleanData = result

@@ -125,6 +125,7 @@ pub fn run() {
             commands::kvstore::get_all_xmr402_payments,
             commands::system::select_background_image,
             commands::system::check_for_updates,
+            commands::system::proxied_get,
             // Identity
             commands::identity::get_identities,
             commands::identity::save_identities,
