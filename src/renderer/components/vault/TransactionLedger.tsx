@@ -533,16 +533,11 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                       </button>
                                     </div>
                                   </div>
-                                ) : (
+                                ) : (tx.destinations?.[0]?.address || tx.address) ? (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      const targetAddress = tx.destinations?.[0]?.address || tx.address;
-                                      if (targetAddress) {
-                                        generateProof(tx.id, targetAddress);
-                                      } else {
-                                        addLog("Recipient address missing for proof generation", "error");
-                                      }
+                                      generateProof(tx.id, (tx.destinations?.[0]?.address || tx.address) as string);
                                     }}
                                     disabled={isLoadingDetails[tx.id]}
                                     className="w-full py-2 bg-xmr-green/5 border border-xmr-green/20 text-xmr-green text-[10px] uppercase font-black tracking-widest hover:bg-xmr-green/20 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
@@ -559,6 +554,15 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                       </>
                                     )}
                                   </button>
+                                ) : (
+                                  // No stored recipient + no tx key → this was made from another device.
+                                  // An OutProof (get_tx_proof) needs both, so it's impossible here.
+                                  <div className="text-[10px] text-xmr-dim/70 leading-relaxed bg-xmr-surface border border-xmr-border/20 rounded-sm p-2.5">
+                                    Payment proof isn't available for this transaction — it was made from
+                                    another device, so this wallet holds neither the recipient address nor
+                                    the transaction key needed to prove it. Proofs work for sends you make
+                                    from this wallet.
+                                  </div>
                                 )}
                               </div>
                             </div>
