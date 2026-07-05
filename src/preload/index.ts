@@ -112,6 +112,12 @@ const rosNative = {
     const s: any = await ipcRenderer.invoke('get-uplink-status')
     return { status: String(s?.status || 'unknown').toLowerCase() }
   },
+  // Stream the shell's core-log (Tor bootstrap, engine, daemon RPC) into ROS's console.
+  onLog: (cb: (e: { source?: string; level?: string; message?: string }) => void) => {
+    const h = (_: any, data: any) => cb(data)
+    ipcRenderer.on('core-log', h)
+    return () => ipcRenderer.removeListener('core-log', h)
+  },
 }
 
 if (process.contextIsolated) {
