@@ -85,6 +85,19 @@ pub fn run() {
             // Background sync pool ("Sync all wallets")
             app.manage(wallet::SyncPool::new());
 
+            // Bootstrap Tor at startup — but ONLY if the user's routing mode is Tor.
+            // The wallet scanner connects Tor lazily on first use; a hosted RipleyOS
+            // renderer never runs the scanner, so without this its native fetches
+            // (window.__rosNative → ros_native_fetch) sit at "Tor not connected".
+            // Respects the user's choice (clearnet/custom → we don't force Tor);
+            // arti's bootstrap is idempotent, so it won't fight the lazy path.
+            let tor_boot = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if crate::wallet::scanner::read_routing_mode(&tor_boot) == "tor" {
+                    let _ = crate::wallet::scanner::ensure_tor(&tor_boot).await;
+                }
+            });
+
             log::info!("Ripley Terminal v2 initialized");
             Ok(())
         })
