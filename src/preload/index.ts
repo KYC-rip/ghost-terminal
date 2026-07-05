@@ -94,7 +94,24 @@ const rosNative = {
   runtime: 'electron' as const,
   fetch: (req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) =>
     ipcRenderer.invoke('ros:native-fetch', req),
-  caps: { tor: false, monero: true, browser: true },
+  caps: { tor: true, monero: true, browser: true },
+  // Network control surface — ROS's Privacy + Settings read/set routing + Tor status.
+  getConfig: async () => {
+    const c: any = await ipcRenderer.invoke('get-config')
+    return { routingMode: c?.routingMode, proxyAddress: c?.systemProxyAddress, network: c?.network }
+  },
+  setConfig: async (patch: { routingMode?: string; proxyAddress?: string; network?: string }) => {
+    const c: any = (await ipcRenderer.invoke('get-config')) || {}
+    if (patch.routingMode !== undefined) c.routingMode = patch.routingMode
+    if (patch.proxyAddress !== undefined) c.systemProxyAddress = patch.proxyAddress
+    if (patch.network !== undefined) c.network = patch.network
+    // reload the uplink so the routing change (Tor/clearnet) takes effect now.
+    await ipcRenderer.invoke('save-config-and-reload', c)
+  },
+  torStatus: async () => {
+    const s: any = await ipcRenderer.invoke('get-uplink-status')
+    return { status: String(s?.status || 'unknown').toLowerCase() }
+  },
 }
 
 if (process.contextIsolated) {
