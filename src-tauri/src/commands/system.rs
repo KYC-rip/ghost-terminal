@@ -333,6 +333,13 @@ fn resolve_browser_proxy(mode: &Option<String>, proxy: &Option<String>) -> Optio
     }
 }
 
+/// Parse "r,g,b" (from the ROS theme's computed bg) into a webview background color,
+/// so the embed matches the theme instead of flashing white before the page paints.
+fn parse_rgb(s: &str) -> Option<tauri::webview::Color> {
+    let p: Vec<u8> = s.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+    if p.len() >= 3 { Some(tauri::webview::Color(p[0], p[1], p[2], 255)) } else { None }
+}
+
 #[tauri::command]
 pub async fn browser_embed_open(
     app: AppHandle,
@@ -343,6 +350,7 @@ pub async fn browser_embed_open(
     y: f64,
     w: f64,
     h: f64,
+    bg: Option<String>,
 ) -> Result<(), String> {
     let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
     let proxy_url = resolve_browser_proxy(&mode, &proxy);
@@ -352,8 +360,17 @@ pub async fn browser_embed_open(
     // The proxy is fixed at creation → recreate on open (mode may have changed).
     if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
     let win = app.get_window("main").ok_or_else(|| "no main window".to_string())?;
+    // Diagnostic: compare the bounds ROS sends against the window's logical content
+    // size, so a coverage gap (webview smaller than the frame) is measurable.
+    if let (Ok(sz), Ok(sf)) = (win.inner_size(), win.scale_factor()) {
+        let (lw, lh) = (sz.width as f64 / sf, sz.height as f64 / sf);
+        crate::emit_log(&app, "BROWSER", "info", &format!(
+            "embed recv x={:.0} y={:.0} w={:.0} h={:.0} | win {:.0}x{:.0} @{:.2}x | right-gap={:.0} bottom-gap={:.0}",
+            x, y, w, h, lw, lh, sf, lw - (x + w), lh - (y + h)));
+    }
     let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed));
     if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
+    if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
     win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -371,8 +388,12 @@ pub fn browser_embed_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> R
 #[tauri::command]
 pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String> {
     let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
-    if let Some(wv) = app.get_webview(EMBED_LABEL) {
-        wv.navigate(parsed).map_err(|e| e.to_string())?;
+    match app.get_webview(EMBED_LABEL) {
+        Some(wv) => {
+            crate::emit_log(&app, "BROWSER", "info", &format!("embed navigate {}", parsed.host_str().unwrap_or("?")));
+            wv.navigate(parsed).map_err(|e| e.to_string())?;
+        }
+        None => crate::emit_log(&app, "BROWSER", "warn", "embed navigate: no ros-embed webview"),
     }
     Ok(())
 }
