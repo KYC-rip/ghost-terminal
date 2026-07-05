@@ -312,6 +312,86 @@ pub async fn open_native_browser(
     Ok(())
 }
 
+// ---- Embedded browser (child webview positioned over the ROS Browser frame) ----
+// Unlike open_native_browser (a separate window), this is a child webview of the
+// main window, positioned by the ROS Browser app over its content frame in logical
+// px. Native child webviews always float above HTML, so the ROS side hides it when
+// the Browser window isn't the topmost (covered / behind another window / minimized).
+const EMBED_LABEL: &str = "ros-embed";
+
+/// Resolve the webview proxy for the user's routing mode (shared by both browsers).
+fn resolve_browser_proxy(mode: &Option<String>, proxy: &Option<String>) -> Option<tauri::Url> {
+    match mode.as_deref() {
+        Some("tor") => {
+            let p = crate::tor::socks_port();
+            if p != 0 { format!("socks5://127.0.0.1:{p}").parse().ok() } else { None }
+        }
+        Some("custom") => proxy.clone().filter(|s| !s.is_empty()).and_then(|s| {
+            if s.contains("://") { s } else { format!("socks5://{s}") }.parse().ok()
+        }),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub async fn browser_embed_open(
+    app: AppHandle,
+    url: String,
+    mode: Option<String>,
+    proxy: Option<String>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
+    let proxy_url = resolve_browser_proxy(&mode, &proxy);
+    let via = proxy_url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "direct".into());
+    crate::emit_log(&app, "BROWSER", "info",
+        &format!("embed {} · mode={} · via {}", parsed.host_str().unwrap_or("?"), mode.as_deref().unwrap_or("?"), via));
+    // The proxy is fixed at creation → recreate on open (mode may have changed).
+    if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
+    let win = app.get_window("main").ok_or_else(|| "no main window".to_string())?;
+    let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed));
+    if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
+    win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_embed_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+    if let Some(wv) = app.get_webview(EMBED_LABEL) {
+        wv.set_position(tauri::LogicalPosition::new(x, y)).map_err(|e| e.to_string())?;
+        wv.set_size(tauri::LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
+    if let Some(wv) = app.get_webview(EMBED_LABEL) {
+        wv.navigate(parsed).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_embed_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    if let Some(wv) = app.get_webview(EMBED_LABEL) {
+        if visible { wv.show().map_err(|e| e.to_string())?; }
+        else { wv.hide().map_err(|e| e.to_string())?; }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_embed_close(app: AppHandle) -> Result<(), String> {
+    if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
+    Ok(())
+}
+
 /// Compare two dotted versions numerically (ignoring any -prerelease/+build
 /// suffix). Returns true if `a` is strictly newer than `b`.
 fn version_gt(a: &str, b: &str) -> bool {

@@ -154,6 +154,11 @@ pub fn run() {
             commands::system::proxied_get,
             commands::system::ros_native_fetch,
             commands::system::open_native_browser,
+            commands::system::browser_embed_open,
+            commands::system::browser_embed_bounds,
+            commands::system::browser_embed_navigate,
+            commands::system::browser_embed_visible,
+            commands::system::browser_embed_close,
             // Identity
             commands::identity::get_identities,
             commands::identity::save_identities,
