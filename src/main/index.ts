@@ -667,7 +667,29 @@ app.whenReady().then(async () => {
     }
   });
 
-  if (app.isPackaged) {
+  // ── RipleyOS platform bridge ── general no-CORS HTTP for a hosted ROS renderer.
+  // ROS's platform/native.ts calls window.__rosNative.fetch(); we fulfil it with
+  // Electron's net.fetch (bypasses CORS → ROS can drop its api.kyc.rip proxies).
+  // Tor routing of arbitrary HTTP is a follow-up; Monero RPC already runs over Tor.
+  ipcMain.handle('ros:native-fetch', async (_e, req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) => {
+    try {
+      const res = await net.fetch(req.url, { method: req.method || 'GET', headers: req.headers, body: req.body });
+      const headers: Record<string, string> = {};
+      res.headers.forEach((v, k) => { headers[k] = v; });
+      return { ok: res.ok, status: res.status, headers, body: await res.text() };
+    } catch (e: any) {
+      return { ok: false, status: 502, headers: {}, body: String(e?.message || e) };
+    }
+  });
+
+  // Opt-in: host RipleyOS instead of the wallet renderer — the vision where ROS
+  // becomes the desktop and this wallet becomes a ROS app. Set ROS_URL to the ros
+  // dev server (http://localhost:5174) or a built/hosted ROS URL. Default behavior
+  // (the wallet renderer) is unchanged.
+  const rosUrl = process.env['ROS_URL'];
+  if (rosUrl) {
+    mainWindow.loadURL(rosUrl);
+  } else if (app.isPackaged) {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
   } else {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173');

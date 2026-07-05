@@ -86,13 +86,27 @@ const api = {
   confirmShutdown: () => ipcRenderer.send('confirm-shutdown')
 }
 
+// RipleyOS platform bridge — the small, STABLE contract ROS's platform/native.ts
+// consumes (window.__rosNative). Kept separate from `api` so ROS stays decoupled
+// from the wallet's internal IPC surface. Only `fetch` is wired in Phase 3a;
+// native KV, monero RPC and browser webviews follow.
+const rosNative = {
+  runtime: 'electron' as const,
+  fetch: (req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) =>
+    ipcRenderer.invoke('ros:native-fetch', req),
+  caps: { tor: false, monero: true, browser: true },
+}
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('api', api)
+    contextBridge.exposeInMainWorld('__rosNative', rosNative)
   } catch (error) {
     console.error(error)
   }
 } else {
   // @ts-ignore (define in dts)
   window.api = api
+  // @ts-ignore (define in dts)
+  window.__rosNative = rosNative
 }
