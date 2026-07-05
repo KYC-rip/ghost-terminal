@@ -153,6 +153,7 @@ pub fn run() {
             commands::system::check_for_updates,
             commands::system::proxied_get,
             commands::system::ros_native_fetch,
+            commands::system::open_native_browser,
             // Identity
             commands::identity::get_identities,
             commands::identity::save_identities,
