@@ -368,7 +368,16 @@ pub async fn browser_embed_open(
             "embed recv x={:.0} y={:.0} w={:.0} h={:.0} | win {:.0}x{:.0} @{:.2}x | right-gap={:.0} bottom-gap={:.0}",
             x, y, w, h, lw, lh, sf, lw - (x + w), lh - (y + h)));
     }
-    let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed));
+    // Page-load progress → the ROS address-bar loading bar (via the core-log channel).
+    let app_ev = app.clone();
+    let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed))
+        .on_page_load(move |_wv, payload| {
+            let phase = match payload.event() {
+                tauri::webview::PageLoadEvent::Started => "start",
+                _ => "end",
+            };
+            crate::emit_log(&app_ev, "BROWSER_LOAD", "info", phase);
+        });
     if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
     if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
     win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
