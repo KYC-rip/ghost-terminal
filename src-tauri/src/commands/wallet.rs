@@ -457,7 +457,32 @@ pub async fn relay_transfer(
     app: AppHandle,
     state: State<'_, WalletState>,
     tx_metadata: Vec<u8>,
+    to: Option<String>,
+    amount: Option<String>,
+    fee: Option<String>,
 ) -> Result<String, String> {
+    // FUND SAFETY (per-spend authorization): every broadcast requires an OS-level
+    // confirmation the renderer JS cannot fake — so no ROS app (or compromised page)
+    // can spend silently, even though it could reach this command via invoke. Shows
+    // the destination/amount/fee when provided, else a generic prompt.
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let body = match (&to, &amount, &fee) {
+            (Some(t), Some(a), Some(f)) => format!("Send {a} XMR\nto {t}\n\nNetwork fee {f} XMR"),
+            _ => "Authorize this Monero transaction broadcast?".to_string(),
+        };
+        let ok = app
+            .dialog()
+            .message(body)
+            .title("Confirm transaction")
+            .buttons(MessageDialogButtons::OkCancelCustom("Send".into(), "Cancel".into()))
+            .blocking_show();
+        if !ok {
+            emit_log(&app, "Tx", "warn", "Transaction cancelled at confirmation");
+            return Err("Transaction cancelled".into());
+        }
+    }
+
     emit_log(&app, "Tx", "info", "🔐 Signing transaction...");
 
     let spend_key = state.get_spend_key().await
