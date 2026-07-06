@@ -170,6 +170,7 @@ pub fn run() {
             commands::identity::rename_identity,
             // Tor
             commands::tor::get_tor_status,
+            commands::tor::tor_circuit,
             commands::tor::restart_tor,
             // Vigil (limit-order persistence)
             commands::vigil::vigil_save_strike_key,
