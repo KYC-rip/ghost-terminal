@@ -381,8 +381,11 @@ pub async fn browser_embed_open(
         });
     if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
     if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
-    win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
+    let wv = win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
+    // Child webviews can inherit a non-1.0 page zoom on macOS HiDPI → content renders
+    // oversized. Pin to 100% (Retina backing is handled separately by the webview).
+    let _ = wv.set_zoom(1.0);
     Ok(())
 }
 
