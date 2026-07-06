@@ -190,7 +190,11 @@ pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value,
         req.url.clone()
     };
 
-    let outcome: Result<(u16, Vec<u8>), String> = match mode.as_str() {
+    // A .onion is only reachable over Tor — force it through Tor regardless of the
+    // routing mode (so first-party api.kyc.rip → onion, and any explicit .onion, stay
+    // on Tor even in clearnet mode; general clearnet traffic still goes direct).
+    let route = if target.contains(".onion") { "tor" } else { mode.as_str() };
+    let outcome: Result<(u16, Vec<u8>), String> = match route {
         "tor" => match app.state::<crate::tor::TorState>().get_client().await {
             Some(tor) => {
                 if method == "GET" && !has_body {

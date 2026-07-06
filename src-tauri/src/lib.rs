@@ -93,9 +93,11 @@ pub fn run() {
             // arti's bootstrap is idempotent, so it won't fight the lazy path.
             let tor_boot = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if crate::wallet::scanner::read_routing_mode(&tor_boot) == "tor" {
-                    let _ = crate::wallet::scanner::ensure_tor(&tor_boot).await;
-                }
+                // Bootstrap Tor at startup regardless of routing mode: .onion domains
+                // (first-party api.kyc.rip and explicit onions) route over Tor even in
+                // clearnet mode, so the client must be ready. This makes Tor AVAILABLE,
+                // not forced — general clearnet traffic still goes direct.
+                let _ = crate::wallet::scanner::ensure_tor(&tor_boot).await;
             });
 
             log::info!("Ripley Terminal v2 initialized");
