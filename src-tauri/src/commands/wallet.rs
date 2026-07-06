@@ -104,7 +104,22 @@ pub async fn close_wallet(state: State<'_, WalletState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_mnemonic(state: State<'_, WalletState>) -> Result<String, String> {
+pub async fn get_mnemonic(app: AppHandle, state: State<'_, WalletState>) -> Result<String, String> {
+    // FUND SAFETY: the seed phrase is the whole wallet. Revealing it requires an
+    // OS-level confirmation the renderer JS can't fake — so no app can exfiltrate the
+    // recovery phrase silently, even via a direct invoke. (Tauri injects app + state.)
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let ok = app
+            .dialog()
+            .message("Reveal your secret recovery phrase?\n\nAnyone who sees it can steal ALL funds. Only continue if you personally requested this.")
+            .title("Reveal seed phrase")
+            .buttons(MessageDialogButtons::OkCancelCustom("Reveal".into(), "Cancel".into()))
+            .blocking_show();
+        if !ok {
+            return Err("Seed reveal cancelled".into());
+        }
+    }
     state.get_mnemonic().await
 }
 
