@@ -289,24 +289,25 @@ function createTauriApi() {
             result = {};
             break;
           case 'sweep_all': {
-            const sweepHash = await invoke('sweep_all', {
+            // Returns ALL batch hashes — a >24-output sweep broadcasts multiple txs.
+            const sweepHashes = await invoke('sweep_all', {
               address: p.address,
               accountIndex: p.account_index || 0,
               priority: p.priority || 0,
               // Forward the subaddress filter so "vanish subaddress" sweeps only that
               // subaddress's outputs, not the whole wallet. null => sweep everything.
               subaddrIndices: p.subaddr_indices || null,
-            });
-            result = { tx_hash_list: [sweepHash], tx_hash: sweepHash };
+            }) as string[];
+            result = { tx_hash_list: sweepHashes, tx_hash: sweepHashes[0] };
             break;
           }
           case 'sweep_single': {
-            const singleHash = await invoke('sweep_single', {
+            const singleHashes = await invoke('sweep_single', {
               address: p.address,
               keyImage: p.key_image,
               priority: p.priority || 0,
-            });
-            result = { tx_hash_list: [singleHash], tx_hash: singleHash };
+            }) as string[];
+            result = { tx_hash_list: singleHashes, tx_hash: singleHashes[0] };
             break;
           }
           default:

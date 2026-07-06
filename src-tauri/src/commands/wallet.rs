@@ -493,6 +493,9 @@ pub async fn relay_transfer(
             .buttons(MessageDialogButtons::OkCancelCustom("Send".into(), "Cancel".into()))
             .blocking_show();
         if !ok {
+            // Un-stage the spend prepare() staged so the (never-broadcast) inputs
+            // return to the spendable balance immediately.
+            state.discard_pending_spend(&crate::wallet::state::tx_meta_key(&tx_metadata)).await;
             emit_log(&app, "Tx", "warn", "Transaction cancelled at confirmation");
             return Err("Transaction cancelled".into());
         }
@@ -713,7 +716,7 @@ pub async fn sweep_all(
     // When Some, sweep only outputs belonging to these subaddress (minor) indices of
     // `account_index` ("vanish subaddress"). When None, sweep the whole wallet.
     subaddr_indices: Option<Vec<u32>>,
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
     // FUND SAFETY: a sweep moves funds — require an OS-level confirmation the renderer
     // JS can't fake (used by churn / vanish-subaddress too).
     {
@@ -766,7 +769,7 @@ pub async fn sweep_single(
     address: String,
     key_image: String,
     priority: Option<u8>,
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
     // FUND SAFETY: sweeping a single output moves funds — native confirmation (vanish coin).
     {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -811,7 +814,7 @@ async fn run_sweep(
     dest: MoneroAddress,
     inputs: Vec<monero_wallet::WalletOutput>,
     priority: Option<u8>,
-) -> Result<String, String> {
+) -> Result<Vec<String>, String> {
     // Large input sets can't fit one tx — the node throttles the concurrent decoy
     // fetches and a many-input tx is heavy to build/sign, blowing the tx watchdog.
     // So sweep in BATCHES: multiple txs to the same destination (like
@@ -828,7 +831,7 @@ async fn run_sweep(
     // broadcast and the next scan, which looks like lost funds to the user.
     let dest_is_self = state.is_own_address(&dest).await;
 
-    let mut last_hash = String::new();
+    let mut hashes: Vec<String> = Vec::with_capacity(total_batches);
     for (bi, batch) in batches.into_iter().enumerate() {
         let fee_priority = match priority.unwrap_or(0) {
             1 => FeePriority::Unimportant,
@@ -867,10 +870,10 @@ async fn run_sweep(
         }, dest_is_self).await;
 
         emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
-        last_hash = tx_hash;
+        hashes.push(tx_hash);
     }
 
-    Ok(last_hash)
+    Ok(hashes)
 }
 
 /// Returns transaction history in the Monero-RPC `get_transfers` shape the

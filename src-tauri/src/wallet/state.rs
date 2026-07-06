@@ -579,6 +579,13 @@ impl WalletState {
         self.inner.write().await.pending_spends.insert(meta_key, (ids, sent));
     }
 
+    /// Drop a staged spend WITHOUT committing — e.g. the user cancelled at the native
+    /// confirmation. Its inputs (never broadcast) return to the spendable balance
+    /// immediately instead of reading as spent until the next lock/rescan.
+    pub async fn discard_pending_spend(&self, meta_key: &str) {
+        self.inner.write().await.pending_spends.remove(meta_key);
+    }
+
     /// Commit a staged spend after a successful broadcast: mark its inputs spent,
     /// finalize the sent-log entry (tx_hash/height/timestamp), and persist. If no
     /// staged spend is found (e.g. app restarted mid-flow), a rescan reconciles.
