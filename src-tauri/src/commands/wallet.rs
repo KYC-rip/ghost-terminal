@@ -714,6 +714,24 @@ pub async fn sweep_all(
     // `account_index` ("vanish subaddress"). When None, sweep the whole wallet.
     subaddr_indices: Option<Vec<u32>>,
 ) -> Result<String, String> {
+    // FUND SAFETY: a sweep moves funds — require an OS-level confirmation the renderer
+    // JS can't fake (used by churn / vanish-subaddress too).
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let scope = match &subaddr_indices {
+            Some(idxs) => format!("subaddress(es) {:?}", idxs),
+            None => "ALL funds".to_string(),
+        };
+        let ok = app
+            .dialog()
+            .message(format!("Sweep {scope}\nto {address}?"))
+            .title("Confirm sweep")
+            .buttons(MessageDialogButtons::OkCancelCustom("Sweep".into(), "Cancel".into()))
+            .blocking_show();
+        if !ok {
+            return Err("Sweep cancelled".into());
+        }
+    }
     let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
     let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
     let network = state.get_network().await;
@@ -749,6 +767,19 @@ pub async fn sweep_single(
     key_image: String,
     priority: Option<u8>,
 ) -> Result<String, String> {
+    // FUND SAFETY: sweeping a single output moves funds — native confirmation (vanish coin).
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let ok = app
+            .dialog()
+            .message(format!("Sweep this single output\nto {address}?"))
+            .title("Confirm sweep")
+            .buttons(MessageDialogButtons::OkCancelCustom("Sweep".into(), "Cancel".into()))
+            .blocking_show();
+        if !ok {
+            return Err("Sweep cancelled".into());
+        }
+    }
     let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
     let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
     let network = state.get_network().await;
