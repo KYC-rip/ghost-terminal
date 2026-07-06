@@ -376,7 +376,8 @@ pub async fn browser_embed_open(
                 tauri::webview::PageLoadEvent::Started => "start",
                 _ => "end",
             };
-            crate::emit_log(&app_ev, "BROWSER_LOAD", "info", phase);
+            // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
+            crate::emit_log(&app_ev, "BROWSER_LOAD", "info", &format!("{}|{}", phase, payload.url()));
         });
     if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
     if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
