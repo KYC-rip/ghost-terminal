@@ -17,10 +17,12 @@
 //! where hash_to_scalar(x) = reduce_mod_l(keccak256(x)).
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+use curve25519_dalek::traits::Identity;
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use rand_core::OsRng;
 
 use monero_address::MoneroAddress;
+use monero_wallet::extra::Extra;
 
 use super::base58_monero;
 
@@ -142,6 +144,31 @@ pub fn verify_out_proof_v2_consistency(
     Ok(c2 == c)
 }
 
+/// Extract the primary transaction public key `R` from a tx's raw `extra` bytes.
+///
+/// This is the **on-chain** R the verifier MUST bind the proof to. `check_tx_proof`
+/// must never accept an R supplied by the party presenting the proof — otherwise the
+/// consistency check proves nothing about the real transaction. Handles the standard
+/// single-tx-pubkey case; per-output additional keys (subaddress sends) are ignored
+/// here and handled when subaddress proofs land.
+#[allow(dead_code)]
+pub fn tx_pubkey_from_extra(extra: &[u8]) -> Result<EdwardsPoint, String> {
+    let mut cursor: &[u8] = extra;
+    let parsed = Extra::read(&mut cursor).map_err(|_| "unparseable tx extra".to_string())?;
+    let (keys, _additional) = parsed.keys().ok_or("no tx public key in extra")?;
+    let first: EdwardsPoint = keys
+        .into_iter()
+        .next()
+        .ok_or("empty tx public key list")?
+        .into();
+    // `Extra::keys` substitutes the identity point for an unparseable key; reject it so
+    // a malformed pubkey can never masquerade as a valid R.
+    if first == EdwardsPoint::identity() {
+        return Err("tx public key is the identity point (invalid)".into());
+    }
+    Ok(first)
+}
+
 fn decompress(bytes: &[u8]) -> Result<EdwardsPoint, String> {
     let arr: [u8; 32] = bytes.try_into().map_err(|_| "bad point length")?;
     Option::from(curve25519_dalek::edwards::CompressedEdwardsY(arr).decompress())
@@ -182,5 +209,50 @@ mod tests {
         let ok = verify_out_proof_v2_consistency(txid, message, &proof, &big_r, &a)
             .expect("verify");
         assert!(ok, "Schnorr identity did not hold for generated proof");
+    }
+
+    // A verifier that only ever returns `true` is worthless. Prove it REJECTS every
+    // wrong input: a substituted R, a wrong recipient view key, a tampered message,
+    // and a tampered txid. These are the forgeries check_tx_proof must defeat.
+    #[test]
+    fn verifier_rejects_wrong_inputs() {
+        let g = ED25519_BASEPOINT_POINT;
+        let view_sk: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
+        let spend_sk: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
+        let view_pub = monero_oxide::ed25519::Point::from(g * view_sk);
+        let spend_pub = monero_oxide::ed25519::Point::from(g * spend_sk);
+        let address = MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_pub, view_pub);
+
+        let r: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
+        let txid = [9u8; 32];
+        let proof = generate_out_proof_v2(txid, "m", r, &address).expect("generate");
+        let big_r = g * r;
+        let a: EdwardsPoint = address.view().into();
+
+        // Baseline: the honest inputs pass.
+        assert!(verify_out_proof_v2_consistency(txid, "m", &proof, &big_r, &a).unwrap());
+        // Substituted tx pubkey R → reject.
+        assert!(!verify_out_proof_v2_consistency(txid, "m", &proof, &(g * (r + Scalar::ONE)), &a).unwrap());
+        // Wrong recipient view key A → reject.
+        assert!(!verify_out_proof_v2_consistency(txid, "m", &proof, &big_r, &(g * (view_sk + Scalar::ONE))).unwrap());
+        // Tampered message → reject.
+        assert!(!verify_out_proof_v2_consistency(txid, "m2", &proof, &big_r, &a).unwrap());
+        // Tampered txid → reject.
+        assert!(!verify_out_proof_v2_consistency([8u8; 32], "m", &proof, &big_r, &a).unwrap());
+    }
+
+    // The on-chain R extractor round-trips a known tx pubkey out of a minimal `extra`,
+    // and never yields a silent identity/zero point for empty input.
+    #[test]
+    fn extracts_tx_pubkey_from_extra() {
+        let g = ED25519_BASEPOINT_POINT;
+        let r: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
+        let big_r = g * r;
+        // Minimal `extra`: tag 0x01 (tx public key) + the 32-byte compressed point.
+        let mut extra = vec![0x01u8];
+        extra.extend_from_slice(&big_r.compress().to_bytes());
+        assert_eq!(tx_pubkey_from_extra(&extra).unwrap().compress(), big_r.compress());
+        // No tx pubkey present → error, not a silent identity point.
+        assert!(tx_pubkey_from_extra(&[]).is_err());
     }
 }
