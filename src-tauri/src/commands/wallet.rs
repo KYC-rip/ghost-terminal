@@ -359,6 +359,7 @@ pub async fn prepare_transfer(
     destinations: Vec<TxDestination>,
     _account_index: u32,
     priority: Option<u8>,
+    selected_output_ids: Option<Vec<String>>,
 ) -> Result<PreparedTx, String> {
     emit_log(&app, "Tx", "info", "🔧 Preparing transaction...");
 
@@ -373,6 +374,30 @@ pub async fn prepare_transfer(
     let mut outputs = state.get_spendable_outputs(tip).await;
     if outputs.is_empty() {
         return Err("No spendable (unlocked) outputs yet — recent change may still be maturing.".into());
+    }
+
+    // Coin control: if the caller pinned specific outputs, restrict the input set to
+    // exactly those (matched by the synthetic output_id the UI exposes for coins).
+    let coin_control = selected_output_ids.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+    if coin_control {
+        let want: std::collections::HashSet<&str> = selected_output_ids
+            .as_ref().unwrap().iter().map(|s| s.as_str()).collect();
+        outputs.retain(|o| want.contains(crate::wallet::state::output_id(o).as_str()));
+        if outputs.is_empty() {
+            return Err("None of the selected coins are spendable.".into());
+        }
+        // Surface any pinned coins that silently dropped out (spent/frozen/immature since
+        // the UI listed them) so the user isn't left guessing why the input set shrank.
+        let matched: std::collections::HashSet<String> =
+            outputs.iter().map(crate::wallet::state::output_id).collect();
+        let dropped = want.iter().filter(|id| !matched.contains(**id)).count();
+        if dropped > 0 {
+            emit_log(&app, "Tx", "warn", &format!(
+                "⚠ Coin control: {} pinned coin(s) no longer spendable — using {} input(s)",
+                dropped, outputs.len()));
+        } else {
+            emit_log(&app, "Tx", "info", &format!("🎯 Coin control: {} pinned input(s)", outputs.len()));
+        }
     }
 
     // Parse destination addresses
@@ -393,18 +418,26 @@ pub async fn prepare_transfer(
     // inputs, producing a huge many-input transaction with an absurd fee (~0.005
     // XMR for a 0.01 send). Largest-first keeps the input count — and thus the
     // fee — small. (Leaves smaller outputs unspent; churn/sweep to consolidate.)
-    outputs.sort_by(|a, b| b.commitment().amount.cmp(&a.commitment().amount));
-    const FEE_HEADROOM: u64 = 2_000_000_000; // 0.002 XMR — generous fee buffer
-    let target = total_amount.saturating_add(FEE_HEADROOM);
-    let mut selected = Vec::new();
-    let mut selected_sum = 0u64;
-    for o in outputs.drain(..) {
-        selected_sum = selected_sum.saturating_add(o.commitment().amount);
-        selected.push(o);
-        if selected_sum >= target {
-            break;
+    // With coin control the user pinned the exact inputs — use ALL of them; otherwise
+    // auto-select a minimal largest-first set covering the amount + a fee headroom.
+    let (selected, selected_sum) = if coin_control {
+        let sum = outputs.iter().map(|o| o.commitment().amount).fold(0u64, u64::saturating_add);
+        (outputs, sum)
+    } else {
+        outputs.sort_by(|a, b| b.commitment().amount.cmp(&a.commitment().amount));
+        const FEE_HEADROOM: u64 = 2_000_000_000; // 0.002 XMR — generous fee buffer
+        let target = total_amount.saturating_add(FEE_HEADROOM);
+        let mut selected = Vec::new();
+        let mut selected_sum = 0u64;
+        for o in outputs.drain(..) {
+            selected_sum = selected_sum.saturating_add(o.commitment().amount);
+            selected.push(o);
+            if selected_sum >= target {
+                break;
+            }
         }
-    }
+        (selected, selected_sum)
+    };
     if selected_sum < total_amount {
         return Err(format!(
             "Insufficient balance: selected {} piconero, need {} + fee",
