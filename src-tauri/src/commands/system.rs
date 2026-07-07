@@ -376,6 +376,11 @@ pub async fn browser_embed_open(
     let app_ev = app.clone();
     let app_nav = app.clone();
     let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed))
+        // Suppress the webview's native right-click menu (Inspect / Reload / Back) on
+        // every browsed page, matching the rest of the app. Runs in the page at
+        // document-start on each navigation; capture-phase preventDefault wins even if
+        // a page adds its own contextmenu handler.
+        .initialization_script("document.addEventListener('contextmenu',function(e){e.preventDefault();},true);")
         .on_navigation(move |url| {
             // Wallet/payment URIs can't render as a web page — an in-page anchor like
             // <a href="monero:8B…?tx_amount=1.5"> would just dead-end in the webview.
