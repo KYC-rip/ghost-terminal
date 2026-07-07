@@ -215,6 +215,13 @@ pub(crate) async fn load_nodes(app: &AppHandle, section: &str) -> Vec<(String, S
         log::info!("Using manual node override: {url}");
         return vec![("custom".to_string(), url)];
     }
+    load_pool_nodes(app, section).await
+}
+
+/// Load the public node pool (GitHub → cached → bundled), IGNORING any custom-node
+/// override. Used by the connect-time fallback path: when a pinned node is
+/// unreachable AND the user enabled `nodeFallback`, we race this pool instead.
+pub(crate) async fn load_pool_nodes(app: &AppHandle, section: &str) -> Vec<(String, String)> {
     let cache_path = app.path().app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join("latest_nodes.json");
@@ -296,11 +303,23 @@ async fn race_nodes<C: DaemonConnector>(
     app: &AppHandle,
     connector: &C,
 ) -> Option<(String, String, MoneroDaemon<C::Transport>)> {
-    use tokio::sync::mpsc;
-
     let nodes = load_nodes(app, connector.section()).await;
-    emit_log(app, "Network", "info", &format!("🏁 Racing {} nodes...", nodes.len()));
+    // "Racing 1 nodes" reads oddly — a single node means a pinned custom node.
+    if nodes.len() == 1 {
+        emit_log(app, "Network", "info", "🔗 Connecting to pinned node…");
+    } else {
+        emit_log(app, "Network", "info", &format!("🏁 Racing {} nodes...", nodes.len()));
+    }
+    race_list(connector, nodes).await
+}
 
+/// Race an explicit node list — first to connect wins (15s cap). Split out so the
+/// custom-node fallback path can race the public pool without the custom override.
+async fn race_list<C: DaemonConnector>(
+    connector: &C,
+    nodes: Vec<(String, String)>,
+) -> Option<(String, String, MoneroDaemon<C::Transport>)> {
+    use tokio::sync::mpsc;
     let (tx, mut rx) = mpsc::channel(1);
 
     for (label, url) in nodes {
@@ -437,9 +456,32 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
         let (label, url, daemon) = match race_nodes(&app_clone, &connector).await {
             Some(result) => result,
             None => {
-                emit_log(&app_clone, "Network", "error", "❌ All nodes failed. Retrying in 10s...");
-                sleep(Duration::from_secs(10)).await;
-                continue;
+                // A pinned custom node just failed to connect. If the user opted into
+                // fallback, race the PUBLIC POOL (bypassing the pin) so a dead node
+                // doesn't brick sync. Otherwise keep the pin (privacy: never silently
+                // talk to a node the user didn't choose) and surface a clear reason.
+                let custom = read_config_str(&app_clone, "customNodeAddress").unwrap_or_default();
+                let custom = custom.trim().to_string();
+                if !custom.is_empty() && read_config_bool(&app_clone, "nodeFallback") {
+                    emit_log(&app_clone, "Network", "warn", "🔌 Pinned node unreachable — falling back to the public pool…");
+                    let pool = load_pool_nodes(&app_clone, connector.section()).await;
+                    match race_list(&connector, pool).await {
+                        Some(result) => result,
+                        None => {
+                            emit_log(&app_clone, "Network", "error", "❌ Pinned node and public pool both unreachable. Retrying in 10s...");
+                            sleep(Duration::from_secs(10)).await;
+                            continue;
+                        }
+                    }
+                } else if !custom.is_empty() {
+                    emit_log(&app_clone, "Network", "error", &format!("❌ Pinned node {custom} unreachable — check the address or clear the pin in Settings ▸ Node. Retrying in 10s..."));
+                    sleep(Duration::from_secs(10)).await;
+                    continue;
+                } else {
+                    emit_log(&app_clone, "Network", "error", "❌ All nodes failed. Retrying in 10s...");
+                    sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
             }
         };
 
