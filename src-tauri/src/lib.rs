@@ -38,11 +38,14 @@ pub fn emit_balance(app: &AppHandle, total: u64, unlocked: u64) {
 
 /// Emit sync status through the core-log channel (workaround for custom events
 /// not reaching JS listeners from background tokio tasks in Tauri v2).
-pub fn emit_sync_status(app: &AppHandle, status: &str, height: u64, daemon_height: u64, percent: f64, node_label: &str) {
+pub fn emit_sync_status(app: &AppHandle, status: &str, height: u64, daemon_height: u64, percent: f64, node_label: &str, scan_start: u64) {
+    // Fields: status|height|daemon_height|percent|node|scan_start. scan_start is the
+    // height this sync began from (restore baseline) so the UI can show progress
+    // RELATIVE to the restore range, not to the whole chain.
     let _ = app.emit("core-log", serde_json::json!({
         "source": "SYNC_DATA",
         "level": "info",
-        "message": format!("{}|{}|{}|{:.1}|{}", status, height, daemon_height, percent, node_label),
+        "message": format!("{}|{}|{}|{:.1}|{}|{}", status, height, daemon_height, percent, node_label, scan_start),
     }));
 }
 

@@ -178,6 +178,11 @@ pub struct SentTx {
     /// Only the main key — correct for single standard-address sends + sweeps.
     #[serde(default)]
     pub tx_key: String,
+    /// Source account (major index) this send was spent from. Lets the ledger show
+    /// outgoing txs under the right account. Defaults to 0 for pre-existing records
+    /// and chain-reconciled sends where the source account can't be recovered.
+    #[serde(default)]
+    pub account: u32,
 }
 
 #[derive(Serialize, Deserialize, Default)]

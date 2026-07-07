@@ -484,6 +484,9 @@ pub async fn prepare_transfer(
         height: 0,
         timestamp: 0,
         tx_key: prepared.tx_key_hex.clone(),
+        // Input selection isn't account-scoped yet (see _account_index above), so a send
+        // spends from the pooled/primary balance — record it under account 0.
+        account: 0,
     };
     state.stage_pending_spend(meta_key, prepared.spent_ids.clone(), staged_sent).await;
 
@@ -900,6 +903,7 @@ async fn run_sweep(
             height: tip,
             timestamp: now,
             tx_key,
+            account: 0, // sweeps/churn aren't account-scoped either — record under account 0
         }, dest_is_self).await;
 
         emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
@@ -909,6 +913,23 @@ async fn run_sweep(
     Ok(hashes)
 }
 
+/// Tip-independent estimate of a block's wall-clock time from a fixed (height, time)
+/// anchor and Monero's ~120s target block time. Fallback ONLY when the real block
+/// header timestamp is unavailable (block_ts==0, e.g. an output not yet timestamp-
+/// populated mid-restore); a rescan replaces it with the exact value. Unlike the old
+/// now−(tip−height) form it never collapses to "now" when the sync tip lags the output.
+/// Anchor: mainnet block 3,709,104 ≈ 2026-07-02 (observed from real ledger data).
+pub(crate) fn estimate_block_time(height: u64) -> u64 {
+    const ANCHOR_HEIGHT: u64 = 3_709_104;
+    const ANCHOR_TS: u64 = 1_782_950_400;
+    const BLOCK_SECS: u64 = 120;
+    if height >= ANCHOR_HEIGHT {
+        ANCHOR_TS + (height - ANCHOR_HEIGHT) * BLOCK_SECS
+    } else {
+        ANCHOR_TS.saturating_sub((ANCHOR_HEIGHT - height) * BLOCK_SECS)
+    }
+}
+
 /// Returns transaction history in the Monero-RPC `get_transfers` shape the
 /// renderer's walletService expects: `{ in, out, pending }`, amounts ATOMIC,
 /// timestamps in SECONDS. Incoming txs are reconstructed from owned outputs
@@ -916,7 +937,7 @@ async fn run_sweep(
 #[tauri::command]
 pub async fn get_transactions(
     state: State<'_, WalletState>,
-    _account_index: u32,
+    account_index: u32,
 ) -> Result<serde_json::Value, String> {
     use std::collections::{HashMap, HashSet};
     use serde_json::json;
@@ -940,6 +961,9 @@ pub async fn get_transactions(
         }
         let amt = owned.output.commitment().amount;
         let acct = owned.output.subaddress().map(|s| s.account()).unwrap_or(0);
+        if acct != account_index {
+            continue; // only this account's incoming outputs belong in its ledger
+        }
         let entry = incoming.entry(txid).or_insert((0, owned.height, acct, owned.timestamp));
         entry.0 += amt;
         if owned.height < entry.1 {
@@ -949,14 +973,12 @@ pub async fn get_transactions(
     }
     let in_txs: Vec<serde_json::Value> = incoming.into_iter().map(|(txid, (amount, height, account, block_ts))| {
         let confirmations = if tip >= height { tip - height + 1 } else { 0 };
-        // Prefer the real block header timestamp (stable, exact). Fall back to the old
-        // height estimate only for outputs cached before timestamp tracking (block_ts==0);
-        // that estimate drifts with the sync tip, but a rescan replaces it with the real one.
-        let timestamp = if block_ts > 0 {
-            block_ts
-        } else {
-            now.saturating_sub(tip.saturating_sub(height).saturating_mul(120))
-        };
+        // Prefer the real block header timestamp (stable, exact). Fall back to a
+        // tip-INDEPENDENT anchor estimate when it's missing (block_ts==0, e.g. an
+        // output not yet timestamp-populated during a restore). The old
+        // now−(tip−height)·120 form collapsed to "now" whenever the sync tip lagged
+        // the output height — dumping every such tx under "TODAY / 6s".
+        let timestamp = if block_ts > 0 { block_ts } else { estimate_block_time(height).min(now) };
         json!({
             "txid": txid,
             "amount": amount,
@@ -972,6 +994,9 @@ pub async fn get_transactions(
     let mut out_txs = Vec::new();
     let mut pending_txs = Vec::new();
     for sent in state.get_sent().await {
+        if sent.account != account_index {
+            continue; // sends are recorded under account 0 (input selection isn't account-scoped)
+        }
         let pending = sent.height == 0 || tip < sent.height;
         let confirmations = if sent.height > 0 && tip >= sent.height { tip - sent.height } else { 0 };
         let entry = json!({

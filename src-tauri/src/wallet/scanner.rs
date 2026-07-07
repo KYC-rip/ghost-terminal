@@ -661,6 +661,10 @@ async fn scan_loop<C: DaemonConnector>(
     } else {
         emit_log(&app, "Sync", "info", &format!("🔍 Scan loop started from height {}", scan_height));
     }
+    // Restore baseline — the height this session's scan begins from (captured once,
+    // after the sentinel/RingCT clamps below). Lets the UI show restore-range progress.
+    // (Named restore_base, not scan_start, to avoid colliding with the per-batch timer.)
+    let mut restore_base: Option<u64> = None;
 
     // The multi-node fallback pool. In NORMAL mode it's the primary fetch path, so
     // build it upfront (one connection spread across many nodes for parallelism).
@@ -770,6 +774,11 @@ async fn scan_loop<C: DaemonConnector>(
             emit_log(&app, "Sync", "info", &format!("⏩ Skipping to RingCT fork (block {}), pre-RingCT blocks have no scannable outputs", RINGCT_FORK_HEIGHT));
             scan_height = RINGCT_FORK_HEIGHT;
         }
+        // Lock in the restore baseline on the first iteration (after the clamps).
+        if restore_base.is_none() {
+            restore_base = Some(scan_height);
+        }
+        let restore_base = restore_base.unwrap_or(scan_height);
 
         if scan_height >= daemon_height {
             // Active wallet caught up — let the background pool run again.
@@ -815,7 +824,7 @@ async fn scan_loop<C: DaemonConnector>(
                 let (total, unlocked) = ws.balances(daemon_height).await;
                 crate::emit_balance(&app, total, unlocked);
             }
-            crate::emit_sync_status(&app, "SYNCED", scan_height, daemon_height, 100.0, &node_label);
+            crate::emit_sync_status(&app, "SYNCED", scan_height, daemon_height, 100.0, &node_label, restore_base);
             sleep(Duration::from_secs(10)).await;
             continue;
         }
@@ -1008,7 +1017,7 @@ async fn scan_loop<C: DaemonConnector>(
                         ));
                         let total = wallet_state.compute_balance().await;
                         crate::emit_sync_status(&app, "SYNCING", scan_height, daemon_height,
-                            (scan_height as f64 / daemon_height as f64) * 100.0, &node_label);
+                            (scan_height as f64 / daemon_height as f64) * 100.0, &node_label, restore_base);
                     }
                 }
 
@@ -1056,7 +1065,7 @@ async fn scan_loop<C: DaemonConnector>(
         } else {
             0.0
         };
-        crate::emit_sync_status(&app, "SYNCING", scan_height, daemon_height, percent, &node_label);
+        crate::emit_sync_status(&app, "SYNCING", scan_height, daemon_height, percent, &node_label, restore_base);
     }
 }
 

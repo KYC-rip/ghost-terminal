@@ -849,7 +849,9 @@ impl WalletState {
             let txid_hex = hex::encode(txid);
             let change = received_by_tx.get(&txid_hex).copied().unwrap_or(0);
             let net = gross.saturating_sub(change);
-            let timestamp = now.saturating_sub(tip.saturating_sub(height).saturating_mul(120));
+            // Tip-independent anchor estimate (see commands::wallet::estimate_block_time) —
+            // the old now−(tip−height) form collapsed reconciled sends to "now" mid-restore.
+            let timestamp = crate::commands::wallet::estimate_block_time(height).min(now);
             to_mark.extend(ids);
             if !existing.contains(&txid_hex) {
                 to_record.push(storage::SentTx {
@@ -860,6 +862,7 @@ impl WalletState {
                     height,
                     timestamp,
                     tx_key: String::new(),
+                    account: 0, // reconciled from chain — source account unknown, default 0
                 });
             }
         }
