@@ -955,7 +955,10 @@ async fn scan_loop<C: DaemonConnector>(
                                         new_amount += output.commitment().amount;
                                     }
                                     new_output_count += outputs.len() as u64;
-                                    wallet_state.add_outputs(outputs, block_height, generation).await;
+                                    // Real block header time (Unix s) — stable, unlike the
+                                    // now−(tip−height)·120 estimate that drifts during sync.
+                                    let block_ts = block.block.header.timestamp;
+                                    wallet_state.add_outputs(outputs, block_height, block_ts, generation).await;
                                 }
                             }
                             Err(e) => {
@@ -1202,6 +1205,7 @@ async fn pool_loop<C: DaemonConnector>(
                             tx_index: o.index_in_transaction(),
                             subaddress: o.subaddress().map(|s| s.address()),
                             height: h,
+                            timestamp: block.block.header.timestamp,
                         });
                     }
                 }

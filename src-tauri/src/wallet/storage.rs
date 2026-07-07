@@ -157,6 +157,11 @@ pub struct CachedOutput {
     /// written before height tracking — affects only display/confirmations.
     #[serde(default)]
     pub height: u64,
+    /// The real block header timestamp (Unix seconds) of the block this output was
+    /// mined in. Defaults to 0 for caches written before timestamp tracking; the ledger
+    /// falls back to a height estimate in that case. Stable regardless of sync progress.
+    #[serde(default)]
+    pub timestamp: u64,
 }
 
 /// A transaction we broadcast (for "out"/"pending" history — received "in"

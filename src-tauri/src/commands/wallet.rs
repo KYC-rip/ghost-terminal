@@ -3,6 +3,7 @@ use crate::emit_log;
 use crate::wallet::{WalletState, BlockScanner, MoneroAccount, SubaddressInfo, Transaction, WalletOutput, PreparedTx, SyncStatus, TxDestination};
 use crate::wallet::transact;
 use monero_daemon_rpc::prelude::*;
+use monero_daemon_rpc::{HttpTransport, MoneroDaemon};
 use monero_address::MoneroAddress;
 use monero_oxide::transaction::Timelock;
 
@@ -899,7 +900,7 @@ pub async fn get_transactions(
 
     // Incoming: group owned outputs (incl. spent) by txid, skipping our own
     // change outputs.
-    let mut incoming: HashMap<String, (u64, u64, u32)> = HashMap::new(); // txid -> (amount, min_height, account)
+    let mut incoming: HashMap<String, (u64, u64, u32, u64)> = HashMap::new(); // txid -> (amount, min_height, account, block_ts)
     for (owned, _spent, _frozen) in state.list_owned().await {
         let txid = hex::encode(owned.output.transaction());
         if sent_txids.contains(&txid) {
@@ -907,17 +908,23 @@ pub async fn get_transactions(
         }
         let amt = owned.output.commitment().amount;
         let acct = owned.output.subaddress().map(|s| s.account()).unwrap_or(0);
-        let entry = incoming.entry(txid).or_insert((0, owned.height, acct));
+        let entry = incoming.entry(txid).or_insert((0, owned.height, acct, owned.timestamp));
         entry.0 += amt;
         if owned.height < entry.1 {
             entry.1 = owned.height;
+            entry.3 = owned.timestamp; // keep the timestamp aligned to the earliest output
         }
     }
-    let in_txs: Vec<serde_json::Value> = incoming.into_iter().map(|(txid, (amount, height, account))| {
+    let in_txs: Vec<serde_json::Value> = incoming.into_iter().map(|(txid, (amount, height, account, block_ts))| {
         let confirmations = if tip >= height { tip - height + 1 } else { 0 };
-        // Approximate timestamp from height (Monero ~2 min blocks); used only for
-        // date grouping, never amounts.
-        let timestamp = now.saturating_sub(tip.saturating_sub(height).saturating_mul(120));
+        // Prefer the real block header timestamp (stable, exact). Fall back to the old
+        // height estimate only for outputs cached before timestamp tracking (block_ts==0);
+        // that estimate drifts with the sync tip, but a rescan replaces it with the real one.
+        let timestamp = if block_ts > 0 {
+            block_ts
+        } else {
+            now.saturating_sub(tip.saturating_sub(height).saturating_mul(120))
+        };
         json!({
             "txid": txid,
             "amount": amount,
@@ -977,7 +984,12 @@ pub async fn get_outputs(
             Timelock::Block(b) => (tip as usize) >= b,
             Timelock::Time(t) => now >= t,
         };
-        let timestamp = now.saturating_sub(tip.saturating_sub(owned.height).saturating_mul(120));
+        // Real block time when known; height estimate only for pre-timestamp caches.
+        let timestamp = if owned.timestamp > 0 {
+            owned.timestamp
+        } else {
+            now.saturating_sub(tip.saturating_sub(owned.height).saturating_mul(120))
+        };
         transfers.push(json!({
             "amount": o.commitment().amount,
             "key_image": crate::wallet::state::output_id(o),
@@ -1043,27 +1055,224 @@ pub async fn get_tx_proof(
     crate::wallet::tx_proof::generate_out_proof_v2(txid_bytes, message.as_deref().unwrap_or(""), r, &addr)
 }
 
+/// Verify a transaction SECRET key against the on-chain transaction and report the
+/// atomic amount it paid `address`, plus confirmations. `good` is true iff the key is
+/// genuinely this tx's key (r·G == on-chain R). Runs over the configured routing mode.
+/// UNAUDITED crypto (see wallet/tx_proof.rs).
 #[tauri::command]
 pub async fn check_tx_key(
-    _state: State<'_, WalletState>,
-    _txid: String,
-    _tx_key: String,
-    _address: String,
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    txid: String,
+    tx_key: String,
+    address: String,
 ) -> Result<serde_json::Value, String> {
-    // TODO: Verify tx key
-    Err("Not yet implemented".into())
+    let txid_hex = txid.trim().to_lowercase();
+    let txid_bytes: [u8; 32] = hex::decode(&txid_hex)
+        .ok()
+        .and_then(|v| v.try_into().ok())
+        .ok_or("Invalid txid")?;
+
+    let network = state.get_network().await;
+    let addr = MoneroAddress::from_str(network, address.trim())
+        .map_err(|e| format!("Invalid address: {:?}", e))?;
+
+    let daemon_url = state
+        .get_daemon_url()
+        .await
+        .ok_or("No daemon connected — open a wallet first")?;
+
+    tx_deadline(&app, "Verify key", async {
+        match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+            "tor" => {
+                let tor = crate::wallet::scanner::ensure_tor(&app)
+                    .await
+                    .ok_or("Tor is not available — refusing to query over clearnet")?;
+                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url)
+                    .await
+                    .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
+                check_key_on_daemon(&daemon, txid_bytes, &txid_hex, &tx_key, &addr).await
+            }
+            "custom" => {
+                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                if proxy.trim().is_empty() {
+                    return Err("Custom routing selected but no proxy address is set".to_string());
+                }
+                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url)
+                    .await
+                    .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
+                check_key_on_daemon(&daemon, txid_bytes, &txid_hex, &tx_key, &addr).await
+            }
+            _ => {
+                let daemon =
+                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
+                check_key_on_daemon(&daemon, txid_bytes, &txid_hex, &tx_key, &addr).await
+            }
+        }
+    })
+    .await
 }
 
+/// Report a tx's confirmation count and mempool status. Uses the raw `/get_transactions`
+/// route (which carries `block_height` / `in_pool`, unlike the typed `transactions()`
+/// helper) and the chain tip. On any lookup failure returns `(0, false)` — the proof
+/// verdict stands on its own; confirmations are advisory metadata.
+async fn tx_confirmations<T: HttpTransport + Sync>(
+    daemon: &MoneroDaemon<T>,
+    txid_hex: &str,
+) -> (u64, bool) {
+    let params = format!(r#"{{"txs_hashes":["{}"],"decode_as_json":false}}"#, txid_hex);
+    let raw = match daemon.rpc_call("get_transactions", Some(params), 1024 * 1024).await {
+        Ok(r) => r,
+        Err(_) => return (0, false),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return (0, false),
+    };
+    let tx0 = v.get("txs").and_then(|t| t.get(0));
+    if tx0.and_then(|t| t.get("in_pool")).and_then(|b| b.as_bool()).unwrap_or(false) {
+        return (0, true);
+    }
+    let Some(block_height) = tx0.and_then(|t| t.get("block_height")).and_then(|h| h.as_u64()) else {
+        return (0, false);
+    };
+    let tip = match daemon.latest_block_number().await {
+        Ok(t) => t as u64,
+        Err(_) => return (0, false),
+    };
+    // blockchain_height = tip + 1; confirmations = blockchain_height − block_height.
+    (tip.saturating_sub(block_height).saturating_add(1), false)
+}
+
+/// Fetch a tx over one concrete daemon transport, bind it to the requested txid, and
+/// return it alongside its confirmations / mempool status. Shared by the proof- and
+/// key-verification commands.
+async fn fetch_tx_verified<T: HttpTransport + Sync>(
+    daemon: &MoneroDaemon<T>,
+    txid: [u8; 32],
+    txid_hex: &str,
+) -> Result<(monero_oxide::transaction::Transaction, u64, bool), String> {
+    let txs = daemon
+        .transactions(&[txid])
+        .await
+        .map_err(|e| format!("Failed to fetch transaction: {:?}", e))?;
+    let tx = txs
+        .into_iter()
+        .next()
+        .ok_or("Transaction not found on-chain — check the transaction ID")?;
+
+    // Bind the fetched tx to the requested txid — a malicious/defective daemon must not
+    // be able to hand back a different transaction for us to verify against.
+    if tx.hash() != txid {
+        return Err("Daemon returned a transaction whose hash doesn't match the txid".into());
+    }
+
+    let (confirmations, in_pool) = tx_confirmations(daemon, txid_hex).await;
+    Ok((tx, confirmations, in_pool))
+}
+
+/// Fetch the tx over one concrete daemon transport, verify the payment proof, and
+/// package the verdict + amount + confirmations for the renderer.
+async fn check_proof_on_daemon<T: HttpTransport + Sync>(
+    daemon: &MoneroDaemon<T>,
+    txid: [u8; 32],
+    txid_hex: &str,
+    message: &str,
+    signature: &str,
+    address: &MoneroAddress,
+) -> Result<serde_json::Value, String> {
+    let (tx, confirmations, in_pool) = fetch_tx_verified(daemon, txid, txid_hex).await?;
+    let check = crate::wallet::tx_proof::check_out_proof_v2(txid, message, signature, &tx, address)?;
+
+    Ok(serde_json::json!({
+        "good": check.good,
+        // Atomic (piconero) — the renderer runs formatXmr() over this.
+        "received": check.received,
+        "amount_unavailable": check.amount_unavailable,
+        "confirmations": confirmations,
+        "in_pool": in_pool,
+    }))
+}
+
+/// Fetch the tx over one concrete daemon transport, verify a tx SECRET key, and package
+/// the verdict + amount + confirmations for the renderer.
+async fn check_key_on_daemon<T: HttpTransport + Sync>(
+    daemon: &MoneroDaemon<T>,
+    txid: [u8; 32],
+    txid_hex: &str,
+    tx_key: &str,
+    address: &MoneroAddress,
+) -> Result<serde_json::Value, String> {
+    let (tx, confirmations, in_pool) = fetch_tx_verified(daemon, txid, txid_hex).await?;
+    let check = crate::wallet::tx_proof::check_tx_key_v2(tx_key, &tx, address)?;
+
+    Ok(serde_json::json!({
+        "good": check.good,
+        "received": check.received,
+        "amount_unavailable": check.amount_unavailable,
+        "confirmations": confirmations,
+        "in_pool": in_pool,
+    }))
+}
+
+/// Verify an OutProofV2 payment proof against the on-chain transaction and report
+/// whether it's valid, the atomic amount received by `address`, and confirmations.
+/// The verify runs over the configured routing mode (Tor/proxy/clearnet) so the
+/// lookup's originating IP is never exposed. UNAUDITED crypto (see wallet/tx_proof.rs).
 #[tauri::command]
 pub async fn check_tx_proof(
-    _state: State<'_, WalletState>,
-    _txid: String,
-    _address: String,
-    _message: String,
-    _signature: String,
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    txid: String,
+    address: String,
+    message: String,
+    signature: String,
 ) -> Result<serde_json::Value, String> {
-    // TODO: Verify tx proof
-    Err("Not yet implemented".into())
+    let txid_hex = txid.trim().to_lowercase();
+    let txid_bytes: [u8; 32] = hex::decode(&txid_hex)
+        .ok()
+        .and_then(|v| v.try_into().ok())
+        .ok_or("Invalid txid")?;
+
+    let network = state.get_network().await;
+    let addr = MoneroAddress::from_str(network, address.trim())
+        .map_err(|e| format!("Invalid address: {:?}", e))?;
+
+    let daemon_url = state
+        .get_daemon_url()
+        .await
+        .ok_or("No daemon connected — open a wallet first")?;
+
+    tx_deadline(&app, "Verify proof", async {
+        match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+            "tor" => {
+                let tor = crate::wallet::scanner::ensure_tor(&app)
+                    .await
+                    .ok_or("Tor is not available — refusing to query over clearnet")?;
+                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url)
+                    .await
+                    .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
+                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr).await
+            }
+            "custom" => {
+                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                if proxy.trim().is_empty() {
+                    return Err("Custom routing selected but no proxy address is set".to_string());
+                }
+                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url)
+                    .await
+                    .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
+                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr).await
+            }
+            _ => {
+                let daemon =
+                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
+                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr).await
+            }
+        }
+    })
+    .await
 }
 
 // ── Sync ──

@@ -24,6 +24,8 @@ use super::types::*;
 pub struct OwnedOutput {
     pub output: WalletOutput,
     pub height: u64,
+    /// Real block header timestamp (Unix seconds); 0 if unknown (pre-timestamp cache).
+    pub timestamp: u64,
 }
 
 /// Stable per-output identifier: "hextxid:index_in_transaction". Unique because
@@ -324,7 +326,7 @@ impl WalletState {
             // Restore WalletOutputs (+ their block height) from serialized cache
             for cached in &cache.outputs {
                 if let Ok(output) = monero_wallet::WalletOutput::read(&mut cached.data.as_slice()) {
-                    inner.scanned_outputs.push(OwnedOutput { output, height: cached.height });
+                    inner.scanned_outputs.push(OwnedOutput { output, height: cached.height, timestamp: cached.timestamp });
                 }
             }
             // Use cached scan height if it's ahead of what's in the wallet file
@@ -470,7 +472,7 @@ impl WalletState {
     /// scanned_outputs) has taken over, a stale scanner's outputs are dropped
     /// rather than re-appended on top of the fresh state (which would
     /// double-count the balance).
-    pub async fn add_outputs(&self, outputs: Vec<WalletOutput>, height: u64, generation: u64) {
+    pub async fn add_outputs(&self, outputs: Vec<WalletOutput>, height: u64, timestamp: u64, generation: u64) {
         let mut inner = self.inner.write().await;
         if self.scanner_generation.load(Ordering::SeqCst) != generation {
             return;
@@ -486,7 +488,7 @@ impl WalletState {
                 // The real change output just arrived — drop its optimistic credit
                 // so the balance isn't double-counted (now counted via this output).
                 inner.pending_change.remove(&hex::encode(output.transaction()));
-                inner.scanned_outputs.push(OwnedOutput { output, height });
+                inner.scanned_outputs.push(OwnedOutput { output, height, timestamp });
             }
         }
     }
@@ -1082,6 +1084,7 @@ impl WalletState {
                     tx_index: o.output.index_in_transaction(),
                     subaddress: o.output.subaddress().map(|s| s.address()),
                     height: o.height,
+                    timestamp: o.timestamp,
                 }
             }).collect();
 

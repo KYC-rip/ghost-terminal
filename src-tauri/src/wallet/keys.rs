@@ -9,13 +9,52 @@ use tiny_keccak::{Hasher, Keccak};
 use monero_oxide::ed25519::Scalar;
 use monero_seed::{Language, Seed};
 
-/// Derive spend and view keys from a 25-word mnemonic seed.
-pub fn keys_from_mnemonic(mnemonic: &str) -> Result<(Zeroizing<Scalar>, Zeroizing<Scalar>), String> {
-    let seed = Seed::from_string(Language::English, Zeroizing::new(mnemonic.to_string()))
-        .map_err(|e| format!("Invalid mnemonic: {:?}", e))?;
+/// The wordlist languages we try when restoring a seed, in priority order. English first
+/// (by far the most common); `DeprecatedEnglish` (the old buggy wordlist) last so a modern
+/// English seed is never misread as it.
+const RESTORE_LANGUAGES: [Language; 13] = [
+    Language::English,
+    Language::Spanish,
+    Language::Portuguese,
+    Language::Japanese,
+    Language::Italian,
+    Language::French,
+    Language::German,
+    Language::Russian,
+    Language::Chinese,
+    Language::Dutch,
+    Language::Esperanto,
+    Language::Lojban,
+    Language::DeprecatedEnglish,
+];
 
-    let entropy = seed.entropy();
-    keys_from_entropy(&entropy)
+/// Derive spend and view keys from a 25-word mnemonic seed, auto-detecting the wordlist
+/// language so seeds in any supported language restore — not just English (the previous
+/// behavior silently rejected every non-English seed). The 25-word seed's checksum makes
+/// a cross-language false match astronomically unlikely, so the first language that parses
+/// is the right one.
+pub fn keys_from_mnemonic(mnemonic: &str) -> Result<(Zeroizing<Scalar>, Zeroizing<Scalar>), String> {
+    // `Seed::from_string` PANICS (not errors) on a wrong word count, so gate it here —
+    // a legacy Monero seed is 24 words, or 25 with the checksum word.
+    let word_count = mnemonic.split_whitespace().count();
+    if word_count != 24 && word_count != 25 {
+        return Err(format!(
+            "Invalid mnemonic: expected 24 or 25 words, got {}",
+            word_count
+        ));
+    }
+
+    let mut last_err = String::from("Invalid mnemonic");
+    for lang in RESTORE_LANGUAGES {
+        match Seed::from_string(lang, Zeroizing::new(mnemonic.to_string())) {
+            Ok(seed) => {
+                let entropy = seed.entropy();
+                return keys_from_entropy(&entropy);
+            }
+            Err(e) => last_err = format!("Invalid mnemonic: {:?}", e),
+        }
+    }
+    Err(last_err)
 }
 
 /// Derive spend and view keys from 32-byte entropy.
@@ -59,4 +98,41 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     hasher.update(data);
     hasher.finalize(&mut output);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The bug this fixes: seeds in any supported language must restore, not just English.
+    #[test]
+    fn restores_seed_in_any_supported_language() {
+        let mut rng = rand::thread_rng();
+        for lang in [
+            Language::Spanish,
+            Language::Japanese,
+            Language::Russian,
+            Language::French,
+            Language::Chinese,
+        ] {
+            let seed = Seed::new(&mut rng, lang);
+            let phrase = seed.to_string();
+            assert!(
+                keys_from_mnemonic(phrase.as_str()).is_ok(),
+                "{:?} seed failed to restore",
+                lang
+            );
+        }
+    }
+
+    // Malformed input must return a clean Err, never panic (the library panics on a bad
+    // word count, which the guard in keys_from_mnemonic converts to an error).
+    #[test]
+    fn rejects_invalid_seed_without_panicking() {
+        // Wrong word count.
+        assert!(keys_from_mnemonic("clearly not a valid monero mnemonic phrase").is_err());
+        // Right count (25 words) but not real wordlist entries.
+        let fake_25 = vec!["zzzzzz"; 25].join(" ");
+        assert!(keys_from_mnemonic(&fake_25).is_err());
+    }
 }
