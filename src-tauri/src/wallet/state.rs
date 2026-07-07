@@ -36,6 +36,57 @@ pub fn output_id(o: &WalletOutput) -> String {
     format!("{}:{}", hex::encode(o.transaction()), o.index_in_transaction())
 }
 
+/// Max length (chars) for an account / subaddress label — bounds wallet-file bloat.
+const MAX_LABEL_CHARS: usize = 64;
+
+/// Persist the current in-memory accounts + subaddress labels to the encrypted wallet
+/// file, preserving seed / scan_height. Returns Err on failure so callers of IRREVERSIBLE
+/// create operations can roll back their in-memory mutation rather than let disk fall out
+/// of sync (a desync would leave funds sent to a not-yet-persisted subaddress undetected
+/// after restart). Load → update → save so unrelated fields stay untouched.
+fn persist_meta(inner: &WalletInner) -> Result<(), String> {
+    let (id, pw) = match (inner.active_identity.clone(), inner.password.clone()) {
+        (Some(id), Some(pw)) => (id, pw),
+        _ => return Err("wallet is locked (no retained password)".to_string()),
+    };
+    let mut wd = storage::load_wallet(&inner.data_dir, &id, &pw)
+        .map_err(|e| format!("load wallet: {}", e))?;
+    wd.accounts = inner
+        .accounts
+        .iter()
+        .map(|a| storage::AccountLabel { index: a.index, label: a.label.clone() })
+        .collect();
+    wd.subaddress_labels = inner
+        .subaddress_labels
+        .iter()
+        .map(|(a, i, l)| storage::SubaddressLabel { account: *a, index: *i, label: l.clone() })
+        .collect();
+    storage::save_wallet(&inner.data_dir, &id, &wd, &pw).map_err(|e| format!("save wallet: {}", e))
+}
+
+/// Every address this wallet controls, as strings: the legacy main address plus every
+/// registered subaddress across ALL accounts (minor 0 for account>0 is that account's
+/// base address). Used to recognize sends/sweeps that return funds to ourselves. Empty
+/// while locked (no view pair).
+fn own_address_strings(inner: &WalletInner) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(vp) = inner.view_pair.as_ref() {
+        let net = inner.network;
+        set.insert(vp.legacy_address(net).to_string());
+        for (&account, &next) in &inner.subaddress_next {
+            // Account 0's minor 0 IS the legacy address (added above); account>0's minor
+            // 0 is its base subaddress, so start there.
+            let start = if account == 0 { 1 } else { 0 };
+            for i in start..next {
+                if let Some(idx) = monero_address::SubaddressIndex::new(account, i) {
+                    set.insert(vp.subaddress(net, idx).to_string());
+                }
+            }
+        }
+    }
+    set
+}
+
 /// Compute the key image (linking tag) for an owned output:
 ///   KI = (spend_key + key_offset) · Hp(P)
 /// where P is the output's one-time public key and Hp is Monero's key-image
@@ -106,8 +157,11 @@ struct WalletInner {
     scanner: Option<Scanner>,
 
     // Subaddress tracking
-    next_subaddress_index: u32, // next unused subaddress index for account 0
-    subaddress_labels: Vec<(u32, String)>, // (index, label)
+    // Next unused subaddress MINOR index per account (major account index → next minor).
+    // Minor 0 is the account's base address; created subaddresses start at 1. Account 0
+    // always present. Replaces the old single account-0 counter.
+    subaddress_next: std::collections::HashMap<u32, u32>,
+    subaddress_labels: Vec<(u32, u32, String)>, // (account, index, label)
 
     // Tracked state from scanning
     scanned_outputs: Vec<OwnedOutput>,
@@ -162,7 +216,7 @@ impl WalletState {
                 view_pair: None,
                 mnemonic: None,
                 scanner: None,
-                next_subaddress_index: 1,
+                subaddress_next: std::collections::HashMap::from([(0u32, 1u32)]),
                 subaddress_labels: vec![],
                 scanned_outputs: vec![],
                 spent: HashSet::new(),
@@ -252,47 +306,72 @@ impl WalletState {
         let network = inner.network;
         let primary_address = view_pair.legacy_address(network);
 
-        // Register existing subaddresses with the scanner so it can detect them.
-        // Cover the highest PERSISTED subaddress index, floored by a lookahead window
-        // so freshly-created subaddresses (receive / churn / splinter / vanish) — and
-        // any funds already sent to them — are still scanned + displayed even before
-        // their label is persisted. The old `len().max(20)` missed sparse high-index
-        // labels entirely (a label at index 21 with len()==1 still gave 20).
-        const SUBADDRESS_LOOKAHEAD: u32 = 50;
-        let num_subaddresses = wallet_data
-            .subaddress_labels
-            .iter()
-            .map(|s| s.index)
-            .max()
-            .unwrap_or(0)
-            .max(SUBADDRESS_LOOKAHEAD);
-        for i in 1..=num_subaddresses {
-            if let Some(idx) = monero_address::SubaddressIndex::new(0, i) {
-                scanner.register_subaddress(idx);
-            }
-        }
-
-        // Set up accounts from saved labels
         let addr_str = primary_address.to_string();
         log::info!("Primary address derived: {}", addr_str);
 
-        let accounts: Vec<MoneroAccount> = wallet_data.accounts.iter().map(|a| {
+        // Per-account next-minor counters, seeded from persisted accounts + labels.
+        // Every account starts at minor 1 (minor 0 is the base address); persisted
+        // subaddress labels raise the counter for their account.
+        let mut subaddress_next: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::from([(0u32, 1u32)]);
+        for a in &wallet_data.accounts {
+            subaddress_next.entry(a.index).or_insert(1);
+        }
+        for s in &wallet_data.subaddress_labels {
+            let e = subaddress_next.entry(s.account).or_insert(1);
+            if s.index + 1 > *e {
+                *e = s.index + 1;
+            }
+        }
+
+        // Register subaddresses for EVERY account so funds to any of them are detected.
+        // Account 0's base is the legacy main address (auto-scanned); account>0's base is
+        // subaddress (N,0), which MUST be registered explicitly. Cover persisted indices
+        // plus a lookahead window per account so freshly-created (receive / churn /
+        // splinter / vanish) subaddresses — and funds already sent to them — are scanned
+        // even before their label is persisted.
+        const SUBADDRESS_LOOKAHEAD: u32 = 50;
+        for (&account, &next) in &subaddress_next {
+            let cover = next.saturating_sub(1).max(SUBADDRESS_LOOKAHEAD);
+            let start = if account == 0 { 1 } else { 0 };
+            for i in start..=cover {
+                if let Some(idx) = monero_address::SubaddressIndex::new(account, i) {
+                    scanner.register_subaddress(idx);
+                }
+            }
+        }
+
+        // Set up accounts from saved labels; account 0 = legacy main address, account>0
+        // base = subaddress (N,0). Guarantee account 0 is always present.
+        let mut accounts: Vec<MoneroAccount> = wallet_data.accounts.iter().map(|a| {
+            let base_address = if a.index == 0 {
+                addr_str.clone()
+            } else {
+                monero_address::SubaddressIndex::new(a.index, 0)
+                    .map(|idx| view_pair.subaddress(network, idx).to_string())
+                    .unwrap_or_default()
+            };
             MoneroAccount {
                 index: a.index,
                 label: a.label.clone(),
                 balance: "0".to_string(),
                 unlocked_balance: "0".to_string(),
-                base_address: if a.index == 0 {
-                    addr_str.clone()
-                } else {
-                    String::new()
-                },
+                base_address,
             }
         }).collect();
+        if !accounts.iter().any(|a| a.index == 0) {
+            accounts.insert(0, MoneroAccount {
+                index: 0,
+                label: "Primary".to_string(),
+                balance: "0".to_string(),
+                unlocked_balance: "0".to_string(),
+                base_address: addr_str.clone(),
+            });
+        }
 
-        // Restore subaddress labels
-        let subaddress_labels: Vec<(u32, String)> = wallet_data.subaddress_labels.iter()
-            .map(|s| (s.index, s.label.clone()))
+        // Restore subaddress labels as (account, index, label).
+        let subaddress_labels: Vec<(u32, u32, String)> = wallet_data.subaddress_labels.iter()
+            .map(|s| (s.account, s.index, s.label.clone()))
             .collect();
 
         inner.spend_key = Some(spend_key);
@@ -304,7 +383,7 @@ impl WalletState {
         inner.password = Some(password.to_string());
         inner.scan_height = wallet_data.scan_height;
         inner.accounts = accounts;
-        inner.next_subaddress_index = (num_subaddresses + 1).max(1);
+        inner.subaddress_next = subaddress_next;
         inner.subaddress_labels = subaddress_labels;
         inner.sync_status.status = "SYNCING".to_string();
 
@@ -338,8 +417,8 @@ impl WalletState {
         inner.frozen = cache.frozen.into_iter().collect();
         inner.sent = cache.sent;
 
-        log::info!("Wallet unlocked for identity: {} (resume from height {}, {} subaddresses, {} cached outputs)",
-            identity_id, inner.scan_height, num_subaddresses, inner.scanned_outputs.len());
+        log::info!("Wallet unlocked for identity: {} (resume from height {}, {} accounts, {} cached outputs)",
+            identity_id, inner.scan_height, inner.accounts.len(), inner.scanned_outputs.len());
         Ok(())
     }
 
@@ -408,8 +487,8 @@ impl WalletState {
                         index: a.index,
                         label: a.label.clone(),
                     }).collect(),
-                    subaddress_labels: inner.subaddress_labels.iter().map(|(idx, label)| {
-                        storage::SubaddressLabel { account: 0, index: *idx, label: label.clone() }
+                    subaddress_labels: inner.subaddress_labels.iter().map(|(account, idx, label)| {
+                        storage::SubaddressLabel { account: *account, index: *idx, label: label.clone() }
                     }).collect(),
                 };
                 let _ = storage::save_wallet(&inner.data_dir, identity_id, &wallet_data, password);
@@ -618,20 +697,13 @@ impl WalletState {
                 // balance into fragments on our own subaddresses; also a send-to-self)
                 // return to us too — credit them optimistically, not just the change,
                 // so the balance doesn't read ~0 between broadcast and the next scan.
-                let self_dest_total: u64 = {
-                    let vp = inner.view_pair.as_ref();
-                    let net = inner.network;
-                    let next = inner.next_subaddress_index;
-                    sent.destinations.iter().filter(|(addr, _)| match vp {
-                        Some(v) => {
-                            v.legacy_address(net).to_string() == *addr
-                                || (1..next).any(|i| monero_address::SubaddressIndex::new(0, i)
-                                    .map(|idx| v.subaddress(net, idx).to_string() == *addr)
-                                    .unwrap_or(false))
-                        }
-                        None => false,
-                    }).map(|(_, amt)| *amt).sum()
-                };
+                let own = own_address_strings(&inner);
+                let self_dest_total: u64 = sent
+                    .destinations
+                    .iter()
+                    .filter(|(addr, _)| own.contains(addr))
+                    .map(|(_, amt)| *amt)
+                    .sum();
                 let credit = change.saturating_add(self_dest_total);
 
                 for id in ids {
@@ -678,27 +750,12 @@ impl WalletState {
         self.save_output_cache().await;
     }
 
-    /// Whether `addr` is one of THIS wallet's addresses (primary or a derived
-    /// subaddress of account 0) — i.e. a sweep to it returns the funds to us, so the
+    /// Whether `addr` is one of THIS wallet's addresses (primary or any derived
+    /// subaddress of any account) — i.e. a sweep to it returns the funds to us, so the
     /// swept amount should be credited optimistically rather than shown as gone.
     pub async fn is_own_address(&self, addr: &MoneroAddress) -> bool {
         let inner = self.inner.read().await;
-        let vp = match inner.view_pair.as_ref() {
-            Some(v) => v,
-            None => return false,
-        };
-        let target = addr.to_string();
-        if vp.legacy_address(inner.network).to_string() == target {
-            return true;
-        }
-        for i in 1..inner.next_subaddress_index {
-            if let Some(idx) = monero_address::SubaddressIndex::new(0, i) {
-                if vp.subaddress(inner.network, idx).to_string() == target {
-                    return true;
-                }
-            }
-        }
-        false
+        own_address_strings(&inner).contains(&addr.to_string())
     }
 
     /// Detect spent outputs by matching their key images against a set of input
@@ -938,49 +995,34 @@ impl WalletState {
         inner.view_pair.as_ref().map(|vp| vp.legacy_address(inner.network).to_string())
     }
 
-    /// Create a new subaddress and register it with the scanner.
-    pub async fn create_subaddress(&self, label: &str) -> Result<SubaddressInfo, String> {
+    /// Create a new subaddress under `account_index` and register it with the scanner.
+    /// Persists so it survives relaunch (else funds sent to it would be untracked).
+    pub async fn create_subaddress(&self, account_index: u32, label: &str) -> Result<SubaddressInfo, String> {
+        if label.chars().count() > MAX_LABEL_CHARS {
+            return Err("Label too long".to_string());
+        }
         let mut inner = self.inner.write().await;
+        let net = inner.network;
 
         let view_pair = inner.view_pair.as_ref().ok_or("Wallet is locked")?;
-        let idx = inner.next_subaddress_index;
+        let idx = *inner.subaddress_next.get(&account_index).unwrap_or(&1);
 
-        let sub_idx = monero_address::SubaddressIndex::new(0, idx)
+        let sub_idx = monero_address::SubaddressIndex::new(account_index, idx)
             .ok_or("Invalid subaddress index")?;
+        let address = view_pair.subaddress(net, sub_idx);
 
-        // Derive the subaddress
-        let address = view_pair.subaddress(inner.network, sub_idx);
-
-        // Register with scanner so future scans detect outputs to this subaddress
+        // Persist FIRST (with the new label staged), and only register with the scanner
+        // once disk agrees — otherwise a persist failure would leave in-memory ahead of
+        // disk and, after restart, funds to this subaddress could go undetected.
+        inner.subaddress_labels.push((account_index, idx, label.to_string()));
+        inner.subaddress_next.insert(account_index, idx + 1);
+        if let Err(e) = persist_meta(&inner) {
+            inner.subaddress_labels.pop();
+            inner.subaddress_next.insert(account_index, idx);
+            return Err(format!("Could not save subaddress: {}", e));
+        }
         if let Some(scanner) = inner.scanner.as_mut() {
             scanner.register_subaddress(sub_idx);
-        }
-
-        inner.subaddress_labels.push((idx, label.to_string()));
-        inner.next_subaddress_index = idx + 1;
-
-        // Persist to the encrypted wallet file so this subaddress survives relaunch —
-        // otherwise next_subaddress_index reloads short and funds sent here (churn /
-        // splinter / vanish targets, or a Receive address) become invisible in the
-        // per-address view and untracked on restore. Best-effort: needs the password,
-        // retained after a full unlock. We load → update labels → re-save so the
-        // seed/scan_height/accounts are preserved untouched.
-        if let (Some(id), Some(pw)) = (inner.active_identity.clone(), inner.password.clone()) {
-            match storage::load_wallet(&inner.data_dir, &id, &pw) {
-                Ok(mut wd) => {
-                    wd.subaddress_labels = inner
-                        .subaddress_labels
-                        .iter()
-                        .map(|(i, l)| storage::SubaddressLabel { account: 0, index: *i, label: l.clone() })
-                        .collect();
-                    if let Err(e) = storage::save_wallet(&inner.data_dir, &id, &wd, &pw) {
-                        log::warn!("Failed to persist subaddress #{}: {}", idx, e);
-                    }
-                }
-                Err(e) => log::warn!("Failed to load wallet to persist subaddress #{}: {}", idx, e),
-            }
-        } else {
-            log::warn!("Subaddress #{} not persisted (wallet locked / no password)", idx);
         }
 
         Ok(SubaddressInfo {
@@ -993,20 +1035,86 @@ impl WalletState {
         })
     }
 
-    /// Get all subaddresses (primary + derived).
-    pub async fn get_subaddresses(&self, tip: u64) -> Vec<SubaddressInfo> {
+    /// Create a new account (next major index) and register its base subaddress (N,0)
+    /// with the scanner so funds to it are detected. Persists. Returns the new account.
+    pub async fn create_account(&self, label: &str) -> Result<MoneroAccount, String> {
+        if label.chars().count() > MAX_LABEL_CHARS {
+            return Err("Label too long".to_string());
+        }
+        let mut inner = self.inner.write().await;
+        let net = inner.network;
+
+        let view_pair = inner.view_pair.as_ref().ok_or("Wallet is locked")?;
+        // Accounts are append-only in Monero; the next index is one past the highest.
+        // .max(1) so we can never collide with the always-present account 0.
+        let new_index = inner
+            .accounts
+            .iter()
+            .map(|a| a.index)
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(1)
+            .max(1);
+        let base_idx = monero_address::SubaddressIndex::new(new_index, 0)
+            .ok_or("Invalid account index")?;
+        let base_address = view_pair.subaddress(net, base_idx).to_string();
+
+        let account = MoneroAccount {
+            index: new_index,
+            label: label.to_string(),
+            balance: "0".to_string(),
+            unlocked_balance: "0".to_string(),
+            base_address,
+        };
+        // Persist FIRST; only register the account's base subaddress with the scanner once
+        // disk agrees (else a persist failure could hide funds sent to it after restart).
+        inner.accounts.push(account.clone());
+        inner.subaddress_next.entry(new_index).or_insert(1);
+        if let Err(e) = persist_meta(&inner) {
+            inner.accounts.pop();
+            inner.subaddress_next.remove(&new_index);
+            return Err(format!("Could not save account: {}", e));
+        }
+        if let Some(scanner) = inner.scanner.as_mut() {
+            scanner.register_subaddress(base_idx);
+        }
+        Ok(account)
+    }
+
+    /// Rename an existing account and persist (rolling back the rename if persist fails).
+    pub async fn rename_account(&self, index: u32, label: &str) -> Result<(), String> {
+        if label.chars().count() > MAX_LABEL_CHARS {
+            return Err("Label too long".to_string());
+        }
+        let mut inner = self.inner.write().await;
+        let pos = inner
+            .accounts
+            .iter()
+            .position(|a| a.index == index)
+            .ok_or("Account not found")?;
+        let previous = inner.accounts[pos].label.clone();
+        inner.accounts[pos].label = label.to_string();
+        if let Err(e) = persist_meta(&inner) {
+            inner.accounts[pos].label = previous;
+            return Err(format!("Could not save account: {}", e));
+        }
+        Ok(())
+    }
+
+    /// Get all subaddresses of `account_index` (base address at minor 0 + derived),
+    /// each with its unspent balance so the Addresses tab shows where funds live.
+    pub async fn get_subaddresses(&self, account_index: u32, tip: u64) -> Vec<SubaddressInfo> {
         let now = chrono::Utc::now().timestamp().max(0) as u64;
         let inner = self.inner.read().await;
         let view_pair = match inner.view_pair.as_ref() {
             Some(vp) => vp,
             None => return vec![],
         };
+        let net = inner.network;
 
-        // Sum unspent outputs per subaddress (minor) index of account 0 so the
-        // Addresses tab shows where funds actually live (was hardcoded "0" → every
-        // row read empty). Mirrors balances() for the unlocked figure: skip frozen,
-        // require the 10-block lock + any timelock. Outputs to the main address (no
-        // subaddress) and account-0 attribute to index 0.
+        // Sum unspent outputs per minor index WITHIN this account. Mirrors balances() for
+        // the unlocked figure (skip frozen, require the 10-block lock + any timelock).
+        // Outputs with no subaddress attribute to account 0 / minor 0.
         let mut totals: std::collections::HashMap<u32, (u64, u64)> = std::collections::HashMap::new();
         for o in &inner.scanned_outputs {
             let id = output_id(&o.output);
@@ -1017,8 +1125,8 @@ impl WalletState {
                 Some(s) => (s.account() as u32, s.address() as u32),
                 None => (0, 0),
             };
-            if acct != 0 {
-                continue; // single-account wallet
+            if acct != account_index {
+                continue;
             }
             let amt = o.output.commitment().amount;
             let entry = totals.entry(minor).or_insert((0, 0));
@@ -1036,24 +1144,34 @@ impl WalletState {
 
         let mut result = vec![];
 
-        // Index 0 = primary address
+        // Minor 0 = the account's base address (legacy main for account 0; subaddress
+        // (N,0) otherwise).
+        let base_address = if account_index == 0 {
+            view_pair.legacy_address(net).to_string()
+        } else {
+            match monero_address::SubaddressIndex::new(account_index, 0) {
+                Some(idx) => view_pair.subaddress(net, idx).to_string(),
+                None => return result,
+            }
+        };
         let (b0, u0) = totals.get(&0u32).copied().unwrap_or((0, 0));
         result.push(SubaddressInfo {
             index: 0,
-            address: view_pair.legacy_address(inner.network).to_string(),
-            label: "Primary".to_string(),
+            address: base_address,
+            label: if account_index == 0 { "Primary".to_string() } else { "Base".to_string() },
             balance: b0.to_string(),
             unlocked_balance: u0.to_string(),
             is_used: true,
         });
 
-        // Derived subaddresses
-        for i in 1..inner.next_subaddress_index {
-            if let Some(sub_idx) = monero_address::SubaddressIndex::new(0, i) {
-                let address = view_pair.subaddress(inner.network, sub_idx);
+        // Derived subaddresses of this account.
+        let next = *inner.subaddress_next.get(&account_index).unwrap_or(&1);
+        for i in 1..next {
+            if let Some(sub_idx) = monero_address::SubaddressIndex::new(account_index, i) {
+                let address = view_pair.subaddress(net, sub_idx);
                 let label = inner.subaddress_labels.iter()
-                    .find(|(idx, _)| *idx == i)
-                    .map(|(_, l)| l.clone())
+                    .find(|(a, idx, _)| *a == account_index && *idx == i)
+                    .map(|(_, _, l)| l.clone())
                     .unwrap_or_else(|| format!("Subaddress #{}", i));
 
                 let (b, u) = totals.get(&i).copied().unwrap_or((0, 0));
@@ -1104,12 +1222,17 @@ impl WalletState {
         }
     }
 
-    pub async fn set_subaddress_label(&self, index: u32, label: &str) {
+    pub async fn set_subaddress_label(&self, account: u32, index: u32, label: &str) {
         let mut inner = self.inner.write().await;
-        if let Some(entry) = inner.subaddress_labels.iter_mut().find(|(idx, _)| *idx == index) {
-            entry.1 = label.to_string();
+        if let Some(entry) = inner.subaddress_labels.iter_mut().find(|(a, idx, _)| *a == account && *idx == index) {
+            entry.2 = label.to_string();
         } else {
-            inner.subaddress_labels.push((index, label.to_string()));
+            inner.subaddress_labels.push((account, index, label.to_string()));
+        }
+        // A label is cosmetic and re-editable, so best-effort persistence is fine here
+        // (unlike the irreversible create_* ops, which roll back on persist failure).
+        if let Err(e) = persist_meta(&inner) {
+            log::warn!("Failed to persist subaddress label: {}", e);
         }
     }
 
@@ -1155,6 +1278,47 @@ impl WalletState {
         // scanned yet). It's locked, so it counts toward TOTAL but not unlocked.
         let pending: u64 = inner.pending_change.values().sum();
         (total.saturating_add(pending), unlocked)
+    }
+
+    /// (total, unlocked) atomic balances for a SINGLE account — same rules as `balances`,
+    /// restricted to outputs whose subaddress major index is `account_index` (outputs
+    /// with no subaddress attribute to account 0). Optimistic pending change is credited
+    /// to account 0, where sends / churn / splinter operate. The sum over all accounts
+    /// equals the wallet-wide `balances`, so no funds are lost or double-counted.
+    pub async fn balances_for_account(&self, account_index: u32, tip: u64) -> (u64, u64) {
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let inner = self.inner.read().await;
+        let mut total = 0u64;
+        let mut unlocked = 0u64;
+        for o in &inner.scanned_outputs {
+            let acct = o.output.subaddress().map(|s| s.account() as u32).unwrap_or(0);
+            if acct != account_index {
+                continue;
+            }
+            let id = output_id(&o.output);
+            if inner.spent.contains(&id) {
+                continue;
+            }
+            let amt = o.output.commitment().amount;
+            total = total.saturating_add(amt);
+            if inner.frozen.contains(&id) {
+                continue;
+            }
+            let mature = tip >= o.height.saturating_add(10);
+            let timelock_ok = match o.output.additional_timelock() {
+                monero_oxide::transaction::Timelock::None => true,
+                monero_oxide::transaction::Timelock::Block(b) => (tip as usize) >= b,
+                monero_oxide::transaction::Timelock::Time(t) => now >= t,
+            };
+            if mature && timelock_ok {
+                unlocked = unlocked.saturating_add(amt);
+            }
+        }
+        if account_index == 0 {
+            let pending: u64 = inner.pending_change.values().sum();
+            total = total.saturating_add(pending);
+        }
+        (total, unlocked)
     }
 
     /// Format piconero to XMR string.

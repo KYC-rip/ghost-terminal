@@ -129,50 +129,47 @@ pub async fn get_mnemonic(app: AppHandle, state: State<'_, WalletState>) -> Resu
 #[tauri::command]
 pub async fn get_accounts(state: State<'_, WalletState>) -> Result<Vec<MoneroAccount>, String> {
     let mut accounts = state.get_accounts().await;
-    // Inject the live balance into the primary account as ATOMIC piconero strings
-    // (the renderer formats them). Without this the per-account card showed 0 even
-    // when the wallet held funds. Balance tracking is global today, so it maps to
-    // account 0.
+    // Inject each account's live balance as ATOMIC piconero strings (the renderer
+    // formats them). Per-account now that multi-account is real; the sum matches the
+    // wallet-wide total.
     let tip = state.tip_height().await;
-    let (total, unlocked) = state.balances(tip).await;
-    if let Some(primary) = accounts.get_mut(0) {
-        primary.balance = total.to_string();
-        primary.unlocked_balance = unlocked.to_string();
+    for account in accounts.iter_mut() {
+        let (total, unlocked) = state.balances_for_account(account.index, tip).await;
+        account.balance = total.to_string();
+        account.unlocked_balance = unlocked.to_string();
     }
     Ok(accounts)
 }
 
 #[tauri::command]
 pub async fn create_account(
-    _state: State<'_, WalletState>,
+    state: State<'_, WalletState>,
     label: String,
 ) -> Result<serde_json::Value, String> {
-    // TODO: Derive new account keypair
-    log::info!("create_account: {}", label);
-    Ok(serde_json::json!({ "index": 1, "address": "" }))
+    let account = state.create_account(&label).await?;
+    Ok(serde_json::json!({ "index": account.index, "address": account.base_address }))
 }
 
 #[tauri::command]
 pub async fn rename_account(
-    _state: State<'_, WalletState>,
+    state: State<'_, WalletState>,
     account_index: u32,
     new_label: String,
 ) -> Result<(), String> {
-    // TODO: Update account label in state
-    log::info!("rename_account: {} -> {}", account_index, new_label);
-    Ok(())
+    state.rename_account(account_index, &new_label).await
 }
 
 #[tauri::command]
 pub async fn get_balance(
     state: State<'_, WalletState>,
-    _account_index: u32,
+    account_index: u32,
 ) -> Result<serde_json::Value, String> {
     // Return ATOMIC piconero — the renderer (tauriBridge → walletService.formatXmr)
     // divides by 1e12 itself. Returning pre-formatted XMR here caused a double
-    // conversion that displayed every balance as ~0.
+    // conversion that displayed every balance as ~0. Per-account balance; the sum over
+    // all accounts equals the wallet-wide total.
     let tip = state.tip_height().await;
-    let (total, unlocked) = state.balances(tip).await;
+    let (total, unlocked) = state.balances_for_account(account_index, tip).await;
     Ok(serde_json::json!({
         "total": total,
         "unlocked": unlocked
@@ -201,19 +198,21 @@ pub async fn reselect_node(app: AppHandle, state: State<'_, WalletState>) -> Res
 #[tauri::command]
 pub async fn get_subaddresses(
     state: State<'_, WalletState>,
-    _account_index: u32,
+    account_index: u32,
 ) -> Result<Vec<SubaddressInfo>, String> {
     let tip = state.tip_height().await;
-    Ok(state.get_subaddresses(tip).await)
+    Ok(state.get_subaddresses(account_index, tip).await)
 }
 
 #[tauri::command]
 pub async fn create_subaddress(
     state: State<'_, WalletState>,
     label: Option<String>,
-    _account_index: Option<u32>,
+    account_index: Option<u32>,
 ) -> Result<String, String> {
-    let info = state.create_subaddress(label.as_deref().unwrap_or("Payment")).await?;
+    let info = state
+        .create_subaddress(account_index.unwrap_or(0), label.as_deref().unwrap_or("Payment"))
+        .await?;
     Ok(info.address)
 }
 
@@ -222,9 +221,9 @@ pub async fn set_subaddress_label(
     state: State<'_, WalletState>,
     index: u32,
     label: String,
-    _account_index: u32,
+    account_index: u32,
 ) -> Result<(), String> {
-    state.set_subaddress_label(index, &label).await;
+    state.set_subaddress_label(account_index, index, &label).await;
     Ok(())
 }
 
