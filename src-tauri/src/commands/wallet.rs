@@ -1177,6 +1177,75 @@ async fn tx_confirmations<T: HttpTransport + Sync>(
     (tip.saturating_sub(block_height).saturating_add(1), false)
 }
 
+/// Nominal weight of a typical 2-in/2-out RingCT tx. Used to turn the daemon's
+/// per-weight fee rate into an at-a-glance fee for the send UI — the EXACT fee is
+/// always computed from the real tx at prepare time; this is only an estimate.
+const NOMINAL_TX_WEIGHT: usize = 1500;
+
+/// Per-priority ballpark fees (atomic piconero) for a nominal tx, indexed to the UI's
+/// priority levels: [0 auto, 1 slow, 2 normal, 3 fast, 4 fastest].
+async fn fees_on_daemon<T: HttpTransport + Sync>(daemon: &MoneroDaemon<T>) -> Result<Vec<u64>, String> {
+    // Generous per-weight cap: this is a DISPLAY estimate, so let even the fastest
+    // priority through (its per-weight rate is well above the 500k cap used when
+    // actually building a tx). Still bounded far below any overflow in fee×weight.
+    const MAX_PER_WEIGHT: u64 = 1_000_000_000;
+    let priorities = [
+        FeePriority::Normal,      // 0 auto
+        FeePriority::Unimportant, // 1 slow
+        FeePriority::Normal,      // 2 normal
+        FeePriority::Elevated,    // 3 fast
+        FeePriority::Priority,    // 4 fastest
+    ];
+    let mut out = Vec::with_capacity(priorities.len());
+    let mut any_ok = false;
+    // Resilient: a single priority the node won't quote shouldn't null the whole row.
+    for p in priorities {
+        match daemon.fee_rate(p, MAX_PER_WEIGHT).await {
+            Ok(rate) => { out.push(rate.calculate_fee_from_weight(NOMINAL_TX_WEIGHT)); any_ok = true; }
+            Err(_) => out.push(0),
+        }
+    }
+    if any_ok { Ok(out) } else { Err("daemon returned no usable fee rates".into()) }
+}
+
+/// Per-priority fee estimate for the send UI (atomic piconero, indexed 0..=4). Routed
+/// through the configured uplink like every other daemon call.
+#[tauri::command]
+pub async fn estimate_fees(app: AppHandle, state: State<'_, WalletState>) -> Result<Vec<u64>, String> {
+    let daemon_url = match state.get_daemon_url().await {
+        Some(u) => u,
+        None => { emit_log(&app, "Fee", "warn", "💸 estimate_fees: no daemon connected yet"); return Err("No daemon connected yet.".into()); }
+    };
+    emit_log(&app, "Fee", "info", &format!("💸 Estimating fees via {}", daemon_url));
+    let res = match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+        "tor" => {
+            let tor = crate::wallet::scanner::ensure_tor(&app).await
+                .ok_or("Tor is not available")?;
+            let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
+                .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
+            fees_on_daemon(&daemon).await
+        }
+        "custom" => {
+            let proxy = crate::wallet::scanner::read_proxy_address(&app);
+            if proxy.trim().is_empty() {
+                return Err("Custom routing selected but no proxy address is set".into());
+            }
+            let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
+                .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
+            fees_on_daemon(&daemon).await
+        }
+        _ => {
+            let daemon = ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(30)).await?;
+            fees_on_daemon(&daemon).await
+        }
+    };
+    match &res {
+        Ok(fees) => emit_log(&app, "Fee", "success", &format!("💸 Fee estimates (atomic): {:?}", fees)),
+        Err(e) => emit_log(&app, "Fee", "error", &format!("💸 estimate_fees failed: {}", e)),
+    }
+    res
+}
+
 /// Fetch a tx over one concrete daemon transport, bind it to the requested txid, and
 /// return it alongside its confirmations / mempool status. Shared by the proof- and
 /// key-verification commands.

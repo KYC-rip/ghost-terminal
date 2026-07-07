@@ -119,6 +119,7 @@ pub fn run() {
             commands::wallet::get_subaddresses,
             commands::wallet::create_subaddress,
             commands::wallet::set_subaddress_label,
+            commands::wallet::estimate_fees,
             // Transaction operations
             commands::wallet::prepare_transfer,
             commands::wallet::relay_transfer,
