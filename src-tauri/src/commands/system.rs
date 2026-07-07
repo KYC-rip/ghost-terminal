@@ -374,7 +374,19 @@ pub async fn browser_embed_open(
     }
     // Page-load progress → the ROS address-bar loading bar (via the core-log channel).
     let app_ev = app.clone();
+    let app_nav = app.clone();
     let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed))
+        .on_navigation(move |url| {
+            // Wallet/payment URIs can't render as a web page — an in-page anchor like
+            // <a href="monero:8B…?tx_amount=1.5"> would just dead-end in the webview.
+            // Forward them to ROS (which routes monero: → the wallet Send flow) and
+            // CANCEL the navigation so the webview stays on the current page.
+            if matches!(url.scheme(), "monero" | "bitcoin" | "lightning") {
+                crate::emit_log(&app_nav, "BROWSER_URI", "info", url.as_str());
+                return false;
+            }
+            true
+        })
         .on_page_load(move |_wv, payload| {
             let phase = match payload.event() {
                 tauri::webview::PageLoadEvent::Started => "start",
