@@ -10,6 +10,24 @@
 
 use std::collections::HashMap;
 
+/// CSP attached to every HTML response the ros:// handler serves. `'self'` resolves to the
+/// `ros://local` document origin, so the bundle's own assets load while the untrusted bundle
+/// is sandboxed on the high-value vectors: no remote/inline/eval scripts, no plugins, no
+/// `<base>` tampering, no framing. `connect-src` allows the same https/wss surface as the
+/// classic renderer (ROS mostly routes network through the audited IPC bridge, but some
+/// features fetch directly); tightening this to IPC-only is a follow-up once ROS's direct
+/// network needs are confirmed.
+pub const ROS_CSP: &str = "default-src 'self'; \
+script-src 'self'; \
+style-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob: https:; \
+font-src 'self' data:; \
+connect-src 'self' ipc: http://ipc.localhost https: wss:; \
+media-src 'self' data: blob:; \
+object-src 'none'; \
+base-uri 'self'; \
+frame-ancestors 'none'";
+
 /// An in-memory, verified ROS UI bundle. Built once at launch, then read-only.
 pub struct RosBundle {
     files: HashMap<String, Vec<u8>>,

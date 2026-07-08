@@ -105,6 +105,24 @@ pub fn read_ui_mode(app: &AppHandle) -> String {
     }
 }
 
+/// Where a `ui_mode=ros` window sources its UI from:
+/// - `"beta"` → remote `https://app.ros.rip` (fast iteration; the current default),
+/// - `"ota"`  → the on-device verified `ros://local` bundle (signed OTA — the stable path).
+///
+/// Kept a SEPARATE key from `ui_mode` so the beta remote path and the OTA local path can
+/// coexist during bring-up (a bad OTA bundle can't strand the user — flip back to beta).
+/// Unknown/absent → `"beta"`.
+pub fn read_ros_source(app: &AppHandle) -> String {
+    let stored = std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|c| c.get("ros_source").and_then(|v| v.as_str()).map(str::to_string));
+    match stored.as_deref() {
+        Some("ota") => "ota".to_string(),
+        _ => "beta".to_string(),
+    }
+}
+
 /// Validate + set `ui_mode` on a config object. Pure (no I/O) so it's unit-testable;
 /// `set_ui_mode` owns the persistence + relaunch around it.
 fn apply_ui_mode(config: &mut serde_json::Value, mode: &str) -> Result<(), String> {

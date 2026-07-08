@@ -88,6 +88,34 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
+        // The ros:// protocol: the sole content source for the OTA (ros_source=ota) ROS
+        // window. Serves the in-memory, on-device-verified bundle managed as RosBundle.
+        // We attach the app CSP to HTML responses ourselves so the untrusted bundle is
+        // always sandboxed (script-src 'self', object-src 'none', …) regardless of whether
+        // Tauri injects its config CSP into a manually-registered scheme.
+        .register_uri_scheme_protocol("ros", |ctx, request| {
+            let uri = request.uri().to_string();
+            let resp = match ctx.app_handle().try_state::<updater::protocol::RosBundle>() {
+                Some(bundle) => bundle.resolve(&uri),
+                None => updater::protocol::RosResponse {
+                    status: 503,
+                    content_type: "text/plain",
+                    body: b"ROS bundle not loaded".to_vec(),
+                },
+            };
+            let mut builder = tauri::http::Response::builder()
+                .status(resp.status)
+                .header(tauri::http::header::CONTENT_TYPE, resp.content_type);
+            if resp.content_type == "text/html" {
+                builder = builder
+                    .header("Content-Security-Policy", updater::protocol::ROS_CSP);
+            }
+            builder
+                .body(std::borrow::Cow::<'static, [u8]>::Owned(resp.body))
+                .unwrap_or_else(|_| {
+                    tauri::http::Response::new(std::borrow::Cow::Borrowed(&b""[..]))
+                })
+        })
         .setup(|app| {
             // OS-level deep links (ripley:// for "Sign in with Ripley", plus monero:/
             // xmr402: opened outside the app). The plugin captures the URI; we forward
@@ -201,6 +229,11 @@ pub fn run() {
             // to the wallet invoke surface (no fs/shell/dialog/core:default).
             // Built AFTER every manage() above so an early IPC call finds its state.
             let ui_mode = commands::config::read_ui_mode(app.handle());
+            // Within ros mode, `ros_source` selects WHERE the UI comes from: "beta" =
+            // remote app.ros.rip (fast iteration), "ota" = the on-device verified
+            // ros://local bundle (the stable signed path). Default beta so a bad OTA
+            // bundle can never strand the user.
+            let ros_source = commands::config::read_ros_source(app.handle());
             // ROS_URL is a DEV-ONLY override. In release it is IGNORED (with a loud
             // warning if set): a shipped wallet must never be pointed at an
             // attacker-chosen origin via an env var — that origin would inherit the
@@ -218,9 +251,40 @@ pub fn run() {
                 None
             };
             let classic_url = || tauri::WebviewUrl::App("index.html".into());
-            let window_url = if ui_mode == "ros" {
-                // Production loads remote app.ros.rip; dev builds default to the local
-                // ripley-os dev server (:5174). ROS_URL overrides either.
+            // The OTA (ros://) window uses a DISTINCT label so the broad local `default`
+            // capability (windows:["main"]) cannot reach it — a ros:// page is local
+            // context, so a shared "main" label would leak fs/shell to the untrusted
+            // bundle (verified empirically). Only the actually-loaded ros:// window is
+            // "ros"; any fallback to the classic renderer stays "main" (it needs default).
+            let mut window_label: &str = "main";
+            let window_url = if ui_mode == "ros" && ros_source == "ota" {
+                // Stable path: serve the on-device VERIFIED bundle over ros://. The bundle
+                // is loaded + re-verified here (cache, else the pinned bundled fallback)
+                // and managed so the ros:// protocol handler can serve it. A None return
+                // means even the fallback failed its pinned hash (binary integrity gone) —
+                // fail closed to classic rather than load anything unverified.
+                match updater::load_bundle_at_launch(app.handle()) {
+                    Some(bundle) => {
+                        app.manage(bundle);
+                        match "ros://local/index.html".parse::<tauri::Url>() {
+                            Ok(u) => {
+                                window_label = "ros";
+                                tauri::WebviewUrl::CustomProtocol(u)
+                            }
+                            Err(e) => {
+                                println!("[ota/error] bad ros:// url ({e}) — booting classic");
+                                classic_url()
+                            }
+                        }
+                    }
+                    None => {
+                        println!("[ota] no loadable ROS bundle — booting classic");
+                        classic_url()
+                    }
+                }
+            } else if ui_mode == "ros" {
+                // Beta path: remote app.ros.rip in production; dev builds default to the
+                // local ripley-os dev server (:5174). ROS_URL overrides either.
                 let default_ros =
                     if cfg!(debug_assertions) { ROS_DEV_URL } else { ROS_REMOTE_URL };
                 let raw = ros_override.clone().unwrap_or_else(|| default_ros.to_string());
@@ -251,7 +315,7 @@ pub fn run() {
             } else {
                 classic_url()
             };
-            tauri::WebviewWindowBuilder::new(app, "main", window_url)
+            tauri::WebviewWindowBuilder::new(app, window_label, window_url)
                 .title("Ripley Terminal")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(900.0, 600.0)

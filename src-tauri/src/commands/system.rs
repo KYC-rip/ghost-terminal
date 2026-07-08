@@ -499,7 +499,12 @@ pub async fn browser_embed_open(
         &format!("embed {} · mode={} · via {}", parsed.host_str().unwrap_or("?"), mode.as_deref().unwrap_or("?"), via));
     // The proxy is fixed at creation → recreate on open (mode may have changed).
     if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
-    let win = app.get_window("main").ok_or_else(|| "no main window".to_string())?;
+    // The primary window is "main" in classic/beta modes but "ros" in OTA mode (distinct
+    // label for capability isolation — see lib.rs) — accept either.
+    let win = app
+        .get_window("main")
+        .or_else(|| app.get_window("ros"))
+        .ok_or_else(|| "no main window".to_string())?;
     // Diagnostic: compare the bounds ROS sends against the window's logical content
     // size, so a coverage gap (webview smaller than the frame) is measurable.
     if let (Ok(sz), Ok(sf)) = (win.inner_size(), win.scale_factor()) {
