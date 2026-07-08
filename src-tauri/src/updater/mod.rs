@@ -9,3 +9,4 @@
 //! `ros://` protocol handler are wired in follow-up steps and call into `ota`.
 
 pub mod ota;
+pub mod protocol;
