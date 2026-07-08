@@ -755,6 +755,19 @@ impl WalletState {
         self.inner.write().await.pending_spends.remove(meta_key);
     }
 
+    /// Read-only peek at a staged spend's BACKEND-authoritative (destinations, amount, fee),
+    /// keyed by the tx-metadata hash. Used to build the native spend-confirm dialog from the
+    /// record `prepare_transfer` staged — NEVER from renderer-supplied text — so a hostile
+    /// renderer can't display address A while the prepared tx (tx_metadata) actually pays B.
+    /// Amounts are atomic units.
+    pub async fn peek_pending_spend(&self, meta_key: &str) -> Option<(Vec<(String, u64)>, u64, u64)> {
+        let inner = self.inner.read().await;
+        inner
+            .pending_spends
+            .get(meta_key)
+            .map(|(_ids, sent)| (sent.destinations.clone(), sent.amount, sent.fee))
+    }
+
     /// Commit a staged spend after a successful broadcast: mark its inputs spent,
     /// finalize the sent-log entry (tx_hash/height/timestamp), and persist. If no
     /// staged spend is found (e.g. app restarted mid-flow), a rescan reconciles.

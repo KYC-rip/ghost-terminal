@@ -502,6 +502,28 @@ pub async fn prepare_transfer(
     })
 }
 
+/// Build the spend-confirmation dialog body from the BACKEND-authoritative staged record
+/// (destinations + fee in atomic units), or a fail-closed generic warning when no staged
+/// record exists. Kept pure + separate from `relay_transfer` so both branches are unit-
+/// testable and can NEVER be fed renderer-supplied text — the whole point of the guard.
+fn format_spend_confirm(staged: Option<(&[(String, u64)], u64)>) -> String {
+    match staged {
+        Some((dests, fee_atomic)) => {
+            let lines: Vec<String> = dests
+                .iter()
+                .map(|(addr, amt)| format!("Send {} XMR\nto {}", WalletState::format_xmr(*amt), addr))
+                .collect();
+            format!("{}\n\nNetwork fee {} XMR", lines.join("\n\n"), WalletState::format_xmr(fee_atomic))
+        }
+        // No staged record (e.g. the wallet locked/restarted between prepare and relay — in
+        // which case signing fails downstream anyway). NEVER fall back to renderer text.
+        None => "Authorize this Monero transaction broadcast?\n\n(Destination could not be \
+                 re-verified from the prepared transaction — only continue if you just \
+                 created this send.)"
+            .to_string(),
+    }
+}
+
 /// Step 2: Sign and broadcast — called after user confirms + enters password.
 #[tauri::command]
 pub async fn relay_transfer(
@@ -514,14 +536,29 @@ pub async fn relay_transfer(
 ) -> Result<String, String> {
     // FUND SAFETY (per-spend authorization): every broadcast requires an OS-level
     // confirmation the renderer JS cannot fake — so no ROS app (or compromised page)
-    // can spend silently, even though it could reach this command via invoke. Shows
-    // the destination/amount/fee when provided, else a generic prompt.
+    // can spend silently, even though it could reach this command via invoke.
+    //
+    // The confirm text is built from the BACKEND's staged record (destinations/amount/fee
+    // recorded by prepare_transfer, keyed by the tx-metadata hash) — NEVER from the
+    // renderer-supplied `to`/`amount`/`fee`. Otherwise a hostile renderer could prepare a
+    // tx paying B while passing `to="A"` here, so the dialog would show A while the signed
+    // tx_metadata (the source of truth for the broadcast) pays B. We show what is actually
+    // being paid.
+    let meta_key = crate::wallet::state::tx_meta_key(&tx_metadata);
     {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-        let body = match (&to, &amount, &fee) {
-            (Some(t), Some(a), Some(f)) => format!("Send {a} XMR\nto {t}\n\nNetwork fee {f} XMR"),
-            _ => "Authorize this Monero transaction broadcast?".to_string(),
-        };
+        let _ = (&amount, &fee); // renderer-supplied; intentionally NOT trusted for the dialog.
+        let staged = state.peek_pending_spend(&meta_key).await;
+        // Tamper telemetry: if the renderer's display `to` isn't among the prepared
+        // destinations, it tried to mislead the user. The dialog shows the authoritative
+        // destination regardless; just record that it diverged.
+        if let (Some(t), Some((dests, _, _))) = (&to, &staged) {
+            if !dests.iter().any(|(addr, _)| addr == t) {
+                emit_log(&app, "Tx", "warn",
+                    "Spend-confirm destination mismatch: renderer display differs from the prepared transaction");
+            }
+        }
+        let body = format_spend_confirm(staged.as_ref().map(|(d, _a, f)| (d.as_slice(), *f)));
         let ok = app
             .dialog()
             .message(body)
@@ -531,7 +568,7 @@ pub async fn relay_transfer(
         if !ok {
             // Un-stage the spend prepare() staged so the (never-broadcast) inputs
             // return to the spendable balance immediately.
-            state.discard_pending_spend(&crate::wallet::state::tx_meta_key(&tx_metadata)).await;
+            state.discard_pending_spend(&meta_key).await;
             emit_log(&app, "Tx", "warn", "Transaction cancelled at confirmation");
             return Err("Transaction cancelled".into());
         }
@@ -1538,6 +1575,53 @@ pub async fn rescan(
 
     emit_log(&app, "Sync", "success", &format!("✅ Rescan started from height {}", height));
     Ok(())
+}
+
+#[cfg(test)]
+mod spend_confirm_tests {
+    use super::format_spend_confirm;
+
+    // The spend-confirm dialog MUST be built from the backend's staged destinations, never
+    // from renderer-supplied text — otherwise a hostile renderer could show address A while
+    // the prepared tx pays B. These tests pin that the body reflects the given destinations.
+
+    #[test]
+    fn body_renders_the_backend_destination_and_fee() {
+        let dests = vec![("4RealDestAddr".to_string(), 1_500_000_000_000u64)]; // 1.5 XMR
+        let body = format_spend_confirm(Some((&dests, 30_000_000u64))); // 0.00003 XMR fee
+        assert!(body.contains("4RealDestAddr"), "must show the actual destination");
+        assert!(body.contains("1.5 XMR"), "must show the actual amount");
+        assert!(body.contains("Network fee 0.00003 XMR"), "must show the fee");
+    }
+
+    #[test]
+    fn body_never_contains_an_address_not_in_the_staged_destinations() {
+        // A renderer passing to="4PhishAddr" cannot influence this body — it only takes
+        // the backend destinations. The phishing address must be absent.
+        let dests = vec![("4RealDestAddr".to_string(), 1_000_000_000_000u64)];
+        let body = format_spend_confirm(Some((&dests, 0)));
+        assert!(!body.contains("4PhishAddr"));
+    }
+
+    #[test]
+    fn body_lists_every_destination_for_a_multi_output_send() {
+        let dests = vec![
+            ("addrA".to_string(), 1_000_000_000_000u64),
+            ("addrB".to_string(), 2_000_000_000_000u64),
+        ];
+        let body = format_spend_confirm(Some((&dests, 0)));
+        assert!(body.contains("addrA") && body.contains("addrB"), "must list all destinations");
+    }
+
+    #[test]
+    fn fallback_body_is_generic_and_never_a_destination_line() {
+        // No staged record → fail-closed generic warning. It must NOT render the
+        // "Send … to …" destination format (which is the only place an address appears),
+        // so no renderer-supplied text can leak through this path.
+        let body = format_spend_confirm(None);
+        assert!(body.contains("could not be"), "fallback must warn it couldn't verify");
+        assert!(!body.contains("Send "), "fallback must not render a destination line");
+    }
 }
 
 
