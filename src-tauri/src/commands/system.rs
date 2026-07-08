@@ -447,6 +447,36 @@ fn parse_rgb(s: &str) -> Option<tauri::webview::Color> {
     if p.len() >= 3 { Some(tauri::webview::Color(p[0], p[1], p[2], 255)) } else { None }
 }
 
+/// Pin the embed's zoom to `z` (the OS text-scale factor from ROS; 1.0 = 100%).
+/// macOS WKWebView has TWO zooms and tauri only exposes one: `pageZoom` (layout —
+/// what set_zoom drives) and `magnification` (visual scale, NO reflow — content
+/// draws bigger and clips at the right/bottom edge, exactly the "oversized page"
+/// symptom). Child webviews have come up scaled on HiDPI, so go straight to the
+/// WKWebView: read both, log anything off (evidence in the core log), then pin
+/// magnification=1 and pageZoom=z.
+#[cfg(target_os = "macos")]
+fn embed_pin_zoom(app: &AppHandle, wv: &tauri::Webview, z: f64) {
+    let app2 = app.clone();
+    let _ = wv.with_webview(move |pw| {
+        let view = unsafe { &*(pw.inner() as *const objc2_web_kit::WKWebView) };
+        let (mag, pz) = unsafe { (view.magnification(), view.pageZoom()) };
+        // Touch the view ONLY when a value is actually off-target: re-setting zoom on an
+        // already-correct, live page is a needless repaint (and the blank-page suspect).
+        if (mag - 1.0).abs() > 0.001 || (pz - z).abs() > 0.001 {
+            crate::emit_log(&app2, "BROWSER", "info", &format!(
+                "embed zoom pin: magnification {mag:.2}→1.00 · pageZoom {pz:.2}→{z:.2}"));
+            unsafe {
+                view.setMagnification(1.0);
+                view.setPageZoom(z);
+            }
+        }
+    });
+}
+#[cfg(not(target_os = "macos"))]
+fn embed_pin_zoom(_app: &AppHandle, wv: &tauri::Webview, z: f64) {
+    let _ = wv.set_zoom(z);
+}
+
 #[tauri::command]
 pub async fn browser_embed_open(
     app: AppHandle,
@@ -506,11 +536,18 @@ pub async fn browser_embed_open(
                 tauri::webview::PageLoadEvent::Started => "start",
                 _ => "end",
             };
-            // Re-pin zoom once the page has finished loading: a set_zoom() at creation is
-            // applied before the first navigation and WKWebView resets pageZoom when a page
-            // actually loads — so without this the embed reverts (oversized on HiDPI, and it
-            // ignores the OS text-scale). Only on "end" — re-pinning mid-load can blank it.
-            if phase == "end" { let _ = wv.set_zoom(z); }
+            // Re-pin zoom once the page has finished loading: values set at creation are
+            // applied before the first navigation and can be reset when a page actually
+            // loads. Only on "end" — touching zoom mid-load can blank the webview.
+            if phase == "end" {
+                embed_pin_zoom(&app_ev, &wv, z);
+                // Dev-only probe: a tiny badge in the page corner with the CSS viewport +
+                // devicePixelRatio, so a screenshot shows whether a scaling bug is layout
+                // zoom (vw shrinks), magnification (vw normal but content clips), or bounds
+                // (vw ≈ 2× the frame). Never ships in release builds.
+                #[cfg(debug_assertions)]
+                { let _ = wv.eval("(function(){try{var d=document.createElement('div');d.id='__ros_probe';d.style.cssText='position:fixed;left:4px;bottom:4px;z-index:2147483647;background:#000;color:#0f0;font:10px monospace;padding:2px 6px;opacity:.85;pointer-events:none';d.textContent='vw '+innerWidth+'x'+innerHeight+' dpr '+devicePixelRatio+(window.visualViewport?' vvscale '+visualViewport.scale:'');(document.body||document.documentElement).appendChild(d);}catch(e){}})();"); }
+            }
             // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
             crate::emit_log(&app_ev, "BROWSER_LOAD", "info", &format!("{}|{}", phase, payload.url()));
         });
@@ -518,9 +555,10 @@ pub async fn browser_embed_open(
     if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
     let wv = win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
-    // Apply the OS text-scale factor now; on_page_load re-pins it after each navigation
-    // (WKWebView resets pageZoom on load, so a one-shot set here alone doesn't hold).
-    let _ = wv.set_zoom(z);
+    // Zoom is deliberately NOT applied here: poking pageZoom before the first
+    // navigation commits can break WKWebView's first paint (blank page). The
+    // on_page_load "end" hook pins it once the page is actually up.
+    let _ = &wv;
     // Record the mode this embed was created under so a later navigate can refuse if
     // routing has since changed (its proxy is frozen at creation — see guard_browser_target).
     let created_mode = mode.clone().unwrap_or_else(|| crate::wallet::scanner::read_routing_mode(&app));
@@ -579,7 +617,7 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
 #[tauri::command]
 pub fn browser_embed_zoom(app: AppHandle, zoom: f64) -> Result<(), String> {
     // Live-track the OS text-scale on an already-open embed (no-op if none is open).
-    if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.set_zoom(zoom); }
+    if let Some(wv) = app.get_webview(EMBED_LABEL) { embed_pin_zoom(&app, &wv, zoom); }
     Ok(())
 }
 

@@ -12,6 +12,13 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# Direct access to the embed's WKWebView (via tauri's with_webview) to read and
+# normalize its native zooms — `magnification` (visual, no reflow) and `pageZoom`
+# (layout) — which tauri doesn't expose. Same versions/features wry already pulls
+# in, so this adds no new build weight.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView"] }
+
 [dependencies]
 # Core framework
 # macos-proxy → wry/mac-proxy: without it WebviewWindowBuilder::proxy_url is a

@@ -5343,6 +5343,7 @@ dependencies = [
  "monero-seed",
  "monero-simple-request-rpc",
  "monero-wallet",
+ "objc2-web-kit",
  "rand 0.8.5",
  "rand_core 0.6.4",
  "reqwest 0.12.28",
