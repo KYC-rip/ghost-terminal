@@ -101,20 +101,50 @@ pub fn decrypt_wallet(encrypted: &[u8], password: &str) -> Result<WalletFileData
         .map_err(|e| format!("Wallet data corrupted: {}", e))
 }
 
-/// Get the wallet file path for an identity.
-pub fn wallet_path(data_dir: &Path, identity_id: &str) -> PathBuf {
-    data_dir.join("wallets").join(format!("{}.vault", identity_id))
+/// Charset guard for a renderer-supplied identity id that becomes a filesystem
+/// path component (`wallets/{id}.vault` / `.cache`). A hostile renderer could
+/// otherwise pass `../…` (or an absolute path) to read, delete, or probe files
+/// OUTSIDE the wallets dir. Mirrors the VigilHandler id charset: non-empty,
+/// <= 64 chars, `[A-Za-z0-9_-]` only — which by construction contains no `/`,
+/// `\`, or `.`, so no traversal is expressible. This is the single choke point
+/// every `.vault`/`.cache` path flows through; `delete_identity` validates
+/// separately because it builds its paths inline.
+pub fn valid_identity_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Get the wallet file path for an identity. Rejects ids that aren't a safe path
+/// component (see `valid_identity_id`) so a hostile id can't escape the wallets dir.
+pub fn wallet_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, String> {
+    if !valid_identity_id(identity_id) {
+        return Err("Invalid identity id".into());
+    }
+    Ok(data_dir.join("wallets").join(format!("{}.vault", identity_id)))
 }
 
 /// Save encrypted wallet to disk.
 pub fn save_wallet(data_dir: &Path, identity_id: &str, data: &WalletFileData, password: &str) -> Result<(), String> {
-    let path = wallet_path(data_dir, identity_id);
+    let path = wallet_path(data_dir, identity_id)?;
     std::fs::create_dir_all(path.parent().unwrap())
         .map_err(|e| format!("Failed to create wallet dir: {}", e))?;
 
     let encrypted = encrypt_wallet(data, password);
-    std::fs::write(&path, &encrypted)
+    // Write to a temp file then atomically rename over the target. A plain write
+    // could be interrupted (crash / power loss) mid-flush and leave a truncated,
+    // undecryptable vault — destroying the seed. This matters most for a password
+    // CHANGE, whose re-encryption is the only write that overwrites an existing
+    // vault under a different key; rename is atomic on the same filesystem, so the
+    // old vault survives intact until the new one is fully written.
+    let tmp = path.with_extension("vault.tmp");
+    std::fs::write(&tmp, &encrypted)
         .map_err(|e| format!("Failed to write wallet file: {}", e))?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        // Don't leave the half-written temp behind if the commit rename fails.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("Failed to commit wallet file: {}", e));
+    }
 
     log::info!("Wallet saved: {}", path.display());
     Ok(())
@@ -122,7 +152,7 @@ pub fn save_wallet(data_dir: &Path, identity_id: &str, data: &WalletFileData, pa
 
 /// Load and decrypt wallet from disk.
 pub fn load_wallet(data_dir: &Path, identity_id: &str, password: &str) -> Result<WalletFileData, String> {
-    let path = wallet_path(data_dir, identity_id);
+    let path = wallet_path(data_dir, identity_id)?;
     let encrypted = std::fs::read(&path)
         .map_err(|e| format!("Failed to read wallet file: {}", e))?;
 
@@ -131,7 +161,7 @@ pub fn load_wallet(data_dir: &Path, identity_id: &str, password: &str) -> Result
 
 /// Check if a wallet file exists for an identity.
 pub fn wallet_exists(data_dir: &Path, identity_id: &str) -> bool {
-    wallet_path(data_dir, identity_id).exists()
+    wallet_path(data_dir, identity_id).map(|p| p.exists()).unwrap_or(false)
 }
 
 // ── Output Cache (separate from encrypted wallet) ──
@@ -201,26 +231,39 @@ pub struct OutputCache {
     pub sent: Vec<SentTx>,
 }
 
-fn output_cache_path(data_dir: &Path, identity_id: &str) -> PathBuf {
-    data_dir.join("wallets").join(format!("{}.cache", identity_id))
+fn output_cache_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, String> {
+    if !valid_identity_id(identity_id) {
+        return Err("Invalid identity id".into());
+    }
+    Ok(data_dir.join("wallets").join(format!("{}.cache", identity_id)))
 }
 
 /// Save output cache to disk (plaintext — outputs don't contain secret keys).
 /// The output data is already committed on-chain, so no privacy loss from caching.
 pub fn save_output_cache(data_dir: &Path, identity_id: &str, cache: &OutputCache) -> Result<(), String> {
-    let path = output_cache_path(data_dir, identity_id);
+    let path = output_cache_path(data_dir, identity_id)?;
     std::fs::create_dir_all(path.parent().unwrap())
         .map_err(|e| format!("Failed to create cache dir: {}", e))?;
     let data = serde_json::to_vec(cache)
         .map_err(|e| format!("Failed to serialize cache: {}", e))?;
-    std::fs::write(&path, &data)
+    // Temp-then-rename so an interrupted write can't leave a truncated cache (which
+    // load_output_cache would discard, forcing a full rescan). Not secret data, but
+    // the same atomicity keeps restarts cheap.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &data)
         .map_err(|e| format!("Failed to write cache: {}", e))?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("Failed to commit cache: {}", e));
+    }
     Ok(())
 }
 
 /// Load output cache from disk.
 pub fn load_output_cache(data_dir: &Path, identity_id: &str) -> OutputCache {
-    let path = output_cache_path(data_dir, identity_id);
+    let Ok(path) = output_cache_path(data_dir, identity_id) else {
+        return OutputCache::default();
+    };
     match std::fs::read(&path) {
         Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
         Err(_) => OutputCache::default(),
@@ -259,5 +302,33 @@ mod tests {
         let encrypted = encrypt_wallet(&data, "correct_password");
         let result = decrypt_wallet(&encrypted, "wrong_password");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn valid_identity_id_accepts_expected_charset() {
+        assert!(valid_identity_id("vault_1720000000000_abc"));
+        assert!(valid_identity_id("A-Z_0-9"));
+        assert!(valid_identity_id(&"x".repeat(64)));
+    }
+
+    #[test]
+    fn valid_identity_id_rejects_traversal_and_bad_charset() {
+        assert!(!valid_identity_id(""));
+        assert!(!valid_identity_id("../secret"));
+        assert!(!valid_identity_id("a/b"));
+        assert!(!valid_identity_id("a\\b"));
+        assert!(!valid_identity_id("has.dot"));
+        assert!(!valid_identity_id("/etc/passwd"));
+        assert!(!valid_identity_id(&"x".repeat(65)));
+    }
+
+    #[test]
+    fn wallet_path_rejects_traversal() {
+        let dir = Path::new("/tmp/ripley-data");
+        assert!(wallet_path(dir, "../../etc/passwd").is_err());
+        assert!(output_cache_path(dir, "..").is_err());
+        // A well-formed id stays inside the wallets dir.
+        let p = wallet_path(dir, "vault_abc").unwrap();
+        assert!(p.starts_with(dir.join("wallets")));
     }
 }

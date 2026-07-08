@@ -64,7 +64,7 @@ reqwest = { version = "0.12", features = ["json", "socks"] }
 # HTTP over arti DataStream (Tor transport). hyper decodes Content-Length AND
 # chunked transfer-encoding, so no hand-rolled HTTP parser is needed. Already in
 # the tree transitively via reqwest; declared directly for explicit use.
-hyper = { version = "1", features = ["client", "http1"] }
+hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"

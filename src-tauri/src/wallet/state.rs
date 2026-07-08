@@ -139,6 +139,11 @@ pub struct WalletState {
     /// vigilHotWallet flag via the set_vigil_hot command. Default false: lock
     /// zeroes the spend key as usual.
     pub vigil_hot: AtomicBool,
+    /// Native transfer-grant ledger — the authoritative, race-safe barrier for
+    /// autonomous EJECT sells. A SECOND, independent spend-key retention source
+    /// alongside `vigil_hot` (the effective retain-flag is their OR), so the two
+    /// features can't clobber each other. See wallet::transfer_ledger.
+    pub transfer_grants: tokio::sync::Mutex<super::transfer_ledger::GrantLedger>,
 }
 
 struct WalletInner {
@@ -195,10 +200,15 @@ impl WalletState {
         let data_dir = app.path().app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
 
+        let transfer_grants = tokio::sync::Mutex::new(
+            super::transfer_ledger::GrantLedger::load(data_dir.join("transfer_grants.json")),
+        );
+
         Self {
             app,
             scanner_generation: AtomicU64::new(0),
             vigil_hot: AtomicBool::new(false),
+            transfer_grants,
             inner: Arc::new(RwLock::new(WalletInner {
                 is_locked: true,
                 active_identity: None,
@@ -470,9 +480,85 @@ impl WalletState {
         Ok(())
     }
 
+    /// True if ≥1 transfer grant is currently armed.
+    pub async fn grants_armed(&self) -> bool {
+        self.transfer_grants.lock().await.any_armed()
+    }
+
+    /// Make the spend key resident WITHOUT unlocking the UI. Decrypts the wallet
+    /// file (like `restore_spend_key`) and sets ONLY `inner.spend_key` — it does NOT
+    /// clear `is_locked` and does NOT retain the password. This is the vigil-hot
+    /// model: arming a transfer grant keeps the key in memory behind a still-locked
+    /// UI so autonomous relays can sign, while a full unlock (open_wallet) — which
+    /// also restarts the scanner and retains the password for a user session — remains
+    /// a separate, user-facing operation.
+    pub async fn make_hot(&self, identity_id: &str, password: &str) -> Result<(), String> {
+        let data_dir = self.inner.read().await.data_dir.clone();
+        let wallet_data = storage::load_wallet(&data_dir, identity_id, password)?;
+        let entropy: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
+            .map_err(|e| format!("Invalid seed entropy: {}", e))?
+            .try_into()
+            .map_err(|_| "Seed entropy must be 32 bytes".to_string())?;
+        let (spend_key, _view_key) = keys::keys_from_entropy(&entropy)?;
+        let mut inner = self.inner.write().await;
+        inner.spend_key = Some(spend_key);
+        Ok(())
+    }
+
+    /// The active (resident) identity id, whether unlocked or soft-locked. Works
+    /// while locked, unlike `active_session()` which also needs the retained password.
+    pub async fn get_active_identity_id(&self) -> Option<String> {
+        self.inner.read().await.active_identity.clone()
+    }
+
+    /// Change a wallet's vault password: decrypt the file with `old_password`, then
+    /// re-encrypt the SAME wallet data under `new_password` (encrypt_wallet regenerates
+    /// a fresh Argon2 salt + ChaCha20 nonce, so the new blob is independent of the old).
+    /// The seed is never displayed or changed — only the encrypting password rotates.
+    ///
+    /// The inner write lock is held across the load→save so a concurrent `lock()` /
+    /// `persist_meta` can't interleave and re-encrypt under the OLD password. And if this
+    /// identity is the one currently resident, the retained in-memory `password` is
+    /// updated to match — otherwise the next auto-lock would save under the old password
+    /// and silently revert the change. On-disk `scan_height`/labels re-persist under the
+    /// new password on the next lock, so a wallet unlocked with in-memory progress ahead
+    /// of disk loses nothing but (at most) a little resync if the app dies in between.
+    pub async fn change_password(
+        &self,
+        identity_id: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), String> {
+        let mut inner = self.inner.write().await;
+        let data_dir = inner.data_dir.clone();
+        // Decrypt with the old password (this is the authorization check) …
+        let wallet_data = storage::load_wallet(&data_dir, identity_id, old_password)?;
+        // … then re-encrypt the same data under the new password.
+        storage::save_wallet(&data_dir, identity_id, &wallet_data, new_password)?;
+        if inner.active_identity.as_deref() == Some(identity_id) && inner.password.is_some() {
+            inner.password = Some(new_password.to_string());
+        }
+        Ok(())
+    }
+
+    /// Zero the spend key IFF the UI is currently locked. Called after a grant revoke
+    /// so a disarm while locked drops the hot key immediately instead of waiting for
+    /// the next `lock()`. A no-op while unlocked (the key is legitimately in use).
+    pub async fn clear_spend_key_if_locked(&self) {
+        let mut inner = self.inner.write().await;
+        if inner.is_locked {
+            inner.spend_key = None;
+        }
+    }
+
     pub async fn lock(&self) {
         // Save output cache before taking exclusive lock
         self.save_output_cache().await;
+
+        // Read the grant ledger BEFORE the inner write lock so the lock order is
+        // always (transfer_grants → inner) and can't deadlock. The spend key is
+        // retained if EITHER retention source is active (see below).
+        let grants_armed = self.transfer_grants.lock().await.any_armed();
 
         let mut inner = self.inner.write().await;
 
@@ -503,10 +589,12 @@ impl WalletState {
         // spend key). View-only data (balance/address) stays resident — the
         // same lock-survival tradeoff used on the desktop build.
         inner.is_locked = true;
-        // Retain the spend key ONLY while an EJECT vigil is armed (set via
-        // set_vigil_hot), so the order can dispatch unattended behind the lock.
-        // mnemonic + password are always zeroed regardless.
-        if !self.vigil_hot.load(Ordering::SeqCst) {
+        // Retain the spend key while EITHER the legacy vigil flag is set (via
+        // set_vigil_hot) OR ≥1 transfer grant is armed, so an autonomous order can
+        // dispatch unattended behind the lock. The two are independent retention
+        // sources; the effective flag is their OR. mnemonic + password are always
+        // zeroed regardless.
+        if !self.vigil_hot.load(Ordering::SeqCst) && !grants_armed {
             inner.spend_key = None;
         }
         inner.mnemonic = None;

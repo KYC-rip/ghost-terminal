@@ -9,6 +9,7 @@ pub mod types;
 pub mod base58_monero;
 pub mod tx_proof;
 pub mod sync_pool;
+pub mod transfer_ledger;
 
 pub use sync_pool::SyncPool;
 

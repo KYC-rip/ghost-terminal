@@ -537,7 +537,22 @@ pub async fn relay_transfer(
         }
     }
 
-    emit_log(&app, "Tx", "info", "🔐 Signing transaction...");
+    sign_and_broadcast(&app, &state, tx_metadata).await
+}
+
+
+/// Sign + broadcast a prepared transaction's metadata over the configured routing
+/// mode, then commit the staged spend. This is the body of `relay_transfer` AFTER
+/// its OS confirmation dialog — extracted so the autonomous transfer-grant relay
+/// (pre-authorized once at arm time, per the EJECT design) can reuse the EXACT same
+/// signing/broadcast/commit path WITHOUT a per-tx dialog. Pure extraction: behavior,
+/// logs, the IP-hiding routing, and the commit are unchanged from the original.
+pub(crate) async fn sign_and_broadcast(
+    app: &AppHandle,
+    state: &WalletState,
+    tx_metadata: Vec<u8>,
+) -> Result<String, String> {
+    emit_log(app, "Tx", "info", "🔐 Signing transaction...");
 
     let spend_key = state.get_spend_key().await
         .ok_or("Wallet is locked")?;
@@ -560,21 +575,21 @@ pub async fn relay_transfer(
     };
     let signed_tx = transact::sign_transaction(prepared, &spend_key)?;
 
-    emit_log(&app, "Tx", "info", "📡 Broadcasting to network...");
+    emit_log(app, "Tx", "info", "📡 Broadcasting to network...");
 
     // Broadcast over the configured routing mode so the originating IP for the
     // transaction is never exposed. broadcast_transaction is generic.
-    tx_deadline(&app, "Broadcast", async {
-        match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+    tx_deadline(app, "Broadcast", async {
+        match crate::wallet::scanner::read_routing_mode(app).as_str() {
             "tor" => {
-                let tor = crate::wallet::scanner::ensure_tor(&app).await
+                let tor = crate::wallet::scanner::ensure_tor(app).await
                     .ok_or("Tor is not available — refusing to broadcast over clearnet")?;
                 let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
                     .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
                 transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
             "custom" => {
-                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                let proxy = crate::wallet::scanner::read_proxy_address(app);
                 if proxy.trim().is_empty() {
                     return Err("Custom routing selected but no proxy address is set".to_string());
                 }
@@ -599,7 +614,7 @@ pub async fn relay_transfer(
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     state.commit_spend(&meta_key, tx_hash.clone(), tip, now).await;
 
-    emit_log(&app, "Tx", "success", &format!("✅ Transaction broadcast! Hash: {}", tx_hash));
+    emit_log(app, "Tx", "success", &format!("✅ Transaction broadcast! Hash: {}", tx_hash));
 
     Ok(tx_hash)
 }
@@ -1427,6 +1442,36 @@ pub async fn verify_password(state: State<'_, WalletState>, identity_id: String,
 #[tauri::command]
 pub async fn set_vigil_hot(state: State<'_, WalletState>, hot: bool) -> Result<(), String> {
     state.vigil_hot.store(hot, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+/// Change a wallet's vault password. `old_password` is the authorization (it must
+/// decrypt the vault); the wallet is then re-encrypted under `new_password`. The seed
+/// is neither shown nor altered. Callable while the wallet is open or locked; if it's
+/// the resident wallet, the in-memory retained password is rotated too so the next
+/// auto-lock persists under the new password rather than reverting the change.
+#[tauri::command]
+pub async fn change_wallet_password(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    identity_id: String,
+    old_password: String,
+    new_password: String,
+) -> Result<(), String> {
+    if new_password.is_empty() {
+        return Err("New passphrase cannot be empty".into());
+    }
+    if new_password == old_password {
+        return Err("New passphrase must differ from the current one".into());
+    }
+    // Distinguish a wrong current passphrase from other failures with a clean message.
+    if state.verify_password(&identity_id, &old_password).await.is_err() {
+        return Err("Incorrect current passphrase".into());
+    }
+    state
+        .change_password(&identity_id, &old_password, &new_password)
+        .await?;
+    emit_log(&app, "Wallet", "success", "🔑 Vault passphrase changed");
     Ok(())
 }
 

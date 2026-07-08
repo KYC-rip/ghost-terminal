@@ -3,5 +3,7 @@ pub mod config;
 pub mod identity;
 pub mod tor;
 pub mod vigil;
+pub mod transfer_grant;
 pub mod kvstore;
 pub mod system;
+pub mod agent_gateway;

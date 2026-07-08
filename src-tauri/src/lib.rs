@@ -4,6 +4,7 @@
 // dev builds compute shallower layouts and didn't surface this.
 #![recursion_limit = "512"]
 
+mod agent;
 mod commands;
 mod wallet;
 mod tor;
@@ -88,6 +89,19 @@ pub fn run() {
             // Background sync pool ("Sync all wallets")
             app.manage(wallet::SyncPool::new());
 
+            // Agent gateway (loopback HTTP server for autonomous agents). Loaded from
+            // config; auto-started only if the user previously enabled it. Spending is
+            // gated by an armed transfer grant, so a cold/locked wallet is read-only.
+            let agent_cfg = agent::gateway::load_config(&app.handle());
+            let agent_enabled = agent_cfg.enabled;
+            app.manage(agent::AgentGatewayState::new(agent_cfg));
+            if agent_enabled {
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = agent::gateway::start(h).await;
+                });
+            }
+
             // Bootstrap Tor at startup — but ONLY if the user's routing mode is Tor.
             // The wallet scanner connects Tor lazily on first use; a hosted RipleyOS
             // renderer never runs the scanner, so without this its native fetches
@@ -141,6 +155,7 @@ pub fn run() {
             commands::wallet::refresh,
             commands::wallet::set_vigil_hot,
             commands::wallet::verify_password,
+            commands::wallet::change_wallet_password,
             commands::wallet::rescan,
             // Config
             commands::config::get_config,
@@ -165,6 +180,7 @@ pub fn run() {
             commands::system::browser_embed_navigate,
             commands::system::browser_embed_visible,
             commands::system::browser_embed_close,
+            commands::system::browser_embed_deliver_xmr402,
             // Identity
             commands::identity::get_identities,
             commands::identity::save_identities,
@@ -187,6 +203,15 @@ pub fn run() {
             commands::vigil::vigil_get_session,
             commands::vigil::vigil_clear_session,
             commands::vigil::fetch_price_history,
+            // Transfer grants (EJECT autonomous sells)
+            commands::transfer_grant::arm_transfer_grant,
+            commands::transfer_grant::relay_transfer_grant,
+            commands::transfer_grant::revoke_transfer_grant,
+            commands::transfer_grant::revoke_all_transfer_grants,
+            commands::transfer_grant::transfer_grant_status,
+            commands::agent_gateway::agent_gateway_status,
+            commands::agent_gateway::agent_gateway_set_config,
+            commands::agent_gateway::agent_gateway_rotate_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
