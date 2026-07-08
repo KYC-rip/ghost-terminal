@@ -8,6 +8,20 @@ use serde_json::{json, Value};
 use base64::Engine;
 use tauri_plugin_dialog::DialogExt;
 
+use crate::wallet::WalletState;
+use monero_address::MoneroAddress;
+use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::rr::{Name, RData, RecordType};
+use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+
+/// Default DoH resolver for OpenAlias (RFC 8484 binary wire format). Mullvad —
+/// privacy-focused, no-logging, DNSSEC-validating. MUST speak HTTP/1.1: our Tor
+/// transport (`http_over_stream`) is hyper http1-only, and Quad9's DoH is
+/// HTTP/2-only (returns 505 over HTTP/1.1) so it can't be used over Tor here.
+/// Resolver-agnostic: any RFC 8484 HTTP/1.1-capable DoH endpoint works, so
+/// promoting this to a user setting later is a one-line change.
+const OPENALIAS_DOH_ENDPOINT: &str = "https://dns.mullvad.net/dns-query";
+
 const RELEASES_LATEST: &str = "https://api.github.com/repos/KYC-rip/ripley-terminal/releases/latest";
 const RELEASES_LIST: &str = "https://api.github.com/repos/KYC-rip/ripley-terminal/releases";
 const MAX_BACKGROUND_BYTES: usize = 5 * 1024 * 1024;
@@ -376,9 +390,23 @@ fn resolve_browser_proxy(
         }
         // Any non-Tor mode can't reach an onion — refuse rather than leak it.
         _ if onion => Err("This is a .onion address — switch routing to Tor to open it.".into()),
-        Some("custom") => Ok(proxy.clone().filter(|s| !s.is_empty()).and_then(|s| {
-            if s.contains("://") { s } else { format!("socks5://{s}") }.parse().ok()
-        })),
+        Some("custom") => {
+            // Fold CJK-IME fullwidth chars (`127.0.0.1：17890` → `127.0.0.1:17890`) — the
+            // webview's proxy endpoint creation PANICS on a malformed host:port rather
+            // than erroring, so validate host+port here and refuse cleanly if it's off.
+            let raw = crate::wallet::scanner::fold_fullwidth(proxy.as_deref().unwrap_or("").trim());
+            if raw.is_empty() {
+                return Ok(None);
+            }
+            let with_scheme = if raw.contains("://") { raw.clone() } else { format!("socks5://{raw}") };
+            let parsed: tauri::Url = with_scheme
+                .parse()
+                .map_err(|_| format!("Invalid proxy address \"{raw}\" — expected host:port."))?;
+            if parsed.host_str().is_none() || parsed.port().is_none() {
+                return Err(format!("Invalid proxy address \"{raw}\" — expected host:port (e.g. 127.0.0.1:9050)."));
+            }
+            Ok(Some(parsed))
+        }
         _ => Ok(None),
     }
 }
@@ -626,5 +654,322 @@ mod tests {
         assert!(!version_gt("2.0.0", "2.0.1"));
         assert!(version_gt("2.1.0-beta", "2.0.0"));
         assert!(!version_gt("2.0.0-beta", "2.0.0")); // prerelease suffix ignored
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenAlias resolution (RFC 8484 binary DoH, DNSSEC-gated)
+//
+// Resolve a human-readable OpenAlias name (FQDN `donate.getmonero.org` or
+// email-form `donate@getmonero.org`) to a crypto address via a DNS TXT
+// `oa1:<ticker>` record. The lookup goes over the SAME Tor/SOCKS/clearnet routing
+// as every other outbound request (no clearnet DNS leak in Tor mode), and we
+// FAIL CLOSED unless the resolver reports DNSSEC-authenticated data (AD bit).
+// For XMR the resolved address is re-validated natively before it's returned.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct OpenAliasResult {
+    pub address: String,
+    #[serde(rename = "recipientName")]
+    pub recipient_name: Option<String>,
+    #[serde(rename = "txDescription")]
+    pub tx_description: Option<String>,
+    /// Always true — a result is only returned when the resolver's AD bit is set.
+    pub dnssec: bool,
+    pub ticker: String,
+}
+
+/// Normalize a user-entered OpenAlias name into a bare FQDN. Email-form
+/// (`local@domain`) collapses to `local.domain`; lowercased; trailing dot
+/// stripped. Rejects whitespace and non-FQDN inputs (a bare `@handle` has no
+/// dot after normalization → rejected, which lets the caller fall back to the
+/// xmr.bio `@handle` resolver).
+fn normalize_openalias_name(name: &str) -> Result<String, String> {
+    let mut s = name.trim().to_lowercase();
+    if s.is_empty() {
+        return Err("empty OpenAlias name".into());
+    }
+    if s.chars().any(|c| c.is_whitespace()) {
+        return Err("OpenAlias name must not contain whitespace".into());
+    }
+    if s.matches('@').count() > 1 {
+        return Err("invalid OpenAlias name".into());
+    }
+    if let Some(at) = s.find('@') {
+        s.replace_range(at ..= at, ".");
+    }
+    let s = s.trim_end_matches('.').to_string();
+    // Require ≥2 non-empty labels — rejects bare handles (`alice`, `@alice`) and
+    // malformed names with empty labels (`foo..bar`, leading `.`), so a bare
+    // `@handle` falls through to the xmr.bio resolver.
+    let labels: Vec<&str> = s.split('.').collect();
+    if labels.len() < 2 || labels.iter().any(|l| l.is_empty()) {
+        return Err("not a fully-qualified OpenAlias name (needs a domain)".into());
+    }
+    Ok(s)
+}
+
+/// True when `record` is an `oa1:<ticker>` record. The ticker is the first
+/// whitespace-delimited token after the `oa1:` prefix, so `oa1:xmrig …` does NOT
+/// match ticker `xmr`.
+fn oa1_ticker_matches(record: &str, ticker: &str) -> bool {
+    record
+        .trim_start()
+        .strip_prefix("oa1:")
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(|tk| tk.eq_ignore_ascii_case(ticker))
+        .unwrap_or(false)
+}
+
+/// Extract an OpenAlias `key=value;` field. Values may contain spaces
+/// (e.g. recipient_name) and are terminated by `;`.
+fn oa1_field(record: &str, key: &str) -> Option<String> {
+    let rest = record.trim_start().strip_prefix("oa1:")?;
+    // Skip the ticker token; fields begin at the first whitespace.
+    let after_ticker = match rest.find(char::is_whitespace) {
+        Some(i) => &rest[i ..],
+        None => return None,
+    };
+    let needle = format!("{key}=");
+    for seg in after_ticker.split(';') {
+        let seg = seg.trim();
+        if let Some(v) = seg.strip_prefix(&needle) {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Pick the single `oa1:<ticker>` record from the TXT set. Rejects when none
+/// match, or when multiple records advertise DIFFERENT recipient_address values
+/// (ambiguous → could silently misroute); identical duplicates are accepted.
+fn select_oa1_record(txts: &[String], ticker: &str) -> Result<String, String> {
+    let matches: Vec<&String> = txts.iter().filter(|t| oa1_ticker_matches(t, ticker)).collect();
+    if matches.is_empty() {
+        return Err(format!("no OpenAlias oa1:{ticker} record found"));
+    }
+    let first_addr = oa1_field(matches[0], "recipient_address");
+    if matches.iter().any(|t| oa1_field(t, "recipient_address") != first_addr) {
+        return Err("ambiguous OpenAlias: multiple records with different addresses".into());
+    }
+    Ok(matches[0].clone())
+}
+
+/// Parse a validated `oa1:<ticker>` record into (address, recipient_name?, tx_description?).
+fn parse_oa1_record(record: &str) -> Result<(String, Option<String>, Option<String>), String> {
+    let address = oa1_field(record, "recipient_address")
+        .filter(|s| !s.is_empty())
+        .ok_or("OpenAlias record missing recipient_address")?;
+    let recipient_name = oa1_field(record, "recipient_name").filter(|s| !s.is_empty());
+    let tx_description = oa1_field(record, "tx_description").filter(|s| !s.is_empty());
+    Ok((address, recipient_name, tx_description))
+}
+
+/// Apply the fail-closed gate to a DoH response and select the oa1 record.
+/// Split out from the network path so every rejection branch is unit-testable.
+fn evaluate_response(noerror: bool, authentic: bool, truncated: bool, txts: &[String], ticker: &str) -> Result<String, String> {
+    if truncated {
+        // OpenAlias records fit well under 512 bytes; a TC=1 is anomalous. Reject
+        // rather than silently retry over TCP/POST (deliberate v1 non-retry).
+        return Err("DNS response was truncated (TC=1)".into());
+    }
+    if !noerror {
+        return Err("DNS lookup failed (non-success response code)".into());
+    }
+    if !authentic {
+        return Err("DNSSEC not validated (AD=0) — the domain's zone must be DNSSEC-signed to resolve securely".into());
+    }
+    select_oa1_record(txts, ticker)
+}
+
+/// Build the base64url-encoded (no padding) DNS query for `?dns=` DoH GET:
+/// a single TXT question with the DNSSEC-OK bit set.
+fn build_doh_query(fqdn: &str) -> Result<String, String> {
+    let name = Name::from_ascii(fqdn).map_err(|e| format!("invalid DNS name: {e}"))?;
+    let query = Query::query(name, RecordType::TXT);
+    let mut msg = Message::new();
+    msg.set_id(0)
+        .set_message_type(MessageType::Query)
+        .set_op_code(OpCode::Query)
+        .set_recursion_desired(true)
+        .add_query(query);
+    let mut edns = Edns::new();
+    edns.set_dnssec_ok(true);
+    edns.set_max_payload(1232);
+    msg.set_edns(edns);
+    let wire = msg.to_bytes().map_err(|e| format!("DNS encode failed: {e}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(wire))
+}
+
+/// Concatenate each answer's TXT char-strings into whole-record strings.
+fn extract_txt_records(msg: &Message) -> Vec<String> {
+    msg.answers()
+        .iter()
+        .filter_map(|rec| match rec.data() {
+            Some(RData::TXT(txt)) => {
+                let mut s = String::new();
+                for chunk in txt.txt_data() {
+                    s.push_str(&String::from_utf8_lossy(chunk));
+                }
+                Some(s)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Resolve an OpenAlias name to a crypto address for `ticker`. Routed over the
+/// configured transport; DNSSEC-gated; XMR addresses re-validated natively.
+#[tauri::command]
+pub async fn resolve_openalias(app: AppHandle, name: String, ticker: String) -> Result<OpenAliasResult, String> {
+    let ticker = ticker.trim().to_lowercase();
+    if ticker.is_empty() {
+        return Err("ticker is required".into());
+    }
+    let fqdn = normalize_openalias_name(&name)?;
+    let query = build_doh_query(&fqdn)?;
+    let url = format!("{OPENALIAS_DOH_ENDPOINT}?dns={query}");
+    let headers: &[(&str, &str)] = &[("Accept", "application/dns-message")];
+
+    let mode = crate::wallet::scanner::read_routing_mode(&app);
+    crate::emit_log(&app, "OPENALIAS", "process", &format!("resolving \"{fqdn}\" ({ticker}) via {mode} → {OPENALIAS_DOH_ENDPOINT}"));
+    let bytes: Vec<u8> = match mode.as_str() {
+        "tor" => match app.state::<crate::tor::TorState>().get_client().await {
+            Some(tor) => crate::tor::tor_get_with_headers(&tor, &url, headers).await?,
+            None => return Err("Tor is not connected yet (required for OpenAlias resolution)".into()),
+        },
+        "custom" => {
+            let proxy = crate::wallet::scanner::read_proxy_address(&app);
+            if proxy.trim().is_empty() {
+                return Err("Custom routing selected but no proxy address is set".into());
+            }
+            crate::tor::socks_get_with_headers(&proxy, &url, headers).await?
+        }
+        _ => {
+            let resp = reqwest::Client::new()
+                .get(&url)
+                .header("Accept", "application/dns-message")
+                .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
+                .timeout(Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            resp.bytes().await.map_err(|e| e.to_string())?.to_vec()
+        }
+    };
+
+    crate::emit_log(&app, "OPENALIAS", "info", &format!("DoH response: {} bytes", bytes.len()));
+    let msg = Message::from_vec(&bytes).map_err(|e| format!("failed to parse DNS response ({} bytes — is the resolver HTTP/1.1-capable?): {e}", bytes.len()))?;
+    let noerror = msg.response_code() == ResponseCode::NoError;
+    let txts = extract_txt_records(&msg);
+    crate::emit_log(&app, "OPENALIAS", "info", &format!("rcode={:?} AD={} TC={} txt_records={}", msg.response_code(), msg.authentic_data(), msg.truncated(), txts.len()));
+    let record = evaluate_response(noerror, msg.authentic_data(), msg.truncated(), &txts, &ticker)?;
+    let (address, recipient_name, tx_description) = parse_oa1_record(&record)?;
+
+    // For Monero, re-validate the resolved address against the active network so a
+    // poisoned/misformatted record can never reach prepare_transfer.
+    if ticker == "xmr" {
+        let network = app.state::<WalletState>().get_network().await;
+        MoneroAddress::from_str(network, &address)
+            .map_err(|e| format!("resolved XMR address failed validation: {e}"))?;
+    }
+
+    crate::emit_log(&app, "OPENALIAS", "success", &format!("{fqdn} → {address}"));
+    Ok(OpenAliasResult { address, recipient_name, tx_description, dnssec: true, ticker })
+}
+
+#[cfg(test)]
+mod openalias_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_email_form() {
+        assert_eq!(normalize_openalias_name("Donate@GetMonero.org").unwrap(), "donate.getmonero.org");
+    }
+    #[test]
+    fn normalize_strips_trailing_dot() {
+        assert_eq!(normalize_openalias_name("donate.getmonero.org.").unwrap(), "donate.getmonero.org");
+    }
+    #[test]
+    fn normalize_rejects_bare_handle() {
+        assert!(normalize_openalias_name("alice").is_err());
+        assert!(normalize_openalias_name("@alice").is_err());
+    }
+    #[test]
+    fn normalize_rejects_whitespace() {
+        assert!(normalize_openalias_name("foo bar.com").is_err());
+    }
+
+    #[test]
+    fn parse_valid_xmr_record() {
+        let rec = "oa1:xmr recipient_address=44AFFq5kSiGBoZ;recipient_name=Monero Donations;";
+        let (addr, name, _) = parse_oa1_record(rec).unwrap();
+        assert_eq!(addr, "44AFFq5kSiGBoZ");
+        assert_eq!(name.as_deref(), Some("Monero Donations"));
+    }
+    #[test]
+    fn parse_missing_address_errs() {
+        assert!(parse_oa1_record("oa1:xmr recipient_name=Foo;").is_err());
+    }
+    #[test]
+    fn select_wrong_ticker_errs() {
+        let txts = vec!["oa1:btc recipient_address=bc1qxyz;".to_string()];
+        assert!(select_oa1_record(&txts, "xmr").is_err());
+    }
+    #[test]
+    fn select_ambiguous_errs() {
+        let txts = vec![
+            "oa1:xmr recipient_address=AAA;".to_string(),
+            "oa1:xmr recipient_address=BBB;".to_string(),
+        ];
+        assert!(select_oa1_record(&txts, "xmr").is_err());
+    }
+    #[test]
+    fn select_identical_dupes_ok() {
+        let txts = vec![
+            "oa1:xmr recipient_address=AAA;".to_string(),
+            "oa1:xmr recipient_address=AAA;".to_string(),
+        ];
+        assert_eq!(select_oa1_record(&txts, "xmr").unwrap(), "oa1:xmr recipient_address=AAA;");
+    }
+    #[test]
+    fn select_ignores_non_oa1_txt() {
+        let txts = vec![
+            "v=spf1 include:_spf.google.com ~all".to_string(),
+            "oa1:xmr recipient_address=AAA;".to_string(),
+        ];
+        let rec = select_oa1_record(&txts, "xmr").unwrap();
+        assert_eq!(oa1_field(&rec, "recipient_address").as_deref(), Some("AAA"));
+    }
+    #[test]
+    fn oa1_prefix_not_confused_by_similar_ticker() {
+        let txts = vec!["oa1:xmrig recipient_address=ZZZ;".to_string()];
+        assert!(select_oa1_record(&txts, "xmr").is_err());
+    }
+
+    #[test]
+    fn evaluate_rejects_ad_false() {
+        let txts = vec!["oa1:xmr recipient_address=AAA;".to_string()];
+        assert!(evaluate_response(true, false, false, &txts, "xmr").is_err());
+    }
+    #[test]
+    fn evaluate_rejects_non_noerror() {
+        let txts = vec!["oa1:xmr recipient_address=AAA;".to_string()];
+        assert!(evaluate_response(false, true, false, &txts, "xmr").is_err());
+    }
+    #[test]
+    fn evaluate_rejects_truncated() {
+        let txts = vec!["oa1:xmr recipient_address=AAA;".to_string()];
+        assert!(evaluate_response(true, true, true, &txts, "xmr").is_err());
+    }
+    #[test]
+    fn evaluate_rejects_empty_answer() {
+        assert!(evaluate_response(true, true, false, &[], "xmr").is_err());
+    }
+    #[test]
+    fn evaluate_accepts_valid() {
+        let txts = vec!["oa1:xmr recipient_address=AAA;recipient_name=Foo;".to_string()];
+        assert_eq!(evaluate_response(true, true, false, &txts, "xmr").unwrap(), txts[0]);
     }
 }

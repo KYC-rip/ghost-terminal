@@ -35,10 +35,31 @@ pub(crate) fn read_routing_mode(app: &AppHandle) -> String {
 }
 
 /// Read the external SOCKS proxy address (custom routing mode) from config.json,
+/// Fold fullwidth ASCII variants (U+FF01..U+FF5E, e.g. `：` `．` fullwidth digits)
+/// and the ideographic space back to their ASCII equivalents. A CJK IME commonly
+/// emits a fullwidth colon `：` for `host：port`, which every downstream parser
+/// (tokio-socks, reqwest, the webview proxy) rejects — and the webview one PANICS.
+/// Normalizing at the single read point makes the whole app tolerate the typo.
+pub(crate) fn fold_fullwidth(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            let u = c as u32;
+            if (0xFF01 ..= 0xFF5E).contains(&u) {
+                char::from_u32(u - 0xFEE0).unwrap_or(c)
+            } else if u == 0x3000 {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// normalized to a bare `host:port` (tokio-socks wants no scheme prefix).
 pub(crate) fn read_proxy_address(app: &AppHandle) -> String {
     let raw = read_config_str(app, "systemProxyAddress").unwrap_or_default();
-    let trimmed = raw.trim();
+    let folded = fold_fullwidth(&raw);
+    let trimmed = folded.trim();
     for prefix in ["socks5h://", "socks5://", "socks://", "http://"] {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             return rest.trim_end_matches('/').to_string();
@@ -1266,6 +1287,27 @@ async fn pool_loop<C: DaemonConnector>(
             let _ = storage::save_output_cache(&data_dir, &identity_id, &cache);
             log::info!("[bg {short}] {scan_height} / {daemon_height} ({} outputs)", cache.outputs.len());
         }
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::fold_fullwidth;
+
+    #[test]
+    fn folds_fullwidth_colon_and_digits() {
+        // CJK-IME fullwidth colon + fullwidth digits → ASCII host:port.
+        assert_eq!(fold_fullwidth("127.0.0.1：17890"), "127.0.0.1:17890");
+        assert_eq!(fold_fullwidth("１２７．０．０．１：９０５０"), "127.0.0.1:9050");
+    }
+    #[test]
+    fn leaves_ascii_untouched() {
+        assert_eq!(fold_fullwidth("127.0.0.1:9050"), "127.0.0.1:9050");
+        assert_eq!(fold_fullwidth("socks5://localhost:1080"), "socks5://localhost:1080");
+    }
+    #[test]
+    fn folds_ideographic_space() {
+        assert_eq!(fold_fullwidth("a\u{3000}b"), "a b");
     }
 }
 

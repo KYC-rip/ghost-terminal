@@ -242,13 +242,19 @@ pub async fn tor_http(
 /// clearnet. Note: some CDNs/APIs block Tor exit nodes — callers MUST treat a
 /// failure as "degrade gracefully" (cached nodes, live-tick chart), never fatal.
 pub async fn tor_get(tor: &TorClient<PreferredRuntime>, url: &str) -> Result<Vec<u8>, String> {
+    tor_get_with_headers(tor, url, &[]).await
+}
+
+/// Like `tor_get` but attaches caller-supplied request headers (e.g. a DoH
+/// `Accept: application/dns-message`). Same graceful-degradation contract.
+pub async fn tor_get_with_headers(tor: &TorClient<PreferredRuntime>, url: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
     let (https, host, port, path) = parse_url(url)?;
     let exchange = async {
         let stream = tor
             .connect((host.as_str(), port))
             .await
             .map_err(|e| format!("Tor connect to {host}:{port} failed: {e}"))?;
-        http_get_over(stream, https, &host, &path).await
+        http_get_over(stream, https, &host, &path, extra_headers).await
     };
     tokio::time::timeout(TOR_REQUEST_TIMEOUT, exchange)
         .await
@@ -259,12 +265,17 @@ pub async fn tor_get(tor: &TorClient<PreferredRuntime>, url: &str) -> Result<Vec
 /// targets are passed to the proxy for REMOTE resolution (SOCKS5h). Same
 /// graceful-degradation contract as `tor_get`.
 pub async fn socks_get(proxy: &str, url: &str) -> Result<Vec<u8>, String> {
+    socks_get_with_headers(proxy, url, &[]).await
+}
+
+/// Like `socks_get` but attaches caller-supplied request headers (DoH `Accept`).
+pub async fn socks_get_with_headers(proxy: &str, url: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
     let (https, host, port, path) = parse_url(url)?;
     let exchange = async {
         let stream = Socks5Stream::connect(proxy, (host.as_str(), port))
             .await
             .map_err(|e| format!("SOCKS connect to {host}:{port} via {proxy} failed: {e}"))?;
-        http_get_over(stream, https, &host, &path).await
+        http_get_over(stream, https, &host, &path, extra_headers).await
     };
     tokio::time::timeout(TOR_REQUEST_TIMEOUT, exchange)
         .await
@@ -274,18 +285,23 @@ pub async fn socks_get(proxy: &str, url: &str) -> Result<Vec<u8>, String> {
 /// Issue a GET over an already-connected byte stream, wrapping in TLS first when
 /// the scheme is https. Shared by `tor_get` (arti DataStream) and `socks_get`
 /// (SOCKS5 stream) — only the stream source differs.
-async fn http_get_over<S>(stream: S, https: bool, host: &str, path: &str) -> Result<Vec<u8>, String>
+async fn http_get_over<S>(stream: S, https: bool, host: &str, path: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let request = Request::builder()
+    let mut builder = Request::builder()
         .method(Method::GET)
         .uri(path)
         .header(hyper::header::HOST, host)
         // GitHub's API 403s without a User-Agent; harmless for other GETs.
         .header(hyper::header::USER_AGENT, concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
         // No connection reuse — ask the server to close after the response.
-        .header(hyper::header::CONNECTION, "close")
+        .header(hyper::header::CONNECTION, "close");
+    // Caller-supplied headers (e.g. `Accept: application/dns-message` for DoH).
+    for (k, v) in extra_headers {
+        builder = builder.header(*k, *v);
+    }
+    let request = builder
         .body(Full::new(Bytes::new()))
         .map_err(|e| format!("Failed to build request: {e}"))?;
 

@@ -102,6 +102,10 @@ hex = "0.4"
 tokio-socks = "0.5.3"
 # Base64 for the skin-background data URL (match the version already in-tree)
 base64 = "0.21"
+# DNS wire-format build/parse for OpenAlias resolution (RFC 8484 binary DoH). We do
+# the transport ourselves over Tor, so only the message codec is needed — no resolver
+# or async runtime features.
+hickory-proto = { version = "0.24", default-features = false }
 
 # Compile ALL dependencies with full optimization even in dev builds. Block
 # scanning is almost entirely ed25519/curve25519 work, which runs 10-50x slower

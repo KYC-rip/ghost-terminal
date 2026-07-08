@@ -173,6 +173,7 @@ pub fn run() {
             commands::system::select_background_image,
             commands::system::check_for_updates,
             commands::system::proxied_get,
+            commands::system::resolve_openalias,
             commands::system::ros_native_fetch,
             commands::system::open_native_browser,
             commands::system::browser_embed_open,
