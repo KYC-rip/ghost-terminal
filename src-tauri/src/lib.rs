@@ -8,6 +8,7 @@ mod agent;
 mod commands;
 mod wallet;
 mod tor;
+mod updater;
 
 use tauri::{AppHandle, Emitter, Manager};
 

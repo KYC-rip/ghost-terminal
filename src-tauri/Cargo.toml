@@ -119,6 +119,13 @@ tiny-keccak = { version = "2", features = ["keccak"] }
 # Hex encoding
 hex = "0.4"
 tokio-socks = "0.5.3"
+
+# Signed OTA updates for the RipleyOS UI bundle (see src/updater/): Ed25519 verify of
+# the manifest signature, a pinned pubkey, and .tar.zst archive decompression.
+ed25519-dalek = "2"
+hex-literal = "0.4"
+tar = "0.4"
+zstd = "0.13"
 # Base64 for the skin-background data URL (match the version already in-tree)
 base64 = "0.21"
 # DNS wire-format build/parse for OpenAlias resolution (RFC 8484 binary DoH). We do
