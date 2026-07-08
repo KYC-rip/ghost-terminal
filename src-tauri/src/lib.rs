@@ -200,10 +200,22 @@ pub fn run() {
             // to the wallet invoke surface (no fs/shell/dialog/core:default).
             // Built AFTER every manage() above so an early IPC call finds its state.
             let ui_mode = commands::config::read_ui_mode(app.handle());
+            // ROS_URL is a DEV-ONLY override. In release it is IGNORED (with a loud
+            // warning if set): a shipped wallet must never be pointed at an
+            // attacker-chosen origin via an env var — that origin would inherit the
+            // ros_remote wallet-command surface. Release ROS mode is always the pinned
+            // app.ros.rip (Session B: the local ros:// bundle).
             let ros_override = std::env::var("ROS_URL")
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
+            #[cfg(not(debug_assertions))]
+            let ros_override: Option<String> = {
+                if let Some(u) = &ros_override {
+                    println!("[UI/warn] ROS_URL={u} ignored in release build (dev-only override)");
+                }
+                None
+            };
             let classic_url = || tauri::WebviewUrl::App("index.html".into());
             let window_url = if ui_mode == "ros" {
                 // Production loads remote app.ros.rip; dev builds default to the local
