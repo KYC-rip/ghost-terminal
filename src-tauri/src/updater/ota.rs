@@ -30,6 +30,13 @@ pub const OTA_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// server can't pin you forever on a stale-but-validly-signed version).
 pub const OTA_MAX_AGE_SECS: i64 = 30 * 24 * 3600;
 
+/// SHA-256 of the bundled fallback archive (`resources/ros-fallback.tar.zst`), shipped
+/// inside the signed binary and covered by the native build provenance. Re-checked at
+/// load: if the on-disk resource doesn't match, the binary's integrity is compromised.
+/// Regenerated together with the resource by `ripley-os/scripts/build-ota.mjs`.
+pub const FALLBACK_SHA256: &str =
+    "580b172eaa66d2977dbd35842efb785614013cbb864828c4a13def31ca4eadea";
+
 /// The signed manifest served at `OTA_MANIFEST_URL`. Its detached `.sig` is Ed25519
 /// over the RAW bytes of this document exactly as served — so we verify the bytes
 /// BEFORE JSON-parsing (no canonicalization ambiguity).
@@ -409,6 +416,59 @@ mod tests {
         assert_eq!(normalize_entry_path("assets/../../x"), None);
         assert_eq!(normalize_entry_path("/abs/path"), None);
         assert_eq!(normalize_entry_path("C:\\win"), None);
+    }
+
+    // ---- Golden fixture: a real bundle signed by the DEV key (which is the pinned
+    // OTA_UPDATE_PUBKEY), produced by ripley-os/scripts/build-ota.mjs. Exercises the whole
+    // chain against real bytes: verify (with the PINNED key) -> hash -> in-memory extract
+    // -> the index.html the ros:// handler will serve. Fixtures committed under
+    // src-tauri/tests/fixtures/ota/. -------------------------------------------------------
+    const FIX_MANIFEST: &[u8] = include_bytes!("../../tests/fixtures/ota/manifest.json");
+    const FIX_SIG: &[u8] = include_bytes!("../../tests/fixtures/ota/manifest.json.sig");
+    const FIX_ARCHIVE: &[u8] = include_bytes!("../../tests/fixtures/ota/ros-2.0.0.tar.zst");
+
+    #[test]
+    fn golden_fixture_verifies_end_to_end_with_the_pinned_key() {
+        // "now" = the manifest's own released time + 1h, so the freshness gate passes
+        // regardless of the wall clock when the suite runs.
+        let m_preview: Manifest = serde_json::from_slice(FIX_MANIFEST).unwrap();
+        let now = released_unix(&m_preview.released).unwrap() + 3600;
+
+        // Verify with the PINNED production key (not a test key) — proves the dev key that
+        // signed the fixture matches OTA_UPDATE_PUBKEY.
+        let m = evaluate_manifest(&OTA_UPDATE_PUBKEY, FIX_MANIFEST, FIX_SIG, now, "1.0.0", "2.0.0")
+            .expect("golden fixture must verify against the pinned key");
+        assert_eq!(m.version, "2.0.0");
+
+        // Archive bytes hash to the manifest's sha256.
+        assert!(verify_archive_hash(FIX_ARCHIVE, &m.sha256));
+
+        // Decompresses in memory and contains the SPA entry point.
+        let map = extract_tar_zst(FIX_ARCHIVE).unwrap();
+        assert!(map.contains_key("index.html"));
+        assert!(String::from_utf8_lossy(&map["index.html"]).contains("RipleyOS"));
+    }
+
+    #[test]
+    fn golden_fixture_tamper_is_rejected() {
+        let mut bad = FIX_MANIFEST.to_vec();
+        // flip a byte in the middle of the manifest → signature no longer matches.
+        let mid = bad.len() / 2;
+        bad[mid] ^= 0x01;
+        let now = released_unix(&serde_json::from_slice::<Manifest>(FIX_MANIFEST).unwrap().released)
+            .unwrap()
+            + 3600;
+        assert_eq!(
+            evaluate_manifest(&OTA_UPDATE_PUBKEY, &bad, FIX_SIG, now, "1.0.0", "2.0.0"),
+            Err(OtaReject::BadSignature)
+        );
+    }
+
+    #[test]
+    fn bundled_fallback_matches_pinned_hash() {
+        // The archive we ship as resources/ros-fallback.tar.zst (== the fixture archive)
+        // must match the pinned FALLBACK_SHA256 the loader re-checks at runtime.
+        assert!(verify_archive_hash(FIX_ARCHIVE, FALLBACK_SHA256));
     }
 
     #[test]
