@@ -75,19 +75,30 @@ impl SyncPool {
     }
 
     /// Stop one wallet's background sync (e.g. it just became the active wallet).
+    /// Awaits the aborted task (quiescence): an in-flight cache write is a sync fs
+    /// op that completes before the abort lands at the next await point, so once
+    /// this returns nothing is still touching that wallet's files.
     pub async fn stop(&self, id: &str) {
-        if let Some(e) = self.entries.lock().await.remove(id) {
+        let e = self.entries.lock().await.remove(id);
+        if let Some(e) = e {
             e.cancel.store(true, Ordering::SeqCst);
             e.handle.abort();
+            let _ = e.handle.await;
         }
     }
 
-    /// Stop everything (e.g. the "Sync all wallets" setting was turned off).
+    /// Stop everything (e.g. "Sync all wallets" turned off, or watch-sync
+    /// toggle-off about to delete the persisted view pairs). Awaits quiescence —
+    /// callers may delete files right after this returns.
     pub async fn stop_all(&self) {
-        let mut entries = self.entries.lock().await;
-        for (_, e) in entries.drain() {
+        let drained: Vec<Entry> = {
+            let mut entries = self.entries.lock().await;
+            entries.drain().map(|(_, e)| e).collect()
+        };
+        for e in drained {
             e.cancel.store(true, Ordering::SeqCst);
             e.handle.abort();
+            let _ = e.handle.await;
         }
     }
 

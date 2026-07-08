@@ -19,6 +19,15 @@ tauri-build = { version = "2", features = [] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView"] }
 
+# Device-bound key for the watch tier (encrypted output cache + persisted view
+# pairs). Feature set is deliberate: native stores on macOS/Windows, secret-service
+# on Linux — and NOT linux-keyutils (kernel keyring is in-memory only; the device
+# key would vanish every reboot, forcing a full rescan). keyring calls BLOCK and
+# must run inside spawn_blocking (they panic inside tokio on Linux otherwise).
+[dependencies.keyring]
+version = "3"
+features = ["apple-native", "windows-native", "sync-secret-service"]
+
 [dependencies]
 # Core framework
 # macos-proxy → wry/mac-proxy: without it WebviewWindowBuilder::proxy_url is a
@@ -100,6 +109,9 @@ argon2 = "0.5"
 chacha20poly1305 = "0.10"
 rand = "0.8"
 rand_core = { version = "0.6", features = ["getrandom"] }
+# Domain separation for the device key (cache vs watch subkeys) — already in tree.
+hkdf = "0.12"
+sha2 = "0.10"
 
 # Hashing (keccak256 for view key derivation)
 tiny-keccak = { version = "2", features = ["keccak"] }

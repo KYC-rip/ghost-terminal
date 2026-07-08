@@ -1,5 +1,6 @@
 pub mod state;
 pub mod scanner;
+pub mod device_key;
 pub mod keys;
 pub mod storage;
 pub mod transact;

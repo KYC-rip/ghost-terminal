@@ -61,6 +61,22 @@ pub async fn open_wallet(
     let app_clone = app.clone();
     BlockScanner::start(app_clone, "", "", scan_height).await?;
 
+    // Watch tier: persist this identity's VIEW pair (never spend material) so
+    // the next launch can start watch-only sync before any unlock. Consent-gated
+    // (watchSync) and encrypt-or-don't-write (save_watch refuses without the
+    // device key). Best-effort — a keychain hiccup must not fail the unlock.
+    if crate::wallet::scanner::read_config_bool(&app, "watchSync") {
+        match state.derive_view_pair_and_parts_for(&name, &password).await {
+            Ok((_vp, spend_pub, view_sec)) => {
+                let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if let Err(e) = crate::wallet::storage::save_watch(&data_dir, &name, &spend_pub, &view_sec) {
+                    log::warn!("watch store write for {name} failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("watch parts derivation for {name} failed: {e}"),
+        }
+    }
+
     refresh_pool(&app, &state, &pool, &name, &password).await;
 
     Ok(serde_json::json!({ "success": true }))
@@ -85,12 +101,21 @@ pub(crate) async fn refresh_pool(
     // The active wallet is scanned by WalletState — never double-scan it.
     pool.stop(active_id).await;
 
+    let watch_on = crate::wallet::scanner::read_config_bool(app, "watchSync");
+    let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     for id in crate::commands::identity::identity_ids(app) {
         if id == active_id {
             continue;
         }
         // Same-password wallets decrypt; others are skipped (start when opened).
-        if let Ok(view_pair) = state.derive_view_pair_for(&id, password).await {
+        if let Ok((view_pair, spend_pub, view_sec)) = state.derive_view_pair_and_parts_for(&id, password).await {
+            // Watch tier: pooled identities persist their view pair too, so the
+            // next launch boot-syncs them all (encrypt-or-don't-write inside).
+            if watch_on {
+                if let Err(e) = crate::wallet::storage::save_watch(&data_dir, &id, &spend_pub, &view_sec) {
+                    log::warn!("watch store write for {id} failed: {e}");
+                }
+            }
             pool.start(app, id, view_pair, 0).await;
         }
     }

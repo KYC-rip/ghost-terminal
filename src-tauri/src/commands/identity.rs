@@ -197,12 +197,13 @@ pub async fn delete_identity(app: AppHandle, id: String) -> Result<(), String> {
     ids.retain(|i| i.id != id);
     save_identities_to_disk(&app, &ids)?;
 
-    // Delete wallet files
+    // Delete wallet files (vault + cache + persisted watch view-pair)
     let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let wallet_file = data_dir.join("wallets").join(format!("{}.vault", id));
     let cache_file = data_dir.join("wallets").join(format!("{}.cache", id));
     std::fs::remove_file(wallet_file).ok();
     std::fs::remove_file(cache_file).ok();
+    crate::wallet::storage::delete_watch(&data_dir, &id);
 
     log::info!("Identity deleted: {}", id);
     Ok(())

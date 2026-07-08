@@ -1,0 +1,178 @@
+//! Device-bound keys for the "watch tier": the encrypted output cache and the
+//! persisted view pairs (boot-time view-only sync). Tier model:
+//!
+//!   watch tier  — output cache + view key   → gated by THESE keys
+//!   spend tier  — spend key + mnemonic      → gated by the user's password, always
+//!
+//! TWO device keys, deliberately different backends:
+//!
+//! * CACHE key — random 32 bytes in a 0600 file next to the app data. Chosen so
+//!   that sealing the cache NEVER triggers an OS keychain prompt (macOS shows a
+//!   scary ACL password dialog, and unsigned/dev builds re-prompt every rebuild —
+//!   users who never opted into anything must never see that). A key file beside
+//!   the data defeats grep/backup-tool exposure, not a full-disk attacker — still
+//!   strictly better than the historical plaintext cache, at zero UX cost.
+//!
+//! * WATCH key — the OS keychain (macOS Keychain / Windows Credential Manager /
+//!   Linux secret-service), loaded LAZILY: only when the user enables sync-at-
+//!   launch (the prompt then has obvious context) or at boot after they already
+//!   consented. The view key deserves the stronger backend: keychain material is
+//!   only released to this app in an unlocked session, so a cold-seized disk
+//!   doesn't yield it. Denied/unavailable → the watch store REFUSES to write
+//!   (encrypt-or-don't-write, never plaintext) and enabling fails with a clear
+//!   error instead of silently degrading.
+//!
+//! Subkeys are HKDF-SHA256-derived with distinct info strings, so no AEAD context
+//! ever reuses a raw root key.
+
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+
+use hkdf::Hkdf;
+use rand::RngCore;
+use sha2::Sha256;
+use tauri::{AppHandle, Manager};
+use zeroize::Zeroizing;
+
+const KEYRING_SERVICE: &str = "ripley-terminal";
+const KEYRING_ENTRY: &str = "watch-key-v1";
+const CACHE_KEY_FILE: &str = "device.key";
+
+/// File-backed root for the cache key. Loaded once at boot; None only if the
+/// filesystem refuses us (then the cache degrades to legacy plaintext).
+static FILE_KEY: OnceLock<Option<Zeroizing<[u8; 32]>>> = OnceLock::new();
+
+/// Keychain-backed root for the watch key. Lazily populated by
+/// `ensure_watch_key` (user-action or consented-boot); a failed/denied attempt
+/// stays None and MAY be retried — the user can click Enable again.
+static WATCH_ROOT: Mutex<Option<Zeroizing<[u8; 32]>>> = Mutex::new(None);
+
+/// Load (or create on first run) the FILE key. No prompts, no keychain — safe to
+/// call unconditionally at startup. Idempotent.
+pub fn init_file_key(app: &AppHandle) {
+    if FILE_KEY.get().is_some() {
+        return;
+    }
+    let path = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(CACHE_KEY_FILE);
+    let _ = FILE_KEY.set(load_or_create_file_key(&path));
+}
+
+fn load_or_create_file_key(path: &std::path::Path) -> Option<Zeroizing<[u8; 32]>> {
+    if let Ok(bytes) = std::fs::read(path) {
+        if bytes.len() == 32 {
+            let mut k = Zeroizing::new([0u8; 32]);
+            k.copy_from_slice(&bytes);
+            return Some(k);
+        }
+        log::warn!("cache device key file has unexpected length {}; regenerating", bytes.len());
+    }
+    let mut k = Zeroizing::new([0u8; 32]);
+    rand::rngs::OsRng.fill_bytes(&mut *k);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(path, &k[..]) {
+        log::warn!("cache device key write failed ({e}); cache stays plaintext");
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    log::info!("cache device key created");
+    Some(k)
+}
+
+/// Load (or create) the keychain WATCH root. Call ONLY on a consent-backed path
+/// (Enable click, or boot when watchSync is already on) — this is what can show
+/// the OS keychain prompt. Blocking keyring work runs in spawn_blocking (it
+/// panics inside tokio on Linux otherwise). Returns whether the key is ready.
+pub async fn ensure_watch_key() -> bool {
+    if WATCH_ROOT.lock().map(|g| g.is_some()).unwrap_or(false) {
+        return true;
+    }
+    let loaded = tokio::task::spawn_blocking(load_or_create_keychain_key)
+        .await
+        .unwrap_or(None);
+    match loaded {
+        Some(k) => {
+            if let Ok(mut g) = WATCH_ROOT.lock() {
+                *g = Some(k);
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+fn load_or_create_keychain_key() -> Option<Zeroizing<[u8; 32]>> {
+    let entry = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_ENTRY) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("watch key: keychain entry unavailable ({e})");
+            return None;
+        }
+    };
+    match entry.get_secret() {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut k = Zeroizing::new([0u8; 32]);
+            k.copy_from_slice(&bytes);
+            Some(k)
+        }
+        Ok(bytes) => {
+            // Wrong-sized secret = corrupt/foreign entry. Don't overwrite it (it may
+            // belong to something else); treat the keychain as unavailable.
+            log::warn!("watch key: keychain entry has unexpected length {}", bytes.len());
+            None
+        }
+        Err(keyring::Error::NoEntry) => {
+            let mut k = Zeroizing::new([0u8; 32]);
+            rand::rngs::OsRng.fill_bytes(&mut *k);
+            match entry.set_secret(&*k) {
+                Ok(()) => {
+                    log::info!("watch key: created new keychain entry");
+                    Some(k)
+                }
+                Err(e) => {
+                    // Could not PERSIST the key → nothing encrypted with it would
+                    // survive a restart. Refuse rather than strand data.
+                    log::warn!("watch key: keychain write failed ({e})");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            // NoStorageAccess / PlatformFailure / user denied the ACL prompt.
+            log::warn!("watch key: keychain read failed ({e})");
+            None
+        }
+    }
+}
+
+/// HKDF-SHA256 subkey with a domain-separating info string.
+fn subkey(root: &[u8; 32], info: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
+    let hk = Hkdf::<Sha256>::new(None, &root[..]);
+    let mut out = Zeroizing::new([0u8; 32]);
+    hk.expand(info, &mut *out).ok()?;
+    Some(out)
+}
+
+/// Key for the encrypted output cache (file-key root — never prompts).
+/// None → cache stays plaintext (legacy).
+pub fn cache_key() -> Option<Zeroizing<[u8; 32]>> {
+    let root = FILE_KEY.get()?.as_ref()?;
+    subkey(root, b"ripley/cache-v1")
+}
+
+/// Key for the persisted view pairs (keychain root — consent-gated, lazy).
+/// None → watch store refuses to write and boot sync is skipped.
+pub fn watch_key() -> Option<Zeroizing<[u8; 32]>> {
+    let g = WATCH_ROOT.lock().ok()?;
+    let root = g.as_ref()?;
+    subkey(root, b"ripley/watch-v1")
+}

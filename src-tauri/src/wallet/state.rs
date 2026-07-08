@@ -1057,6 +1057,18 @@ impl WalletState {
         identity_id: &str,
         password: &str,
     ) -> Result<ViewPair, String> {
+        Ok(self.derive_view_pair_and_parts_for(identity_id, password).await?.0)
+    }
+
+    /// Like `derive_view_pair_for`, but also returns the raw watch-store parts:
+    /// the compressed spend PUBLIC point and the view SECRET scalar bytes —
+    /// exactly the two fields the `.watch` file persists (never spend material).
+    /// One call = one Argon2 decrypt, so paths needing both don't pay twice.
+    pub async fn derive_view_pair_and_parts_for(
+        &self,
+        identity_id: &str,
+        password: &str,
+    ) -> Result<(ViewPair, [u8; 32], Zeroizing<[u8; 32]>), String> {
         let data_dir = self.inner.read().await.data_dir.clone();
         let wallet_data = storage::load_wallet(&data_dir, identity_id, password)?;
         let entropy: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
@@ -1066,7 +1078,25 @@ impl WalletState {
         let (spend_key, view_key) = keys::keys_from_entropy(&entropy)?;
         let dalek_scalar: curve25519_dalek::Scalar = (*spend_key).into();
         let spend_point = Point::from(&dalek_scalar * ED25519_BASEPOINT_POINT);
-        ViewPair::new(spend_point, view_key).map_err(|e| format!("Failed to create ViewPair: {:?}", e))
+        let spend_pub = spend_point.compress().to_bytes();
+        let view_sec = Zeroizing::new(<[u8; 32]>::from(*view_key));
+        let vp = ViewPair::new(spend_point, view_key)
+            .map_err(|e| format!("Failed to create ViewPair: {:?}", e))?;
+        Ok((vp, spend_pub, view_sec))
+    }
+
+    /// Watch-store parts for the CURRENTLY-UNLOCKED wallet, from in-memory keys
+    /// (no password re-entry): (identity_id, compressed spend PUBLIC point, view
+    /// SECRET scalar bytes). None while locked. Lets the in-app consent flow
+    /// persist the watch pair the moment the user opts in.
+    pub async fn watch_parts_from_memory(&self) -> Option<(String, [u8; 32], Zeroizing<[u8; 32]>)> {
+        let inner = self.inner.read().await;
+        let id = inner.active_identity.clone()?;
+        let vp = inner.view_pair.as_ref()?;
+        let view_key = inner.view_key.as_ref()?;
+        let spend_pub = vp.spend().compress().to_bytes();
+        let view_sec = Zeroizing::new(<[u8; 32]>::from(**view_key));
+        Some((id, spend_pub, view_sec))
     }
 
     /// Increment scanner generation — any running scanner with an older generation will stop.

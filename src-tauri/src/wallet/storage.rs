@@ -238,36 +238,207 @@ fn output_cache_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, Stri
     Ok(data_dir.join("wallets").join(format!("{}.cache", identity_id)))
 }
 
-/// Save output cache to disk (plaintext — outputs don't contain secret keys).
-/// The output data is already committed on-chain, so no privacy loss from caching.
-pub fn save_output_cache(data_dir: &Path, identity_id: &str, cache: &OutputCache) -> Result<(), String> {
-    let path = output_cache_path(data_dir, identity_id)?;
+// ── Device-key sealed container (watch tier) ────────────────────────────────
+// Format: b"RIPC1" magic + 12B nonce + ChaCha20-Poly1305 ciphertext. The key is
+// a high-entropy HKDF subkey of the keychain device key (see wallet::device_key),
+// so no password KDF is involved — this protects data at rest from disk readers,
+// not from someone who controls the unlocked OS session.
+
+const SEAL_MAGIC: &[u8; 5] = b"RIPC1";
+
+fn seal(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Vec<u8> {
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let mut nonce = [0u8; NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let ct = cipher.encrypt(&nonce.into(), plaintext).expect("ChaCha20Poly1305 encrypt");
+    let mut out = Vec::with_capacity(SEAL_MAGIC.len() + NONCE_LEN + ct.len());
+    out.extend_from_slice(SEAL_MAGIC);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ct);
+    out
+}
+
+fn open_sealed(key: &[u8; KEY_LEN], data: &[u8]) -> Option<Vec<u8>> {
+    let body = data.strip_prefix(SEAL_MAGIC.as_slice())?;
+    if body.len() < NONCE_LEN {
+        return None;
+    }
+    let (nonce, ct) = body.split_at(NONCE_LEN);
+    let cipher = ChaCha20Poly1305::new(key.into());
+    cipher.decrypt(nonce.into(), ct).ok()
+}
+
+fn is_sealed(data: &[u8]) -> bool {
+    data.starts_with(SEAL_MAGIC)
+}
+
+/// Atomic temp-then-rename write, so an interrupted write can't leave a
+/// truncated file (which loaders would discard, forcing a full rescan).
+fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().unwrap())
-        .map_err(|e| format!("Failed to create cache dir: {}", e))?;
-    let data = serde_json::to_vec(cache)
-        .map_err(|e| format!("Failed to serialize cache: {}", e))?;
-    // Temp-then-rename so an interrupted write can't leave a truncated cache (which
-    // load_output_cache would discard, forcing a full rescan). Not secret data, but
-    // the same atomicity keeps restarts cheap.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &data)
-        .map_err(|e| format!("Failed to write cache: {}", e))?;
-    if let Err(e) = std::fs::rename(&tmp, &path) {
+        .map_err(|e| format!("Failed to create dir: {}", e))?;
+    // APPEND .tmp (don't replace the extension): "<id>.cache" and "<id>.watch"
+    // must not collide on the same "<id>.tmp" when written concurrently.
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    std::fs::write(&tmp, data).map_err(|e| format!("Failed to write: {}", e))?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("Failed to commit cache: {}", e));
+        return Err(format!("Failed to commit: {}", e));
     }
     Ok(())
 }
 
-/// Load output cache from disk.
+/// Save output cache to disk — sealed with the device cache key when available.
+/// Without a device key (keychain unavailable) this degrades to the legacy
+/// plaintext write: no worse than the historical behavior, and the cache holds
+/// no key material (it IS full financial history though — hence the seal).
+pub fn save_output_cache(data_dir: &Path, identity_id: &str, cache: &OutputCache) -> Result<(), String> {
+    let path = output_cache_path(data_dir, identity_id)?;
+    let data = serde_json::to_vec(cache)
+        .map_err(|e| format!("Failed to serialize cache: {}", e))?;
+    let body = match super::device_key::cache_key() {
+        Some(k) => seal(&k, &data),
+        None => data,
+    };
+    atomic_write(&path, &body)
+}
+
+/// Load output cache from disk. Handles both formats: sealed (magic-sniffed,
+/// decrypt failure → empty cache → rescan; never a crash) and legacy plaintext
+/// JSON — which is transparently re-saved sealed when a device key is available
+/// (atomic + idempotent: once sealed, the magic sniff skips this path forever).
 pub fn load_output_cache(data_dir: &Path, identity_id: &str) -> OutputCache {
     let Ok(path) = output_cache_path(data_dir, identity_id) else {
         return OutputCache::default();
     };
-    match std::fs::read(&path) {
-        Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-        Err(_) => OutputCache::default(),
+    let Ok(data) = std::fs::read(&path) else {
+        return OutputCache::default();
+    };
+    if is_sealed(&data) {
+        let Some(k) = super::device_key::cache_key() else {
+            log::warn!("output cache for {identity_id} is sealed but the device key is unavailable — starting empty (rescan)");
+            return OutputCache::default();
+        };
+        return open_sealed(&k, &data)
+            .and_then(|pt| serde_json::from_slice(&pt).ok())
+            .unwrap_or_else(|| {
+                log::warn!("output cache for {identity_id} failed to unseal (device key changed?) — starting empty (rescan)");
+                OutputCache::default()
+            });
     }
+    // Legacy plaintext cache: parse, then migrate to sealed on a best-effort
+    // basis (only after a successful parse — never rewrite garbage).
+    let cache: OutputCache = match serde_json::from_slice(&data) {
+        Ok(c) => c,
+        Err(_) => return OutputCache::default(),
+    };
+    if super::device_key::cache_key().is_some() {
+        if save_output_cache(data_dir, identity_id, &cache).is_ok() {
+            log::info!("output cache for {identity_id} migrated to sealed format");
+        }
+    }
+    cache
+}
+
+// ── Watch store: persisted view pairs for boot-time view-only sync ──────────
+// wallets/<id>.watch = sealed JSON { v, spend_pub (hex, compressed point),
+// view_sec (hex, scalar), created_at }. EXACTLY those fields — the spend
+// SECRET and mnemonic never leave the password-encrypted vault (tier model).
+// Encrypt-or-don't-write: with no device key these functions refuse — a
+// plaintext view key on disk would be a catastrophic regression.
+
+#[derive(Serialize, Deserialize)]
+struct WatchFile {
+    v: u32,
+    spend_pub: String,
+    view_sec: String,
+    created_at: u64,
+}
+
+fn watch_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, String> {
+    if !valid_identity_id(identity_id) {
+        return Err("Invalid identity id".into());
+    }
+    Ok(data_dir.join("wallets").join(format!("{}.watch", identity_id)))
+}
+
+/// Persist an identity's view pair (watch tier). Refuses without a device key.
+pub fn save_watch(data_dir: &Path, identity_id: &str, spend_pub: &[u8; 32], view_sec: &Zeroizing<[u8; 32]>) -> Result<(), String> {
+    let Some(k) = super::device_key::watch_key() else {
+        return Err("device key unavailable — refusing to persist a view key unencrypted".into());
+    };
+    save_watch_with_key(&k, data_dir, identity_id, spend_pub, view_sec)
+}
+
+fn save_watch_with_key(k: &[u8; KEY_LEN], data_dir: &Path, identity_id: &str, spend_pub: &[u8; 32], view_sec: &Zeroizing<[u8; 32]>) -> Result<(), String> {
+    let path = watch_path(data_dir, identity_id)?;
+    // Zeroizing: the serialized payload embeds the view secret (hex) — wipe the
+    // heap copy once the sealed bytes are written.
+    let payload = Zeroizing::new(
+        serde_json::to_vec(&WatchFile {
+            v: 1,
+            spend_pub: hex::encode(spend_pub),
+            view_sec: hex::encode(&view_sec[..]),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        })
+        .map_err(|e| format!("Failed to serialize watch file: {}", e))?,
+    );
+    atomic_write(&path, &seal(k, &payload))
+}
+
+/// Load an identity's persisted view pair. None on any failure (no file, no
+/// device key, unseal failure, malformed payload) — callers just skip boot sync.
+pub fn load_watch(data_dir: &Path, identity_id: &str) -> Option<monero_wallet::ViewPair> {
+    let k = super::device_key::watch_key()?;
+    load_watch_with_key(&k, data_dir, identity_id)
+}
+
+fn load_watch_with_key(k: &[u8; KEY_LEN], data_dir: &Path, identity_id: &str) -> Option<monero_wallet::ViewPair> {
+    let path = watch_path(data_dir, identity_id).ok()?;
+    let data = std::fs::read(&path).ok()?;
+    let pt = Zeroizing::new(open_sealed(k, &data)?);
+    let wf: WatchFile = serde_json::from_slice(&pt).ok()?;
+    if wf.v != 1 {
+        return None;
+    }
+    let spend_bytes: [u8; 32] = hex::decode(&wf.spend_pub).ok()?.try_into().ok()?;
+    let view_bytes: [u8; 32] = hex::decode(&wf.view_sec).ok()?.try_into().ok()?;
+    let spend = monero_oxide::ed25519::CompressedPoint::read(&mut &spend_bytes[..])
+        .ok()?
+        .decompress()?;
+    let view_scalar = Option::<curve25519_dalek::Scalar>::from(
+        curve25519_dalek::Scalar::from_canonical_bytes(view_bytes),
+    )?;
+    let view = Zeroizing::new(monero_oxide::ed25519::Scalar::from(view_scalar));
+    monero_wallet::ViewPair::new(spend, view).ok()
+}
+
+/// Remove an identity's watch file (identity deletion / watch-sync toggle-off).
+/// Idempotent — missing file is fine.
+pub fn delete_watch(data_dir: &Path, identity_id: &str) {
+    if let Ok(path) = watch_path(data_dir, identity_id) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Identity ids that have a persisted watch file (boot-sync candidates).
+pub fn list_watch_ids(data_dir: &Path) -> Vec<String> {
+    let dir = data_dir.join("wallets");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    entries
+        .filter_map(|e| {
+            let name = e.ok()?.file_name().into_string().ok()?;
+            let id = name.strip_suffix(".watch")?;
+            valid_identity_id(id).then(|| id.to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -330,5 +501,94 @@ mod tests {
         // A well-formed id stays inside the wallets dir.
         let p = wallet_path(dir, "vault_abc").unwrap();
         assert!(p.starts_with(dir.join("wallets")));
+    }
+
+    // ── Watch-tier seal/open + watch store invariants ────────────────────────
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ripley-watch-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn seal_open_roundtrip_and_wrong_key() {
+        let k = [7u8; KEY_LEN];
+        let sealed = seal(&k, b"watch tier payload");
+        assert!(is_sealed(&sealed));
+        assert_eq!(open_sealed(&k, &sealed).as_deref(), Some(&b"watch tier payload"[..]));
+        // Wrong key → authenticated decrypt refuses (None), never garbage.
+        let wrong = [8u8; KEY_LEN];
+        assert!(open_sealed(&wrong, &sealed).is_none());
+        // Truncated/tampered → None.
+        assert!(open_sealed(&k, &sealed[..SEAL_MAGIC.len() + 4]).is_none());
+        let mut tampered = sealed.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        assert!(open_sealed(&k, &tampered).is_none());
+    }
+
+    #[test]
+    fn seal_uses_a_fresh_nonce_per_write() {
+        let k = [7u8; KEY_LEN];
+        // Same key + same plaintext must never produce the same bytes (random
+        // nonce per call — the AEAD contract this format relies on).
+        assert_ne!(seal(&k, b"same"), seal(&k, b"same"));
+    }
+
+    #[test]
+    fn legacy_json_is_not_mistaken_for_sealed() {
+        assert!(!is_sealed(b"{\"scan_height\":1}"));
+        assert!(!is_sealed(b""));
+    }
+
+    #[test]
+    fn legacy_cache_loads_and_decrypt_failure_degrades_to_default() {
+        let dir = tmpdir("cache");
+        // Legacy plaintext cache parses (device key absent in tests → no re-seal).
+        let legacy = serde_json::to_vec(&OutputCache { scan_height: 42, ..Default::default() }).unwrap();
+        std::fs::create_dir_all(dir.join("wallets")).unwrap();
+        std::fs::write(dir.join("wallets/vault_t.cache"), &legacy).unwrap();
+        assert_eq!(load_output_cache(&dir, "vault_t").scan_height, 42);
+        // A sealed cache without the key to open it → empty cache (rescan), no panic.
+        let k = [9u8; KEY_LEN];
+        std::fs::write(dir.join("wallets/vault_t.cache"), seal(&k, &legacy)).unwrap();
+        assert_eq!(load_output_cache(&dir, "vault_t").scan_height, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn watch_store_refuses_without_device_key_and_roundtrips_with_one() {
+        let dir = tmpdir("watch");
+        // Real Monero keypair shape: view scalar + spend public point (from G).
+        let view_sec = Zeroizing::new([3u8; 32]);
+        let spend_pub = monero_oxide::ed25519::CompressedPoint::G.to_bytes();
+        // Public API without an initialized device key (test process) → REFUSES.
+        assert!(save_watch(&dir, "vault_t", &spend_pub, &view_sec).is_err());
+        assert!(load_watch(&dir, "vault_t").is_none());
+        // Explicit-key internals: seal → load reconstructs the same ViewPair.
+        let k = [5u8; KEY_LEN];
+        save_watch_with_key(&k, &dir, "vault_t", &spend_pub, &view_sec).unwrap();
+        let vp = load_watch_with_key(&k, &dir, "vault_t").expect("watch roundtrip");
+        assert_eq!(vp.spend().compress().to_bytes(), spend_pub);
+        // Wrong key → None (no partial parse of secret material).
+        assert!(load_watch_with_key(&[6u8; KEY_LEN], &dir, "vault_t").is_none());
+        // The file on disk is sealed — the view secret never plaintext.
+        let raw = std::fs::read(dir.join("wallets/vault_t.watch")).unwrap();
+        assert!(is_sealed(&raw));
+        assert!(!raw.windows(3).any(|w| w == hex::encode([3u8; 32]).as_bytes()[..3].to_vec()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn watch_paths_and_listing_reject_hostile_ids() {
+        let dir = tmpdir("watchlist");
+        assert!(watch_path(&dir, "../../etc/cron.d/evil").is_err());
+        std::fs::create_dir_all(dir.join("wallets")).unwrap();
+        std::fs::write(dir.join("wallets/vault_ok.watch"), b"x").unwrap();
+        std::fs::write(dir.join("wallets/has.dot.watch"), b"x").unwrap();
+        let ids = list_watch_ids(&dir);
+        assert_eq!(ids, vec!["vault_ok".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
