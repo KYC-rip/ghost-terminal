@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 use crate::wallet::{BlockScanner, WalletState};
@@ -109,11 +109,63 @@ pub async fn get_app_info(app: AppHandle) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Launch-capable file extensions `reveal_path` refuses to hand the OS opener even
+/// inside the app dirs: `open`/`xdg-open`/`explorer` would RUN these, not reveal them.
+/// Covers direct executables/scripts plus indirect launchers — `.desktop` executes its
+/// `Exec=` line under `xdg-open`, and `.lnk` follows a shortcut to an arbitrary target.
+const REVEAL_BLOCKED_EXT: &[&str] = &[
+    "app", "exe", "com", "cmd", "bat", "sh", "bash", "zsh", "command", "scpt",
+    "applescript", "desktop", "lnk",
+];
+
+/// Confinement check for `reveal_path`, split out PURE (no filesystem / process I/O)
+/// so it's unit-testable. `requested` and `allowed` are ALREADY canonicalized by the
+/// caller, so `..`/symlinks are resolved before we get here. Allows the path iff it
+/// sits inside an allowed base — `Path::starts_with` is component-wise, so `/data`
+/// never matches a sibling like `/data-evil` — and carries no launch-capable extension.
+fn reveal_guard(requested: &Path, allowed: &[PathBuf]) -> Result<(), String> {
+    if !allowed.iter().any(|base| requested.starts_with(base)) {
+        return Err("Refusing to reveal a path outside the app's data directories".into());
+    }
+    if let Some(ext) = requested.extension().and_then(|e| e.to_str()) {
+        if REVEAL_BLOCKED_EXT.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
+            return Err("Refusing to open an executable path".into());
+        }
+    }
+    Ok(())
+}
+
 /// Reveal a path in the OS file manager (Settings → Data Storage "Reveal").
-/// Paths originate from get_app_info, so they're trusted; we pass them as a
-/// single argument (no shell interpolation).
+///
+/// The renderer supplies `path`, so treat it as hostile: `open <arg>` will happily
+/// launch an arbitrary app bundle or a URL (which in Tor mode would deanonymize by
+/// opening in the default browser). Only reveal locations UNDER the app's own
+/// data/log dirs — the Settings panel only ever passes those. We canonicalize the
+/// request (resolving `..`/symlinks and requiring it to exist, so a URL or a
+/// non-file can't slip through) and confirm it sits inside an allowed base.
+///
+/// Callers pass DIRECTORIES (the data/log dirs): `open <dir>` opens the folder in the
+/// file manager. Note `open <file>` would instead LAUNCH the file's default handler
+/// (macOS reveal-in-Finder needs `open -R`); `reveal_guard` refuses launch-capable
+/// files, but a benign handler-triggering file (e.g. `.html`/`.pdf`) inside app_data
+/// would still open in the default app — acceptable since only validated writers ever
+/// touch app_data today.
 #[tauri::command]
-pub async fn reveal_path(path: String) -> Result<(), String> {
+pub async fn reveal_path(app: AppHandle, path: String) -> Result<(), String> {
+    // Canonicalize each allowed base up front (resolves symlinks; on macOS also maps
+    // /var → /private/var) so it compares against the equally-canonicalized request.
+    let mut allowed: Vec<PathBuf> = Vec::new();
+    for base in [app.path().app_data_dir(), app.path().app_log_dir()] {
+        if let Ok(d) = base {
+            if let Ok(c) = std::fs::canonicalize(&d) {
+                allowed.push(c);
+            }
+        }
+    }
+
+    let requested = std::fs::canonicalize(&path).map_err(|_| "Path does not exist".to_string())?;
+    reveal_guard(&requested, &allowed)?;
+
     #[cfg(target_os = "macos")]
     let program = "open";
     #[cfg(target_os = "windows")]
@@ -122,9 +174,9 @@ pub async fn reveal_path(path: String) -> Result<(), String> {
     let program = "xdg-open";
 
     std::process::Command::new(program)
-        .arg(&path)
+        .arg(&requested)
         .spawn()
-        .map_err(|e| format!("Failed to open {path}: {e}"))?;
+        .map_err(|e| format!("Failed to open {}: {e}", requested.display()))?;
     Ok(())
 }
 
@@ -204,4 +256,45 @@ pub async fn save_config_and_reload(app: AppHandle, config: serde_json::Value) -
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reveal_guard_tests {
+    use super::{reveal_guard, Path, PathBuf};
+
+    // Two allowed bases, as reveal_path builds (already canonicalized in production).
+    fn bases() -> Vec<PathBuf> {
+        vec![PathBuf::from("/home/u/.app/data"), PathBuf::from("/home/u/.app/logs")]
+    }
+
+    #[test]
+    fn accepts_a_dir_inside_an_allowed_base() {
+        assert!(reveal_guard(Path::new("/home/u/.app/data/wallets"), &bases()).is_ok());
+        assert!(reveal_guard(Path::new("/home/u/.app/logs"), &bases()).is_ok());
+    }
+
+    #[test]
+    fn accepts_a_non_launchable_file_inside() {
+        assert!(reveal_guard(Path::new("/home/u/.app/data/config.json"), &bases()).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_path_outside_every_base() {
+        assert!(reveal_guard(Path::new("/etc/passwd"), &bases()).is_err());
+        assert!(reveal_guard(Path::new("/home/u/.ssh/id_ed25519"), &bases()).is_err());
+    }
+
+    #[test]
+    fn rejects_a_prefix_sibling_directory() {
+        // Component-wise starts_with: "/home/u/.app/data-evil" must NOT match ".../data".
+        assert!(reveal_guard(Path::new("/home/u/.app/data-evil/loot"), &bases()).is_err());
+    }
+
+    #[test]
+    fn rejects_launch_capable_extensions_case_insensitively() {
+        for name in ["payload.app", "run.sh", "x.EXE", "hook.desktop", "s.LNK", "a.scpt"] {
+            let p = PathBuf::from("/home/u/.app/data").join(name);
+            assert!(reveal_guard(&p, &bases()).is_err(), "{name} should be refused");
+        }
+    }
 }

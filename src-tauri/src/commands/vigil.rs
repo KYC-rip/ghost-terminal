@@ -37,10 +37,10 @@ fn persist(app: &AppHandle, store: &Value) -> Result<(), String> {
         .map_err(|e| format!("Failed to write vigil store: {}", e))
 }
 
+/// Single source of truth for the identity-id charset, shared with the wallet
+/// storage path-builder so every id that reaches disk is validated identically.
 fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    crate::wallet::storage::valid_identity_id(id)
 }
 
 fn is_b64(s: &str, max: usize) -> bool {

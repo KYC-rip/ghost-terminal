@@ -160,7 +160,40 @@ pub async fn create_identity(app: AppHandle, name: String) -> Result<Identity, S
 
 #[tauri::command]
 pub async fn delete_identity(app: AppHandle, id: String) -> Result<(), String> {
+    // Guard the renderer-supplied id before it becomes a filesystem path below:
+    // without this a hostile `../…` id would remove files OUTSIDE the wallets dir.
+    if !crate::wallet::storage::valid_identity_id(&id) {
+        return Err("Invalid identity id".into());
+    }
+
     let mut ids = load_identities(&app);
+
+    // FUND SAFETY (irreversible destruction): deleting a vault erases its encrypted
+    // key file — a wallet whose seed wasn't backed up is gone for good. Require an
+    // OS-level confirmation the renderer JS cannot fake, so no ROS app can enumerate
+    // get_identities and silently wipe every vault. Names the wallet being deleted.
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let body = match ids.iter().find(|i| i.id == id).map(|i| i.name.as_str()) {
+            Some(name) => format!(
+                "Permanently delete the wallet \"{name}\"?\n\nIts encrypted keys will be erased. \
+                 If you have not backed up its seed phrase, any funds it holds will be LOST FOREVER."
+            ),
+            None => "Permanently delete this wallet? Its encrypted keys will be erased and any \
+                     un-backed-up funds will be LOST FOREVER."
+                .to_string(),
+        };
+        let ok = app
+            .dialog()
+            .message(body)
+            .title("Delete wallet")
+            .buttons(MessageDialogButtons::OkCancelCustom("Delete".into(), "Cancel".into()))
+            .blocking_show();
+        if !ok {
+            return Err("Deletion cancelled".into());
+        }
+    }
+
     ids.retain(|i| i.id != id);
     save_identities_to_disk(&app, &ids)?;
 
