@@ -8,9 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@fontsource/dm-sans':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@kyc-rip/stealth-engines':
         specifier: git+https://github.com/KYC-rip/stealth-engines.git
-        version: git+https://github.com/KYC-rip/stealth-engines.git#51679521a597a4e3a1e460a133c936ff9b2ddd7c(ethers@6.16.0)
+        version: https://codeload.github.com/KYC-rip/stealth-engines/tar.gz/b75bd3068c9cd3d679b8392b9bfcc0c7108480f9(ethers@6.16.0)
       '@tauri-apps/api':
         specifier: 2.10.1
         version: 2.10.1
@@ -613,6 +616,9 @@ packages:
     resolution: {integrity: sha512-d9zaMRSTIKDLhctzH12MtXvJKSSUhaHcjV+2Z+GK+EEY7XKpP5yR4x+N3TAcHTcu963nIr+TMcCb4DBCYX1z6Q==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
+  '@fontsource/dm-sans@5.2.8':
+    resolution: {integrity: sha512-tlovG42m9ESG28WiHpLq3F5umAlm64rv0RkqTbYowRn70e9OlRr5a3yTJhrhrY+k5lftR/OFJjPzOLQzk8EfCA==}
+
   '@humanwhocodes/config-array@0.13.0':
     resolution: {integrity: sha512-DZLEEqFWQFiyK6h5YIeynKx7JlvCYWL0cImfSRXZ9l4Sg2efkFGTuFf6vzXjK1cq6IYkU+Eg/JizXw+TD2vRNw==}
     engines: {node: '>=10.10.0'}
@@ -650,8 +656,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@kyc-rip/stealth-engines@git+https://github.com/KYC-rip/stealth-engines.git#51679521a597a4e3a1e460a133c936ff9b2ddd7c':
-    resolution: {commit: 51679521a597a4e3a1e460a133c936ff9b2ddd7c, repo: https://github.com/KYC-rip/stealth-engines.git, type: git}
+  '@kyc-rip/stealth-engines@https://codeload.github.com/KYC-rip/stealth-engines/tar.gz/b75bd3068c9cd3d679b8392b9bfcc0c7108480f9':
+    resolution: {tarball: https://codeload.github.com/KYC-rip/stealth-engines/tar.gz/b75bd3068c9cd3d679b8392b9bfcc0c7108480f9}
     version: 0.1.0
     peerDependencies:
       ethers: ^6.13.0
@@ -3705,6 +3711,8 @@ snapshots:
 
   '@eslint/js@8.57.1': {}
 
+  '@fontsource/dm-sans@5.2.8': {}
+
   '@humanwhocodes/config-array@0.13.0':
     dependencies:
       '@humanwhocodes/object-schema': 2.0.3
@@ -3749,7 +3757,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@kyc-rip/stealth-engines@git+https://github.com/KYC-rip/stealth-engines.git#51679521a597a4e3a1e460a133c936ff9b2ddd7c(ethers@6.16.0)':
+  '@kyc-rip/stealth-engines@https://codeload.github.com/KYC-rip/stealth-engines/tar.gz/b75bd3068c9cd3d679b8392b9bfcc0c7108480f9(ethers@6.16.0)':
     dependencies:
       ethers: 6.16.0
 

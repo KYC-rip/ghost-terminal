@@ -76,6 +76,7 @@
     ]
   },
   "dependencies": {
+    "@fontsource/dm-sans": "^5.2.8",
     "@kyc-rip/stealth-engines": "git+https://github.com/KYC-rip/stealth-engines.git",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-deep-link": "2.4.7",
