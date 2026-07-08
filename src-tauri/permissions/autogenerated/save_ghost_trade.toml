@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-ghost-trade"
+description = "Enables the save_ghost_trade command without any pre-configured scope."
+commands.allow = ["save_ghost_trade"]
+
+[[permission]]
+identifier = "deny-save-ghost-trade"
+description = "Denies the save_ghost_trade command without any pre-configured scope."
+commands.deny = ["save_ghost_trade"]

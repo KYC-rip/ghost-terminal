@@ -5,23 +5,13 @@
   "identifier": "run.ripley.terminal",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5174",
-    "beforeDevCommand": "",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev:renderer",
     "beforeBuildCommand": "npm run build:renderer"
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "title": "Ripley Terminal",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600,
-        "decorations": true,
-        "transparent": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

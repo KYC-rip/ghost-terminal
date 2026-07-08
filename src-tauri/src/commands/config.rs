@@ -65,6 +65,7 @@ pub async fn get_config(app: AppHandle) -> Result<serde_json::Value, String> {
 /// Default config shape. Mirrors the controls SettingsView renders.
 pub fn default_config() -> serde_json::Value {
     serde_json::json!({
+        "ui_mode": "classic",
         "routingMode": "clearnet",
         "useSystemProxy": true,
         "systemProxyAddress": "",
@@ -87,6 +88,71 @@ pub fn default_config() -> serde_json::Value {
             "TERMINAL": "Mod+Shift+T"
         }
     })
+}
+
+/// The UI the shell boots into. Read at startup (before any window exists) to pick
+/// the main webview's URL: "classic" → the bundled legacy renderer, "ros" → RipleyOS.
+/// Reads config.json directly (not get_config) so it stays sync and never touches
+/// the skin side file. Unknown/missing/corrupt → "classic", the safe default.
+pub fn read_ui_mode(app: &AppHandle) -> String {
+    let stored = std::fs::read_to_string(config_path(app))
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|c| c.get("ui_mode").and_then(|v| v.as_str()).map(str::to_string));
+    match stored.as_deref() {
+        Some("ros") => "ros".to_string(),
+        _ => "classic".to_string(),
+    }
+}
+
+/// Validate + set `ui_mode` on a config object. Pure (no I/O) so it's unit-testable;
+/// `set_ui_mode` owns the persistence + relaunch around it.
+fn apply_ui_mode(config: &mut serde_json::Value, mode: &str) -> Result<(), String> {
+    if mode != "classic" && mode != "ros" {
+        return Err(format!("invalid ui_mode \"{mode}\" — expected \"classic\" or \"ros\""));
+    }
+    config
+        .as_object_mut()
+        .ok_or_else(|| "config is not an object".to_string())?
+        .insert("ui_mode".to_string(), serde_json::json!(mode));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_ui_mode(app: AppHandle) -> Result<String, String> {
+    Ok(read_ui_mode(&app))
+}
+
+/// Switch the shell UI (classic ↔ RipleyOS) and RELAUNCH into it. A full process
+/// restart — not an in-place navigate — is deliberate: it drops every renderer
+/// global and lets startup re-derive the window + capability binding from the
+/// persisted mode (the conservative choice for a wallet).
+///
+/// Persistence is a raw read-modify-write of config.json touching ONLY `ui_mode`,
+/// so it can't clobber settings the caller never saw (and skips the skin-offload
+/// round-trip in save_config).
+#[tauri::command]
+pub async fn set_ui_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    let path = config_path(&app);
+    let mut config = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    apply_ui_mode(&mut config, &mode)?;
+
+    std::fs::create_dir_all(path.parent().unwrap())
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let data = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    // Write-then-rename so a crash between here and restart() can't leave a
+    // truncated config.json (rename is atomic on the same filesystem).
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, data).map_err(|e| format!("Failed to write config: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace config: {}", e))?;
+
+    crate::emit_log(&app, "UI", "info", &format!("Switching interface to {mode} — relaunching..."));
+    // Diverges (never returns): the process relaunches into the new mode.
+    app.restart()
 }
 
 /// App metadata + on-disk storage locations for the Settings → Data Storage
@@ -219,6 +285,67 @@ pub async fn save_config_only(app: AppHandle, config: serde_json::Value) -> Resu
     save_config(app, config).await
 }
 
+/// Read-modify-write a single boolean key in config.json (full get/save round-trip
+/// so the skin-background offload and defaults keep working).
+pub async fn set_config_bool(app: &AppHandle, key: &str, value: bool) -> Result<(), String> {
+    let mut cfg = get_config(app.clone()).await.unwrap_or_else(|_| default_config());
+    if let Some(obj) = cfg.as_object_mut() {
+        obj.insert(key.to_string(), serde_json::Value::Bool(value));
+    }
+    save_config(app.clone(), cfg).await
+}
+
+/// Enable/disable the watch tier's boot-time view-only sync. This is the ONLY
+/// writer of the `watchSync` flag so the off-path ordering is enforced in one
+/// place: persist the flag → stop all pool scanners (awaits quiescence) → delete
+/// the persisted view pairs. Enabling takes effect at the next unlock (that's
+/// when a `.watch` file is written) and syncs from the next launch.
+#[tauri::command]
+pub async fn watch_sync_set(
+    app: AppHandle,
+    state: tauri::State<'_, WalletState>,
+    pool: tauri::State<'_, crate::wallet::SyncPool>,
+    enabled: bool,
+) -> Result<(), String> {
+    // Enabling needs the keychain-backed watch key FIRST (this is the moment the
+    // OS may prompt — the user just clicked Enable, so it has clear context). A
+    // denied/unavailable keychain fails the whole toggle: the flag is not set,
+    // the renderer reverts the checkbox, and nothing is stored anywhere.
+    if enabled && !crate::wallet::device_key::ensure_watch_key().await {
+        // Record that the question was answered so the one-time consent modal
+        // doesn't loop; the feature stays off until a successful re-enable.
+        set_config_bool(&app, "watchSyncAsked", true).await?;
+        crate::emit_log(&app, "Wallet", "error",
+            "👁 Sync at launch needs the system keychain to protect the view key — the keychain was denied or unavailable, so it stays off.");
+        return Err("keychain unavailable or denied".into());
+    }
+    set_config_bool(&app, "watchSync", enabled).await?;
+    // A manual toggle IS the consent decision — don't re-ask.
+    set_config_bool(&app, "watchSyncAsked", true).await?;
+    if enabled {
+        // If a wallet is unlocked right now (the in-app consent shows post-unlock),
+        // persist its watch pair immediately from in-memory keys — the choice takes
+        // effect from the very next launch, no extra unlock needed.
+        if let Some((id, spend_pub, view_sec)) = state.watch_parts_from_memory().await {
+            let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if let Err(e) = crate::wallet::storage::save_watch(&data_dir, &id, &spend_pub, &view_sec) {
+                log::warn!("watch store write for {id} failed: {e}");
+            }
+        }
+        crate::emit_log(&app, "Wallet", "info",
+            "👁 Sync at launch enabled — watch-only sync starts from the next launch.");
+    } else {
+        pool.stop_all().await;
+        let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+        for id in crate::wallet::storage::list_watch_ids(&data_dir) {
+            crate::wallet::storage::delete_watch(&data_dir, &id);
+        }
+        crate::emit_log(&app, "Wallet", "info",
+            "👁 Sync at launch disabled — persisted view keys removed.");
+    }
+    Ok(())
+}
+
 /// Save config AND apply network-affecting changes live. If a wallet is
 /// unlocked, restart the block scanner so a new routingMode / proxy / node /
 /// network takes effect without re-login. BlockScanner::start bumps the scanner
@@ -256,6 +383,44 @@ pub async fn save_config_and_reload(app: AppHandle, config: serde_json::Value) -
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod ui_mode_tests {
+    use super::{apply_ui_mode, default_config};
+
+    #[test]
+    fn default_config_boots_classic() {
+        assert_eq!(default_config()["ui_mode"], "classic");
+    }
+
+    #[test]
+    fn round_trips_both_modes() {
+        let mut c = default_config();
+        apply_ui_mode(&mut c, "ros").unwrap();
+        assert_eq!(c["ui_mode"], "ros");
+        apply_ui_mode(&mut c, "classic").unwrap();
+        assert_eq!(c["ui_mode"], "classic");
+    }
+
+    #[test]
+    fn preserves_sibling_keys() {
+        let mut c = serde_json::json!({ "routingMode": "tor", "autoLockMinutes": 5 });
+        apply_ui_mode(&mut c, "ros").unwrap();
+        assert_eq!(c["routingMode"], "tor");
+        assert_eq!(c["autoLockMinutes"], 5);
+        assert_eq!(c["ui_mode"], "ros");
+    }
+
+    #[test]
+    fn rejects_unknown_modes_untouched() {
+        // The renderer is untrusted — an arbitrary mode string must not persist.
+        let mut c = default_config();
+        for bad in ["", "ROS", "classic ", "file:///x", "both"] {
+            assert!(apply_ui_mode(&mut c, bad).is_err(), "{bad:?} should be rejected");
+            assert_eq!(c["ui_mode"], "classic", "{bad:?} must not change the mode");
+        }
+    }
 }
 
 #[cfg(test)]

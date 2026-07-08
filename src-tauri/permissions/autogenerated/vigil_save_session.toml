@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vigil-save-session"
+description = "Enables the vigil_save_session command without any pre-configured scope."
+commands.allow = ["vigil_save_session"]
+
+[[permission]]
+identifier = "deny-vigil-save-session"
+description = "Denies the vigil_save_session command without any pre-configured scope."
+commands.deny = ["vigil_save_session"]

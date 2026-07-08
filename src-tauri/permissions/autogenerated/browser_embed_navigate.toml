@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-embed-navigate"
+description = "Enables the browser_embed_navigate command without any pre-configured scope."
+commands.allow = ["browser_embed_navigate"]
+
+[[permission]]
+identifier = "deny-browser-embed-navigate"
+description = "Denies the browser_embed_navigate command without any pre-configured scope."
+commands.deny = ["browser_embed_navigate"]

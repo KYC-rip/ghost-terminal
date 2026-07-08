@@ -2187,6 +2187,1014 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the agent_gateway_rotate_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-agent-gateway-rotate-key",
+          "markdownDescription": "Enables the agent_gateway_rotate_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the agent_gateway_set_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-agent-gateway-set-config",
+          "markdownDescription": "Enables the agent_gateway_set_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the agent_gateway_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-agent-gateway-status",
+          "markdownDescription": "Enables the agent_gateway_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the arm_transfer_grant command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-arm-transfer-grant",
+          "markdownDescription": "Enables the arm_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_bounds command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-bounds",
+          "markdownDescription": "Enables the browser_embed_bounds command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-close",
+          "markdownDescription": "Enables the browser_embed_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_deliver_xmr402 command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-deliver-xmr402",
+          "markdownDescription": "Enables the browser_embed_deliver_xmr402 command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_navigate command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-navigate",
+          "markdownDescription": "Enables the browser_embed_navigate command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-open",
+          "markdownDescription": "Enables the browser_embed_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-visible",
+          "markdownDescription": "Enables the browser_embed_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browser_embed_zoom command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browser-embed-zoom",
+          "markdownDescription": "Enables the browser_embed_zoom command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the change_wallet_password command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-change-wallet-password",
+          "markdownDescription": "Enables the change_wallet_password command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_for_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-for-updates",
+          "markdownDescription": "Enables the check_for_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_tx_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-tx-key",
+          "markdownDescription": "Enables the check_tx_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_tx_proof command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-tx-proof",
+          "markdownDescription": "Enables the check_tx_proof command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the close_wallet command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-wallet",
+          "markdownDescription": "Enables the close_wallet command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-account",
+          "markdownDescription": "Enables the create_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-identity",
+          "markdownDescription": "Enables the create_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_subaddress command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-subaddress",
+          "markdownDescription": "Enables the create_subaddress command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_wallet command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-wallet",
+          "markdownDescription": "Enables the create_wallet command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-identity",
+          "markdownDescription": "Enables the delete_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the detect_legacy_wallets command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-detect-legacy-wallets",
+          "markdownDescription": "Enables the detect_legacy_wallets command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the estimate_fees command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-estimate-fees",
+          "markdownDescription": "Enables the estimate_fees command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the fetch_price_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-fetch-price-history",
+          "markdownDescription": "Enables the fetch_price_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_accounts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-accounts",
+          "markdownDescription": "Enables the get_accounts command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_active_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-active-identity",
+          "markdownDescription": "Enables the get_active_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_all_xmr402_payments command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-all-xmr402-payments",
+          "markdownDescription": "Enables the get_all_xmr402_payments command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_app_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-app-info",
+          "markdownDescription": "Enables the get_app_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_balance command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-balance",
+          "markdownDescription": "Enables the get_balance command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-config",
+          "markdownDescription": "Enables the get_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ghost_trades command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ghost-trades",
+          "markdownDescription": "Enables the get_ghost_trades command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_height command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-height",
+          "markdownDescription": "Enables the get_height command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_identities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-identities",
+          "markdownDescription": "Enables the get_identities command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_mnemonic command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-mnemonic",
+          "markdownDescription": "Enables the get_mnemonic command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_outputs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-outputs",
+          "markdownDescription": "Enables the get_outputs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_subaddresses command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-subaddresses",
+          "markdownDescription": "Enables the get_subaddresses command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_sync_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-sync-status",
+          "markdownDescription": "Enables the get_sync_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_tor_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-tor-status",
+          "markdownDescription": "Enables the get_tor_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_transactions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-transactions",
+          "markdownDescription": "Enables the get_transactions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_tx_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-tx-key",
+          "markdownDescription": "Enables the get_tx_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_tx_proof command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-tx-proof",
+          "markdownDescription": "Enables the get_tx_proof command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_ui_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ui-mode",
+          "markdownDescription": "Enables the get_ui_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_xmr402_payment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-xmr402-payment",
+          "markdownDescription": "Enables the get_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_native_browser command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-native-browser",
+          "markdownDescription": "Enables the open_native_browser command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_wallet command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-wallet",
+          "markdownDescription": "Enables the open_wallet command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the prepare_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-transfer",
+          "markdownDescription": "Enables the prepare_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the proxied_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-proxied-get",
+          "markdownDescription": "Enables the proxied_get command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the refresh command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-refresh",
+          "markdownDescription": "Enables the refresh command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the relay_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-relay-transfer",
+          "markdownDescription": "Enables the relay_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the relay_transfer_grant command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-relay-transfer-grant",
+          "markdownDescription": "Enables the relay_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rename_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rename-account",
+          "markdownDescription": "Enables the rename_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rename_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rename-identity",
+          "markdownDescription": "Enables the rename_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rescan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rescan",
+          "markdownDescription": "Enables the rescan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reselect_node command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reselect-node",
+          "markdownDescription": "Enables the reselect_node command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the resolve_openalias command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-resolve-openalias",
+          "markdownDescription": "Enables the resolve_openalias command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restart_tor command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restart-tor",
+          "markdownDescription": "Enables the restart_tor command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reveal-path",
+          "markdownDescription": "Enables the reveal_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the revoke_all_transfer_grants command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-revoke-all-transfer-grants",
+          "markdownDescription": "Enables the revoke_all_transfer_grants command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the revoke_transfer_grant command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-revoke-transfer-grant",
+          "markdownDescription": "Enables the revoke_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ros_native_fetch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ros-native-fetch",
+          "markdownDescription": "Enables the ros_native_fetch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-config",
+          "markdownDescription": "Enables the save_config command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_config_and_reload command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-config-and-reload",
+          "markdownDescription": "Enables the save_config_and_reload command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_config_only command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-config-only",
+          "markdownDescription": "Enables the save_config_only command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_ghost_trade command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-ghost-trade",
+          "markdownDescription": "Enables the save_ghost_trade command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_identities command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-identities",
+          "markdownDescription": "Enables the save_identities command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_xmr402_payment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-xmr402-payment",
+          "markdownDescription": "Enables the save_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the select_background_image command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-select-background-image",
+          "markdownDescription": "Enables the select_background_image command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_subaddress_label command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-subaddress-label",
+          "markdownDescription": "Enables the set_subaddress_label command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_ui_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-ui-mode",
+          "markdownDescription": "Enables the set_ui_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_vigil_hot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-vigil-hot",
+          "markdownDescription": "Enables the set_vigil_hot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sign_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sign-message",
+          "markdownDescription": "Enables the sign_message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sweep_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sweep-all",
+          "markdownDescription": "Enables the sweep_all command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sweep_single command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sweep-single",
+          "markdownDescription": "Enables the sweep_single command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the switch_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-switch-identity",
+          "markdownDescription": "Enables the switch_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the tor_circuit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-tor-circuit",
+          "markdownDescription": "Enables the tor_circuit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transfer_grant_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transfer-grant-status",
+          "markdownDescription": "Enables the transfer_grant_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the verify_password command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-verify-password",
+          "markdownDescription": "Enables the verify_password command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_archive_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-archive-strike-key",
+          "markdownDescription": "Enables the vigil_archive_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_clear_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-clear-session",
+          "markdownDescription": "Enables the vigil_clear_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_delete_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-delete-strike-key",
+          "markdownDescription": "Enables the vigil_delete_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_get_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-get-session",
+          "markdownDescription": "Enables the vigil_get_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_get_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-get-strike-key",
+          "markdownDescription": "Enables the vigil_get_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_save_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-save-session",
+          "markdownDescription": "Enables the vigil_save_session command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vigil_save_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vigil-save-strike-key",
+          "markdownDescription": "Enables the vigil_save_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the agent_gateway_rotate_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-agent-gateway-rotate-key",
+          "markdownDescription": "Denies the agent_gateway_rotate_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the agent_gateway_set_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-agent-gateway-set-config",
+          "markdownDescription": "Denies the agent_gateway_set_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the agent_gateway_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-agent-gateway-status",
+          "markdownDescription": "Denies the agent_gateway_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the arm_transfer_grant command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-arm-transfer-grant",
+          "markdownDescription": "Denies the arm_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_bounds command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-bounds",
+          "markdownDescription": "Denies the browser_embed_bounds command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-close",
+          "markdownDescription": "Denies the browser_embed_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_deliver_xmr402 command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-deliver-xmr402",
+          "markdownDescription": "Denies the browser_embed_deliver_xmr402 command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_navigate command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-navigate",
+          "markdownDescription": "Denies the browser_embed_navigate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-open",
+          "markdownDescription": "Denies the browser_embed_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-visible",
+          "markdownDescription": "Denies the browser_embed_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browser_embed_zoom command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browser-embed-zoom",
+          "markdownDescription": "Denies the browser_embed_zoom command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the change_wallet_password command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-change-wallet-password",
+          "markdownDescription": "Denies the change_wallet_password command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_for_updates command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-for-updates",
+          "markdownDescription": "Denies the check_for_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_tx_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-tx-key",
+          "markdownDescription": "Denies the check_tx_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_tx_proof command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-tx-proof",
+          "markdownDescription": "Denies the check_tx_proof command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_wallet command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-wallet",
+          "markdownDescription": "Denies the close_wallet command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-account",
+          "markdownDescription": "Denies the create_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-identity",
+          "markdownDescription": "Denies the create_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_subaddress command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-subaddress",
+          "markdownDescription": "Denies the create_subaddress command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_wallet command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-wallet",
+          "markdownDescription": "Denies the create_wallet command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-identity",
+          "markdownDescription": "Denies the delete_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the detect_legacy_wallets command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-detect-legacy-wallets",
+          "markdownDescription": "Denies the detect_legacy_wallets command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the estimate_fees command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-estimate-fees",
+          "markdownDescription": "Denies the estimate_fees command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the fetch_price_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-fetch-price-history",
+          "markdownDescription": "Denies the fetch_price_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_accounts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-accounts",
+          "markdownDescription": "Denies the get_accounts command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_active_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-active-identity",
+          "markdownDescription": "Denies the get_active_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_all_xmr402_payments command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-all-xmr402-payments",
+          "markdownDescription": "Denies the get_all_xmr402_payments command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_app_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-app-info",
+          "markdownDescription": "Denies the get_app_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_balance command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-balance",
+          "markdownDescription": "Denies the get_balance command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-config",
+          "markdownDescription": "Denies the get_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ghost_trades command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ghost-trades",
+          "markdownDescription": "Denies the get_ghost_trades command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_height command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-height",
+          "markdownDescription": "Denies the get_height command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_identities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-identities",
+          "markdownDescription": "Denies the get_identities command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_mnemonic command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-mnemonic",
+          "markdownDescription": "Denies the get_mnemonic command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_outputs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-outputs",
+          "markdownDescription": "Denies the get_outputs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_subaddresses command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-subaddresses",
+          "markdownDescription": "Denies the get_subaddresses command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_sync_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-sync-status",
+          "markdownDescription": "Denies the get_sync_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_tor_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-tor-status",
+          "markdownDescription": "Denies the get_tor_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_transactions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-transactions",
+          "markdownDescription": "Denies the get_transactions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_tx_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-tx-key",
+          "markdownDescription": "Denies the get_tx_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_tx_proof command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-tx-proof",
+          "markdownDescription": "Denies the get_tx_proof command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_ui_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ui-mode",
+          "markdownDescription": "Denies the get_ui_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_xmr402_payment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-xmr402-payment",
+          "markdownDescription": "Denies the get_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_native_browser command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-native-browser",
+          "markdownDescription": "Denies the open_native_browser command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_wallet command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-wallet",
+          "markdownDescription": "Denies the open_wallet command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the prepare_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-transfer",
+          "markdownDescription": "Denies the prepare_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the proxied_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-proxied-get",
+          "markdownDescription": "Denies the proxied_get command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the refresh command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-refresh",
+          "markdownDescription": "Denies the refresh command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the relay_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-relay-transfer",
+          "markdownDescription": "Denies the relay_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the relay_transfer_grant command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-relay-transfer-grant",
+          "markdownDescription": "Denies the relay_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rename_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rename-account",
+          "markdownDescription": "Denies the rename_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rename_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rename-identity",
+          "markdownDescription": "Denies the rename_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rescan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rescan",
+          "markdownDescription": "Denies the rescan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reselect_node command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reselect-node",
+          "markdownDescription": "Denies the reselect_node command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the resolve_openalias command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-resolve-openalias",
+          "markdownDescription": "Denies the resolve_openalias command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restart_tor command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restart-tor",
+          "markdownDescription": "Denies the restart_tor command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reveal-path",
+          "markdownDescription": "Denies the reveal_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the revoke_all_transfer_grants command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-revoke-all-transfer-grants",
+          "markdownDescription": "Denies the revoke_all_transfer_grants command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the revoke_transfer_grant command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-revoke-transfer-grant",
+          "markdownDescription": "Denies the revoke_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ros_native_fetch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ros-native-fetch",
+          "markdownDescription": "Denies the ros_native_fetch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_config command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-config",
+          "markdownDescription": "Denies the save_config command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_config_and_reload command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-config-and-reload",
+          "markdownDescription": "Denies the save_config_and_reload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_config_only command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-config-only",
+          "markdownDescription": "Denies the save_config_only command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_ghost_trade command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-ghost-trade",
+          "markdownDescription": "Denies the save_ghost_trade command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_identities command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-identities",
+          "markdownDescription": "Denies the save_identities command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_xmr402_payment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-xmr402-payment",
+          "markdownDescription": "Denies the save_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the select_background_image command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-select-background-image",
+          "markdownDescription": "Denies the select_background_image command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_subaddress_label command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-subaddress-label",
+          "markdownDescription": "Denies the set_subaddress_label command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_ui_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-ui-mode",
+          "markdownDescription": "Denies the set_ui_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_vigil_hot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-vigil-hot",
+          "markdownDescription": "Denies the set_vigil_hot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sign_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sign-message",
+          "markdownDescription": "Denies the sign_message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sweep_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sweep-all",
+          "markdownDescription": "Denies the sweep_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sweep_single command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sweep-single",
+          "markdownDescription": "Denies the sweep_single command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the switch_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-switch-identity",
+          "markdownDescription": "Denies the switch_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the tor_circuit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-tor-circuit",
+          "markdownDescription": "Denies the tor_circuit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transfer_grant_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transfer-grant-status",
+          "markdownDescription": "Denies the transfer_grant_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the verify_password command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-verify-password",
+          "markdownDescription": "Denies the verify_password command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_archive_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-archive-strike-key",
+          "markdownDescription": "Denies the vigil_archive_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_clear_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-clear-session",
+          "markdownDescription": "Denies the vigil_clear_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_delete_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-delete-strike-key",
+          "markdownDescription": "Denies the vigil_delete_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_get_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-get-session",
+          "markdownDescription": "Denies the vigil_get_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_get_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-get-strike-key",
+          "markdownDescription": "Denies the vigil_get_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_save_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-save-session",
+          "markdownDescription": "Denies the vigil_save_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vigil_save_strike_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vigil-save-strike-key",
+          "markdownDescription": "Denies the vigil_save_strike_key command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

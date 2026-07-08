@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vigil-get-session"
+description = "Enables the vigil_get_session command without any pre-configured scope."
+commands.allow = ["vigil_get_session"]
+
+[[permission]]
+identifier = "deny-vigil-get-session"
+description = "Denies the vigil_get_session command without any pre-configured scope."
+commands.deny = ["vigil_get_session"]

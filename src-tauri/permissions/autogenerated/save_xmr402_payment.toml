@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-xmr402-payment"
+description = "Enables the save_xmr402_payment command without any pre-configured scope."
+commands.allow = ["save_xmr402_payment"]
+
+[[permission]]
+identifier = "deny-save-xmr402-payment"
+description = "Denies the save_xmr402_payment command without any pre-configured scope."
+commands.deny = ["save_xmr402_payment"]

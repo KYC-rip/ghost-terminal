@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vigil-get-strike-key"
+description = "Enables the vigil_get_strike_key command without any pre-configured scope."
+commands.allow = ["vigil_get_strike_key"]
+
+[[permission]]
+identifier = "deny-vigil-get-strike-key"
+description = "Denies the vigil_get_strike_key command without any pre-configured scope."
+commands.deny = ["vigil_get_strike_key"]

@@ -16,10 +16,12 @@ export default defineConfig({
     react(),
     tailwindcss()
   ],
-  // Tauri expects a fixed port
+  // Tauri expects a fixed port: devUrl (tauri.conf.json) points here. strictPort so a
+  // taken 5173 fails loudly instead of silently bumping — a bumped port means the
+  // shell webview loads whatever ELSE answers on 5173 (ros dev lives on 5174).
   server: {
     port: 5173,
-    strictPort: false,
+    strictPort: true,
   },
   build: {
     outDir: 'dist',

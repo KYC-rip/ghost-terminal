@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-config-and-reload"
+description = "Enables the save_config_and_reload command without any pre-configured scope."
+commands.allow = ["save_config_and_reload"]
+
+[[permission]]
+identifier = "deny-save-config-and-reload"
+description = "Denies the save_config_and_reload command without any pre-configured scope."
+commands.deny = ["save_config_and_reload"]

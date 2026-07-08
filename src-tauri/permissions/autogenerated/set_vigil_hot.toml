@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-vigil-hot"
+description = "Enables the set_vigil_hot command without any pre-configured scope."
+commands.allow = ["set_vigil_hot"]
+
+[[permission]]
+identifier = "deny-set-vigil-hot"
+description = "Denies the set_vigil_hot command without any pre-configured scope."
+commands.deny = ["set_vigil_hot"]

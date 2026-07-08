@@ -22,6 +22,12 @@ function createTauriApi() {
         .then(() => ({ success: true }))
         .catch((e: any) => ({ success: false, error: String(e) })),
 
+    // ── UI mode (classic ↔ RipleyOS) ──
+    getUiMode: () => invoke('get_ui_mode') as Promise<'classic' | 'ros'>,
+    // Persists the mode then relaunches the app into the other UI — on success this
+    // never resolves (the process restarts under the new mode).
+    setUiMode: (mode: 'classic' | 'ros') => invoke('set_ui_mode', { mode }),
+
     // ── Identity ──
     getIdentities: () => invoke('get_identities'),
     detectLegacyWallets: () => invoke('detect_legacy_wallets'),

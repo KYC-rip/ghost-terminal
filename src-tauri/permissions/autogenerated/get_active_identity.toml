@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-active-identity"
+description = "Enables the get_active_identity command without any pre-configured scope."
+commands.allow = ["get_active_identity"]
+
+[[permission]]
+identifier = "deny-get-active-identity"
+description = "Denies the get_active_identity command without any pre-configured scope."
+commands.deny = ["get_active_identity"]

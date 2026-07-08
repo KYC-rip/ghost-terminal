@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-embed-visible"
+description = "Enables the browser_embed_visible command without any pre-configured scope."
+commands.allow = ["browser_embed_visible"]
+
+[[permission]]
+identifier = "deny-browser-embed-visible"
+description = "Denies the browser_embed_visible command without any pre-configured scope."
+commands.deny = ["browser_embed_visible"]

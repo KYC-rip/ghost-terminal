@@ -535,6 +535,30 @@ export function SettingsView() {
         <section className="space-y-4">
           <h3 className="text-xs font-black text-xmr-green flex items-center gap-2 uppercase"><EyeOff size={14} /> Countermeasures & UI</h3>
           <Card className="p-6 bg-xmr-surface border-xmr-border/40 space-y-6">
+            {/* Interface: classic ↔ RipleyOS (Tauri shell only — Electron's preload has no setUiMode) */}
+            {(window.api as any).setUiMode && (
+              <div className="flex items-center justify-between border-b border-xmr-border/10 pb-6">
+                <div className="space-y-1">
+                  <span className="text-xs text-xmr-green font-black uppercase">Use_RipleyOS_Desktop <span className="text-xmr-accent">(BETA)</span></span>
+                  <p className="text-xs text-xmr-dim uppercase font-black">Switch to the RipleyOS interface — the app relaunches. Exit anytime via RipleyOS Settings.</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!confirm('Switch to RipleyOS (beta)? The app will relaunch. You can return via RipleyOS Settings → "Exit to classic wallet".')) return;
+                    try {
+                      await (window.api as any).setUiMode('ros');
+                      // On success the process relaunches — this line never runs.
+                    } catch (e: any) {
+                      alert(`SWITCH_FAILED: ${e}`);
+                    }
+                  }}
+                  className="px-3 py-1.5 border border-xmr-border text-[10px] uppercase font-black hover:border-xmr-green hover:text-xmr-green transition-all cursor-pointer"
+                >
+                  Switch_&_Relaunch
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <div className="space-y-1"><span className="text-xs text-xmr-green font-black uppercase">CRT_Visual_Scanlines</span><p className="text-xs text-xmr-dim uppercase font-black">Overlay_Effect</p></div>
               <button

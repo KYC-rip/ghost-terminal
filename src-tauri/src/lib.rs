@@ -11,6 +11,16 @@ mod tor;
 
 use tauri::{AppHandle, Emitter, Manager};
 
+/// Where remote RipleyOS lives in the beta phase. Session B (signed-OTA) replaces
+/// this with the verified local `ros://local/index.html` bundle — this constant is
+/// the single line that changes.
+const ROS_REMOTE_URL: &str = "https://app.ros.rip";
+
+/// Dev-build default for `ui_mode=ros`: the local ripley-os dev server (vite,
+/// pinned :5174 — the classic renderer's dev server is pinned :5173/devUrl).
+/// `ROS_URL` still overrides both defaults.
+const ROS_DEV_URL: &str = "http://localhost:5174";
+
 /// Emit a log event to the frontend console (same format as Electron's core-log).
 pub fn emit_log(app: &AppHandle, source: &str, level: &str, message: &str) {
     // Mirror app-console logs to stdout so they're visible when running headless /
@@ -145,7 +155,96 @@ pub fn run() {
                 let _ = crate::wallet::scanner::ensure_tor(&tor_boot).await;
             });
 
-            log::info!("Ripley Terminal v2 initialized");
+            // Watch tier boot: load the device key from the OS keychain, ask the
+            // one-time consent, then start view-only pool scanners from persisted
+            // view pairs — the chain syncs BEFORE any unlock. Spending (and the
+            // balance/history UI) still requires the password; this only warms the
+            // scan. See wallet::device_key for the tier model.
+            let watch_boot = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // File-backed cache key: no prompts, safe unconditionally.
+                wallet::device_key::init_file_key(&watch_boot);
+                // Consent is asked IN-APP by the wallet UI after the first unlock (a
+                // native boot dialog was jarring UX) — the renderer reads
+                // watchSyncAsked via get_config and calls watch_sync_set. Boot only
+                // ACTS on an already-made choice — including the keychain load
+                // below, which can show the OS prompt and is therefore gated on it:
+                if crate::wallet::scanner::read_config_bool(&watch_boot, "watchSync") {
+                    if !wallet::device_key::ensure_watch_key().await {
+                        emit_log(&watch_boot, "Wallet", "warn",
+                            "👁 Watch sync is enabled but the system keychain refused the key — skipping boot sync (re-enable in Settings ▸ Node to retry).");
+                        return;
+                    }
+                    let data_dir = watch_boot
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let ids = wallet::storage::list_watch_ids(&data_dir);
+                    if !ids.is_empty() {
+                        emit_log(&watch_boot, "Sync", "info", &format!(
+                            "👁 Watch sync: starting view-only scan for {} wallet(s) before unlock…", ids.len()));
+                        let pool = watch_boot.state::<wallet::SyncPool>();
+                        for id in ids {
+                            if let Some(vp) = wallet::storage::load_watch(&data_dir, &id) {
+                                pool.start(&watch_boot, id, vp, 0).await;
+                            }
+                        }
+                    }
+                }
+            });
+
+            // The main window is built HERE, not declared in tauri.conf.json, so its
+            // URL follows the persisted `ui_mode`: "classic" → the bundled legacy
+            // renderer (full `default` capability — local-context only), "ros" →
+            // remote RipleyOS, which the URL-scoped `ros_remote` capability limits
+            // to the wallet invoke surface (no fs/shell/dialog/core:default).
+            // Built AFTER every manage() above so an early IPC call finds its state.
+            let ui_mode = commands::config::read_ui_mode(app.handle());
+            let ros_override = std::env::var("ROS_URL")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let classic_url = || tauri::WebviewUrl::App("index.html".into());
+            let window_url = if ui_mode == "ros" {
+                // Production loads remote app.ros.rip; dev builds default to the local
+                // ripley-os dev server (:5174). ROS_URL overrides either.
+                let default_ros =
+                    if cfg!(debug_assertions) { ROS_DEV_URL } else { ROS_REMOTE_URL };
+                let raw = ros_override.clone().unwrap_or_else(|| default_ros.to_string());
+                match raw.parse::<tauri::Url>() {
+                    Ok(u) => {
+                        // Any non-production origin (the dev default, or a ROS_URL
+                        // override) won't match the static ros_remote capability — so
+                        // re-grant the SAME permission set for that origin at runtime
+                        // (parse the shipped file and swap the URL, so the two surfaces
+                        // can never drift).
+                        if raw != ROS_REMOTE_URL {
+                            println!("[UI/warn] loading RipleyOS from non-production origin {raw}");
+                            let mut cap: serde_json::Value =
+                                serde_json::from_str(include_str!("../capabilities/ros_remote.json"))
+                                    .expect("ros_remote.json is valid JSON");
+                            cap["identifier"] = serde_json::json!("ros-remote-override");
+                            cap["remote"]["urls"] = serde_json::json!([raw]);
+                            app.handle().add_capability(cap.to_string())?;
+                        }
+                        tauri::WebviewUrl::External(u)
+                    }
+                    Err(e) => {
+                        // A broken URL must not brick the app — boot classic instead.
+                        println!("[UI/error] invalid ROS url \"{raw}\" ({e}) — falling back to classic");
+                        classic_url()
+                    }
+                }
+            } else {
+                classic_url()
+            };
+            tauri::WebviewWindowBuilder::new(app, "main", window_url)
+                .title("Ripley Terminal")
+                .inner_size(1200.0, 800.0)
+                .min_inner_size(900.0, 600.0)
+                .build()?;
+
+            log::info!("Ripley Terminal v2 initialized (ui_mode={ui_mode})");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -190,9 +289,12 @@ pub fn run() {
             commands::config::get_config,
             commands::config::save_config,
             commands::config::save_config_only,
+            commands::config::watch_sync_set,
             commands::config::save_config_and_reload,
             commands::config::get_app_info,
             commands::config::reveal_path,
+            commands::config::get_ui_mode,
+            commands::config::set_ui_mode,
             // Client-side metadata stores + system
             commands::kvstore::save_ghost_trade,
             commands::kvstore::get_ghost_trades,

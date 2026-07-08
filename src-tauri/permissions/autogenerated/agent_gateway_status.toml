@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-gateway-status"
+description = "Enables the agent_gateway_status command without any pre-configured scope."
+commands.allow = ["agent_gateway_status"]
+
+[[permission]]
+identifier = "deny-agent-gateway-status"
+description = "Denies the agent_gateway_status command without any pre-configured scope."
+commands.deny = ["agent_gateway_status"]

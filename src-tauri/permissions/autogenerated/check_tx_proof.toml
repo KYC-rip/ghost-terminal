@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-tx-proof"
+description = "Enables the check_tx_proof command without any pre-configured scope."
+commands.allow = ["check_tx_proof"]
+
+[[permission]]
+identifier = "deny-check-tx-proof"
+description = "Denies the check_tx_proof command without any pre-configured scope."
+commands.deny = ["check_tx_proof"]

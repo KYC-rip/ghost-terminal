@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sweep-single"
+description = "Enables the sweep_single command without any pre-configured scope."
+commands.allow = ["sweep_single"]
+
+[[permission]]
+identifier = "deny-sweep-single"
+description = "Denies the sweep_single command without any pre-configured scope."
+commands.deny = ["sweep_single"]

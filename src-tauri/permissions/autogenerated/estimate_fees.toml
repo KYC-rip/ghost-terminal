@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-estimate-fees"
+description = "Enables the estimate_fees command without any pre-configured scope."
+commands.allow = ["estimate_fees"]
+
+[[permission]]
+identifier = "deny-estimate-fees"
+description = "Denies the estimate_fees command without any pre-configured scope."
+commands.deny = ["estimate_fees"]

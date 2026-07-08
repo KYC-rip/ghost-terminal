@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-ghost-trades"
+description = "Enables the get_ghost_trades command without any pre-configured scope."
+commands.allow = ["get_ghost_trades"]
+
+[[permission]]
+identifier = "deny-get-ghost-trades"
+description = "Denies the get_ghost_trades command without any pre-configured scope."
+commands.deny = ["get_ghost_trades"]

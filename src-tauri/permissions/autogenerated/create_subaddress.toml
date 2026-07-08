@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-subaddress"
+description = "Enables the create_subaddress command without any pre-configured scope."
+commands.allow = ["create_subaddress"]
+
+[[permission]]
+identifier = "deny-create-subaddress"
+description = "Denies the create_subaddress command without any pre-configured scope."
+commands.deny = ["create_subaddress"]
