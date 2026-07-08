@@ -97,10 +97,10 @@ fn read_config_str(app: &AppHandle, key: &str) -> Option<String> {
 
 /// Parse nodes for a given network + section ("clearnet" | "tor") from nodes.json.
 ///
-/// Clearnet addresses are normalized to an `http://` URL and HTTPS is skipped
-/// (simple-request has TLS cert issues). Tor `.onion` addresses are stored
-/// verbatim as `host:port` — `ArtiTransport` parses them and arti dials them
-/// natively (no exit node).
+/// Clearnet addresses keep their scheme (bare `host:port` defaults to `http://`);
+/// https nodes race alongside http ones — reqwest handles TLS. Tor `.onion`
+/// addresses are stored verbatim as `host:port` — `ArtiTransport` parses them
+/// and arti dials them natively (no exit node).
 fn parse_nodes(parsed: &serde_json::Value, network: &str, section: &str) -> Vec<(String, String)> {
     let mut nodes = vec![];
     if let Some(sec) = parsed
@@ -113,11 +113,12 @@ fn parse_nodes(parsed: &serde_json::Value, network: &str, section: &str) -> Vec<
                 for addr in addrs {
                     if let Some(addr_str) = addr.as_str() {
                         if section == "clearnet" {
-                            // Skip HTTPS nodes — simple-request has TLS cert issues
-                            if addr_str.starts_with("https://") {
-                                continue;
-                            }
-                            let url = if addr_str.starts_with("http://") {
+                            // https nodes are kept: the clearnet transport is reqwest
+                            // (native TLS) — the old "skip HTTPS" rule was for the
+                            // retired simple-request transport and it silently dropped
+                            // the only nodes that survive DPI-filtered networks (plain
+                            // HTTP on 18081/18089 gets reset; TLS on 443 passes).
+                            let url = if addr_str.starts_with("http://") || addr_str.starts_with("https://") {
                                 addr_str.to_string()
                             } else {
                                 format!("http://{}", addr_str)
