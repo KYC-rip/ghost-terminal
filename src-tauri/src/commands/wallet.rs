@@ -1127,6 +1127,51 @@ pub async fn get_tx_proof(
     crate::wallet::tx_proof::generate_out_proof_v2(txid_bytes, message.as_deref().unwrap_or(""), r, &addr)
 }
 
+/// Result of signing an arbitrary message with a wallet address.
+#[derive(serde::Serialize)]
+pub struct SignedMessage {
+    pub signature: String,
+    #[serde(rename = "signerAddress")]
+    pub signer_address: String,
+}
+
+/// Sign an arbitrary UTF-8 message with the account whose PRIMARY address matches
+/// `address` (Monero `SigV1`, verifiable by monero-wallet-rpc `verify`). This is the
+/// signing primitive behind "Sign in with Ripley" — it proves control of `address`
+/// without moving funds. v1 signs with the account-0 primary (main) address only;
+/// the requested `address` MUST equal this wallet's main address. Requires the wallet
+/// unlocked (spend key resident). UNAUDITED crypto (see wallet/msg_sign.rs).
+#[tauri::command]
+pub async fn sign_message(
+    state: State<'_, WalletState>,
+    address: String,
+    message: String,
+) -> Result<SignedMessage, String> {
+    let network = state.get_network().await;
+    let target = MoneroAddress::from_str(network, &address)
+        .map_err(|e| format!("Invalid address: {:?}", e))?;
+
+    let spend_sec_z = state
+        .get_spend_key()
+        .await
+        .ok_or("Wallet is locked — unlock it to sign")?;
+    let spend_sec: curve25519_dalek::Scalar = (*spend_sec_z).into();
+    let spend_pub = spend_sec * curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+
+    // The requested address must be THIS wallet's account-0 primary: its spend public
+    // key must equal spend_sec·G, and it must not be a subaddress. Anything else is
+    // refused (subaddress signing is a planned follow-up).
+    let target_spend: curve25519_dalek::EdwardsPoint = target.spend().into();
+    if target.is_subaddress() || target_spend != spend_pub {
+        return Err(
+            "This wallet's primary address does not match the requested address (only main-address signing is supported)".into(),
+        );
+    }
+
+    let signature = crate::wallet::msg_sign::sign_message_v1(&message, &spend_sec, &spend_pub);
+    Ok(SignedMessage { signature, signer_address: target.to_string() })
+}
+
 /// Verify a transaction SECRET key against the on-chain transaction and report the
 /// atomic amount it paid `address`, plus confirmations. `good` is true iff the key is
 /// genuinely this tx's key (r·G == on-chain R). Runs over the configured routing mode.

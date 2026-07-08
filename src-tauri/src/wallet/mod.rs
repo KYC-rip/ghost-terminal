@@ -8,6 +8,7 @@ pub mod decoy_cache;
 pub mod types;
 pub mod base58_monero;
 pub mod tx_proof;
+pub mod msg_sign;
 pub mod sync_pool;
 pub mod transfer_ledger;
 

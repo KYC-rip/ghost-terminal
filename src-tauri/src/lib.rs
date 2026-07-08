@@ -78,6 +78,34 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            // OS-level deep links (ripley:// for "Sign in with Ripley", plus monero:/
+            // xmr402: opened outside the app). The plugin captures the URI; we forward
+            // each one to the frontend as a DEEP_LINK core-log line, which native.ts
+            // routes to the right wallet flow (osHandleSiwr / osHandleXmr402 / send).
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_app = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        crate::emit_log(&dl_app, "DEEP_LINK", "info", url.as_str());
+                    }
+                });
+                // Cold start: a URL that LAUNCHED the app is available via get_current()
+                // (the on_open_url listener above only fires for links received while
+                // running). Emit it on a delay — at setup() the webview isn't up yet, so
+                // its DEEP_LINK listener would miss an immediate emit. A short wait lets
+                // the frontend mount first (mirrors the Tor bootstrap spawn below).
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    let boot = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        for url in urls {
+                            crate::emit_log(&boot, "DEEP_LINK", "info", url.as_str());
+                        }
+                    });
+                }
+            }
+
             // Initialize wallet state manager
             let wallet_state = wallet::WalletState::new(app.handle().clone());
             app.manage(wallet_state);
@@ -148,6 +176,7 @@ pub fn run() {
             // Proof operations
             commands::wallet::get_tx_key,
             commands::wallet::get_tx_proof,
+            commands::wallet::sign_message,
             commands::wallet::check_tx_key,
             commands::wallet::check_tx_proof,
             // Sync
@@ -179,6 +208,7 @@ pub fn run() {
             commands::system::browser_embed_open,
             commands::system::browser_embed_bounds,
             commands::system::browser_embed_navigate,
+            commands::system::browser_embed_zoom,
             commands::system::browser_embed_visible,
             commands::system::browser_embed_close,
             commands::system::browser_embed_deliver_xmr402,

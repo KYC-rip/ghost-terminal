@@ -458,6 +458,7 @@ pub async fn browser_embed_open(
     w: f64,
     h: f64,
     bg: Option<String>,
+    zoom: Option<f64>,
 ) -> Result<(), String> {
     let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
     // Refuse (rather than embed a direct/leaky webview) when Tor isn't ready or the
@@ -480,6 +481,9 @@ pub async fn browser_embed_open(
     // Page-load progress → the ROS address-bar loading bar (via the core-log channel).
     let app_ev = app.clone();
     let app_nav = app.clone();
+    // OS text-scale (os.css zooms .ros; this separate webview can't inherit it) — ROS
+    // passes the matching factor, default 100%.
+    let z = zoom.unwrap_or(1.0);
     let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed))
         // Suppress the webview's native right-click menu (Inspect / Reload / Back) on
         // every browsed page, matching the rest of the app. Runs in the page at
@@ -491,17 +495,22 @@ pub async fn browser_embed_open(
             // <a href="monero:8B…?tx_amount=1.5"> would just dead-end in the webview.
             // Forward them to ROS (which routes monero: → the wallet Send flow) and
             // CANCEL the navigation so the webview stays on the current page.
-            if matches!(url.scheme(), "monero" | "bitcoin" | "lightning" | "xmr402") {
+            if matches!(url.scheme(), "monero" | "bitcoin" | "lightning" | "xmr402" | "ripley") {
                 crate::emit_log(&app_nav, "BROWSER_URI", "info", url.as_str());
                 return false;
             }
             true
         })
-        .on_page_load(move |_wv, payload| {
+        .on_page_load(move |wv, payload| {
             let phase = match payload.event() {
                 tauri::webview::PageLoadEvent::Started => "start",
                 _ => "end",
             };
+            // Re-pin zoom once the page has finished loading: a set_zoom() at creation is
+            // applied before the first navigation and WKWebView resets pageZoom when a page
+            // actually loads — so without this the embed reverts (oversized on HiDPI, and it
+            // ignores the OS text-scale). Only on "end" — re-pinning mid-load can blank it.
+            if phase == "end" { let _ = wv.set_zoom(z); }
             // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
             crate::emit_log(&app_ev, "BROWSER_LOAD", "info", &format!("{}|{}", phase, payload.url()));
         });
@@ -509,9 +518,9 @@ pub async fn browser_embed_open(
     if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
     let wv = win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
-    // Child webviews can inherit a non-1.0 page zoom on macOS HiDPI → content renders
-    // oversized. Pin to 100% (Retina backing is handled separately by the webview).
-    let _ = wv.set_zoom(1.0);
+    // Apply the OS text-scale factor now; on_page_load re-pins it after each navigation
+    // (WKWebView resets pageZoom on load, so a one-shot set here alone doesn't hold).
+    let _ = wv.set_zoom(z);
     // Record the mode this embed was created under so a later navigate can refuse if
     // routing has since changed (its proxy is frozen at creation — see guard_browser_target).
     let created_mode = mode.clone().unwrap_or_else(|| crate::wallet::scanner::read_routing_mode(&app));
@@ -564,6 +573,13 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
         }
         None => crate::emit_log(&app, "BROWSER", "warn", "embed navigate: no ros-embed webview"),
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_embed_zoom(app: AppHandle, zoom: f64) -> Result<(), String> {
+    // Live-track the OS text-scale on an already-open embed (no-op if none is open).
+    if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.set_zoom(zoom); }
     Ok(())
 }
 
