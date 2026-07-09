@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicktomlin/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "Ripley Terminal",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "identifier": "run.ripley.terminal",
   "build": {
     "frontendDist": "../dist",

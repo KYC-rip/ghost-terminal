@@ -40,7 +40,7 @@ pub const OTA_MAX_AGE_SECS: i64 = 30 * 24 * 3600;
 /// load: if the on-disk resource doesn't match, the binary's integrity is compromised.
 /// Regenerated together with the resource by `ripley-os/scripts/build-ota.mjs`.
 pub const FALLBACK_SHA256: &str =
-    "7f850d461f6d283136578522e88b1133d22c3bc8454fd0d6c60b738a25f7526d";
+    "835ca84085a24adf744f4ebe79efd1124be68bba9011fd61afa080ebaef4166c";
 
 /// The signed manifest served at `OTA_MANIFEST_URL`. Its detached `.sig` is Ed25519
 /// over the RAW bytes of this document exactly as served — so we verify the bytes
