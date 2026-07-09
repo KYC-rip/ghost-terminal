@@ -217,6 +217,13 @@ pub fn extract_tar_zst(bytes: &[u8]) -> Result<std::collections::HashMap<String,
     let entries = archive.entries().map_err(|e| format!("tar entries: {e}"))?;
     for entry in entries {
         let mut entry = entry.map_err(|e| format!("tar entry: {e}"))?;
+        // Serve ONLY regular files. Symlinks/hardlinks/directories/devices carry no bytes
+        // we serve (and a symlink's "path" is its link name, never followed since we
+        // extract to memory) — skip them explicitly for defense-in-depth + clarity rather
+        // than relying on read_to_end returning 0 bytes for them.
+        if entry.header().entry_type() != tar::EntryType::Regular {
+            continue;
+        }
         let path = entry.path().map_err(|e| format!("tar path: {e}"))?;
         let rel = normalize_entry_path(&path.to_string_lossy())
             .ok_or_else(|| format!("unsafe archive path: {}", path.to_string_lossy()))?;
