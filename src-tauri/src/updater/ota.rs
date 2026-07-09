@@ -23,6 +23,11 @@ pub const OTA_UPDATE_PUBKEY: [u8; 32] =
 pub const OTA_MANIFEST_URL: &str = "https://ros.rip/ota/manifest.json";
 pub const OTA_MANIFEST_ONION: &str =
     "http://rosriprqvi346zjxaxdxfhntf7l2gdba45ou2skk24waewizo3fttdqd.onion/ota/manifest.json";
+/// The onion HOST that mirrors `ros.rip` (serves `/ota/…` byte-identically). In tor/custom
+/// routing mode `https://ros.rip` is rewritten to `http://<this>` so OTA fetches never
+/// touch an exit node / leak the user's IP (see `proxied_get_bytes`).
+pub const OTA_ONION_HOST: &str =
+    "rosriprqvi346zjxaxdxfhntf7l2gdba45ou2skk24waewizo3fttdqd.onion";
 
 /// Hard size cap on the archive — rejected before download (anti-DoS).
 pub const OTA_MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -261,6 +266,62 @@ pub fn normalize_entry_path(raw: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Atomically persist a verified archive, then point `state.json` at it, then prune.
+/// `ota_dir` is created if missing. Temp-write + rename is the codebase's durability
+/// pattern (cf. wallet/storage.rs) — an interrupted write leaves the prior state intact,
+/// and state.json is only swapped AFTER the archive it names is fully on disk.
+pub fn stage_verified_archive(
+    ota_dir: &std::path::Path,
+    version: &str,
+    sha256: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    std::fs::create_dir_all(ota_dir).map_err(|e| format!("mkdir ota: {e}"))?;
+    // 1. archive: temp + rename.
+    let archive = ota_dir.join(format!("ros-{version}.tar.zst"));
+    let atmp = ota_dir.join(format!("ros-{version}.tar.zst.tmp"));
+    std::fs::write(&atmp, bytes).map_err(|e| format!("write archive: {e}"))?;
+    std::fs::rename(&atmp, &archive).map_err(|e| format!("rename archive: {e}"))?;
+    // 2. state.json: temp + rename, only after the archive is in place.
+    let state = State { version: version.to_string(), sha256: sha256.to_string() };
+    let data = serde_json::to_vec(&state).map_err(|e| format!("serialize state: {e}"))?;
+    let spath = ota_dir.join("state.json");
+    let stmp = ota_dir.join("state.json.tmp");
+    std::fs::write(&stmp, &data).map_err(|e| format!("write state: {e}"))?;
+    std::fs::rename(&stmp, &spath).map_err(|e| format!("rename state: {e}"))?;
+    // 3. keep current + the newest other (rollback), drop the rest.
+    prune_archives(ota_dir, version);
+    Ok(())
+}
+
+/// Keep `ros-<keep>.tar.zst` plus the single newest OTHER archive (for rollback); delete
+/// the rest. Best-effort (ignores fs errors).
+pub fn prune_archives(ota_dir: &std::path::Path, keep: &str) {
+    let keep_file = format!("ros-{keep}.tar.zst");
+    let mut others: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let Ok(rd) = std::fs::read_dir(ota_dir) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with("ros-") && name.ends_with(".tar.zst") && name != keep_file {
+            others.push((name, e.path()));
+        }
+    }
+    // Newest-versioned "other" first; keep it, remove the rest.
+    others.sort_by(|a, b| archive_version_key(&b.0).cmp(&archive_version_key(&a.0)));
+    for (_, path) in others.into_iter().skip(1) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// (major,minor,patch) parsed from a `ros-X.Y.Z.tar.zst` filename; unparseable → zeros.
+fn archive_version_key(filename: &str) -> (u64, u64, u64) {
+    let v = filename
+        .strip_prefix("ros-")
+        .and_then(|s| s.strip_suffix(".tar.zst"))
+        .unwrap_or("");
+    parse_semver(v).unwrap_or((0, 0, 0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +557,38 @@ mod tests {
         let map = extract_tar_zst(&zst).unwrap();
         assert_eq!(map.get("index.html").map(|v| v.as_slice()), Some(&b"<h1>ros</h1>"[..]));
         assert_eq!(map.get("assets/x.js").map(|v| v.as_slice()), Some(&b"1"[..]));
+    }
+
+    #[test]
+    fn stage_persists_atomically_and_prunes_to_two() {
+        let dir = std::env::temp_dir().join("ripley-ota-test-stage");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Stage v2.0.0 → archive + state written; state round-trips.
+        stage_verified_archive(&dir, "2.0.0", "aa", b"archive-200").unwrap();
+        let st: State =
+            serde_json::from_slice(&std::fs::read(dir.join("state.json")).unwrap()).unwrap();
+        assert_eq!((st.version.as_str(), st.sha256.as_str()), ("2.0.0", "aa"));
+        assert_eq!(std::fs::read(dir.join("ros-2.0.0.tar.zst")).unwrap(), b"archive-200");
+
+        // Stage v2.1.0 → keeps current + previous (2 archives).
+        stage_verified_archive(&dir, "2.1.0", "bb", b"archive-210").unwrap();
+        assert!(dir.join("ros-2.1.0.tar.zst").exists());
+        assert!(dir.join("ros-2.0.0.tar.zst").exists());
+
+        // Stage v2.2.0 → prune drops the oldest (2.0.0), keeps 2.2.0 + 2.1.0.
+        stage_verified_archive(&dir, "2.2.0", "cc", b"archive-220").unwrap();
+        assert!(dir.join("ros-2.2.0.tar.zst").exists());
+        assert!(dir.join("ros-2.1.0.tar.zst").exists());
+        assert!(!dir.join("ros-2.0.0.tar.zst").exists(), "oldest should be pruned");
+
+        // No leftover temp files (atomic rename cleaned up).
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "temp files left: {names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

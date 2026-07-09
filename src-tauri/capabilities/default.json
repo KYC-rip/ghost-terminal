@@ -60,6 +60,8 @@
     "allow-reveal-path",
     "allow-get-ui-mode",
     "allow-set-ui-mode",
+    "allow-check-ros-update",
+    "allow-ros-channel-status",
     "allow-save-ghost-trade",
     "allow-get-ghost-trades",
     "allow-save-xmr402-payment",

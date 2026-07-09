@@ -2265,6 +2265,12 @@
           "markdownDescription": "Enables the check_for_updates command without any pre-configured scope."
         },
         {
+          "description": "Enables the check_ros_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-ros-update",
+          "markdownDescription": "Enables the check_ros_update command without any pre-configured scope."
+        },
+        {
           "description": "Enables the check_tx_key command without any pre-configured scope.",
           "type": "string",
           "const": "allow-check-tx-key",
@@ -2541,6 +2547,12 @@
           "markdownDescription": "Enables the revoke_transfer_grant command without any pre-configured scope."
         },
         {
+          "description": "Enables the ros_channel_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ros-channel-status",
+          "markdownDescription": "Enables the ros_channel_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ros_native_fetch command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ros-native-fetch",
@@ -2767,6 +2779,12 @@
           "type": "string",
           "const": "deny-check-for-updates",
           "markdownDescription": "Denies the check_for_updates command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_ros_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-ros-update",
+          "markdownDescription": "Denies the check_ros_update command without any pre-configured scope."
         },
         {
           "description": "Denies the check_tx_key command without any pre-configured scope.",
@@ -3043,6 +3061,12 @@
           "type": "string",
           "const": "deny-revoke-transfer-grant",
           "markdownDescription": "Denies the revoke_transfer_grant command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ros_channel_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ros-channel-status",
+          "markdownDescription": "Denies the ros_channel_status command without any pre-configured scope."
         },
         {
           "description": "Denies the ros_native_fetch command without any pre-configured scope.",

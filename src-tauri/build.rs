@@ -56,6 +56,9 @@ const APP_COMMANDS: &[&str] = &[
     "reveal_path",
     "get_ui_mode",
     "set_ui_mode",
+    // Signed-OTA update channel for the RipleyOS bundle
+    "check_ros_update",
+    "ros_channel_status",
     // Client-side metadata stores + system
     "save_ghost_trade",
     "get_ghost_trades",

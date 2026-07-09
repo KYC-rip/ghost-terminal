@@ -154,12 +154,31 @@ fn is_onion(url: &str) -> bool {
 /// leak the user's IP via a direct clearnet `fetch()` while Tor is enabled.
 #[tauri::command]
 pub async fn proxied_get(app: AppHandle, url: String) -> Result<String, String> {
-    let mode = crate::wallet::scanner::read_routing_mode(&app);
-    // Route kyc.rip through its onion when not on clearnet (no exit node, no IP leak).
+    let bytes = proxied_get_bytes(&app, &url, Duration::from_secs(15), None).await?;
+    String::from_utf8(bytes).map_err(|e| format!("non-UTF-8 response: {e}"))
+}
+
+/// Binary-safe sibling of `proxied_get`: fetch a URL through the CONFIGURED uplink
+/// (Tor / SOCKS / clearnet) and return the raw bytes. Used by the signed-OTA updater to
+/// fetch the manifest, its detached `.sig` (64 raw bytes — would be mangled by the
+/// UTF-8 path), and the `.tar.zst` archive. `timeout` lets a large archive download take
+/// longer than the 15s API default; `max_bytes`, when set, aborts a clearnet response
+/// whose declared Content-Length exceeds the cap (anti-DoS) and rejects any body that
+/// still exceeds it after the read.
+pub async fn proxied_get_bytes(
+    app: &AppHandle,
+    url: &str,
+    timeout: Duration,
+    max_bytes: Option<u64>,
+) -> Result<Vec<u8>, String> {
+    let mode = crate::wallet::scanner::read_routing_mode(app);
+    // Route first-party hosts through their onion when not on clearnet (no exit node, no
+    // IP leak): api.kyc.rip, and ros.rip for OTA updates.
     let target = if mode != "clearnet" {
         url.replace("https://api.kyc.rip", &format!("http://{KYC_API_ONION}/api"))
+            .replace("https://ros.rip", &format!("http://{}", crate::updater::ota::OTA_ONION_HOST))
     } else {
-        url.clone()
+        url.to_string()
     };
 
     // A .onion is only reachable over Tor — force it through Tor regardless of the
@@ -172,7 +191,7 @@ pub async fn proxied_get(app: AppHandle, url: String) -> Result<String, String> 
             None => Err("Tor is not connected yet (required for this request)".into()),
         },
         "custom" => {
-            let proxy = crate::wallet::scanner::read_proxy_address(&app);
+            let proxy = crate::wallet::scanner::read_proxy_address(app);
             if proxy.trim().is_empty() {
                 Err("Custom routing selected but no proxy address is set".into())
             } else {
@@ -184,17 +203,30 @@ pub async fn proxied_get(app: AppHandle, url: String) -> Result<String, String> 
                 let resp = reqwest::Client::new()
                     .get(&target)
                     .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
-                    .timeout(Duration::from_secs(15))
+                    .timeout(timeout)
                     .send()
                     .await
                     .map_err(|e| e.to_string())?;
+                // Abort early if the server declares an over-cap size.
+                if let (Some(cap), Some(len)) = (max_bytes, resp.content_length()) {
+                    if len > cap {
+                        return Err(format!("response too large: {len} > {cap} bytes"));
+                    }
+                }
                 resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
             }
             .await
         }
     };
 
-    String::from_utf8(bytes?).map_err(|e| format!("non-UTF-8 response: {e}"))
+    let bytes = bytes?;
+    // Post-read cap (covers routes with no Content-Length, incl. Tor/SOCKS).
+    if let Some(cap) = max_bytes {
+        if bytes.len() as u64 > cap {
+            return Err(format!("response too large: {} > {cap} bytes", bytes.len()));
+        }
+    }
+    Ok(bytes)
 }
 
 #[derive(serde::Deserialize)]

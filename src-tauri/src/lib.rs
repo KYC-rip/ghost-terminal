@@ -321,6 +321,26 @@ pub fn run() {
                 .min_inner_size(900.0, 600.0)
                 .build()?;
 
+            // Signed-OTA: only in ota mode, check the update channel in the background and
+            // STAGE any newer verified bundle for the NEXT launch (never hot-swap — decision
+            // #2). Best-effort + fail-closed; mirrors the Tor-boot spawn (short delay so the
+            // window is up first, and Tor has a moment to bootstrap for the routed fetch).
+            if ros_source == "ota" {
+                let ota_boot = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                    let r = updater::check_and_stage_update(&ota_boot).await;
+                    if let Some(e) = &r.error {
+                        emit_log(&ota_boot, "OTA", "warn", &format!("update check failed: {e}"));
+                    } else if r.updated {
+                        emit_log(&ota_boot, "OTA", "info",
+                            &format!("staged RipleyOS v{} — applies next launch", r.version.unwrap_or_default()));
+                    } else {
+                        emit_log(&ota_boot, "OTA", "info", "RipleyOS is up to date");
+                    }
+                });
+            }
+
             log::info!("Ripley Terminal v2 initialized (ui_mode={ui_mode})");
             Ok(())
         })
@@ -372,6 +392,8 @@ pub fn run() {
             commands::config::reveal_path,
             commands::config::get_ui_mode,
             commands::config::set_ui_mode,
+            updater::check_ros_update,
+            updater::ros_channel_status,
             // Client-side metadata stores + system
             commands::kvstore::save_ghost_trade,
             commands::kvstore::get_ghost_trades,
