@@ -41,6 +41,23 @@ fn hash_to_scalar(data: &[u8]) -> Scalar {
     Scalar::from_bytes_mod_order(keccak256(data))
 }
 
+/// Monero subaddress private spend key derivation:
+/// `b_i = b + Hs("SubAddr\0" || a || major || minor)`.
+/// This is the key `monero-wallet-rpc sign {address}` uses for a subaddress.
+pub fn subaddress_spend_key(
+    spend_sec: &Scalar,
+    view_sec: &Scalar,
+    account: u32,
+    address: u32,
+) -> Scalar {
+    let mut buf = Vec::with_capacity(8 + 32 + 8);
+    buf.extend_from_slice(b"SubAddr\0");
+    buf.extend_from_slice(view_sec.as_bytes());
+    buf.extend_from_slice(&account.to_le_bytes());
+    buf.extend_from_slice(&address.to_le_bytes());
+    spend_sec + hash_to_scalar(&buf)
+}
+
 /// The Schnorr challenge `c = Hs(H ‖ pub ‖ comm)` — Monero's `s_comm` struct
 /// (`hash h; public_key key; ec_point comm;`), each field 32 bytes, in that order.
 fn challenge(h: &[u8; 32], pub_key: &EdwardsPoint, comm: &EdwardsPoint) -> Scalar {
@@ -150,6 +167,31 @@ mod tests {
         let (sec, pubk) = keypair();
         let sig = sign_message_v1("", &sec, &pubk);
         assert!(verify_message_v1("", &pubk, &sig).unwrap());
+    }
+
+    #[test]
+    fn subaddress_spend_key_matches_monero_address_derivation() {
+        use monero_address::{Network, SubaddressIndex};
+        use monero_wallet::ViewPair;
+        use zeroize::Zeroizing;
+
+        let spend_sec: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
+        let view_sec: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
+        let spend_pub = monero_oxide::ed25519::Point::from(&spend_sec * ED25519_BASEPOINT_POINT);
+        let view = Zeroizing::new(monero_oxide::ed25519::Scalar::from(view_sec));
+        let vp = ViewPair::new(spend_pub, view).expect("view pair");
+        let idx = SubaddressIndex::new(0, 1).unwrap();
+        let addr = vp.subaddress(Network::Mainnet, idx);
+
+        let sub_sec = subaddress_spend_key(&spend_sec, &view_sec, 0, 1);
+        let sub_pub = sub_sec * ED25519_BASEPOINT_POINT;
+        let target_spend: EdwardsPoint = addr.spend().into();
+        assert_eq!(sub_pub, target_spend);
+
+        let sig = sign_message_v1("subaddress siwr", &sub_sec, &sub_pub);
+        assert!(verify_message_v1("subaddress siwr", &sub_pub, &sig).unwrap());
+        let root_pub = spend_sec * ED25519_BASEPOINT_POINT;
+        assert!(!verify_message_v1("subaddress siwr", &root_pub, &sig).unwrap());
     }
 
     // GOLDEN VECTOR — the byte-compat gate against OFFICIAL Monero. Paste a real

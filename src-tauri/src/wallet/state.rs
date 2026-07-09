@@ -668,6 +668,67 @@ impl WalletState {
         self.inner.read().await.view_pair.clone()
     }
 
+    /// Return the private/public spend key pair that corresponds exactly to `target`.
+    /// Supports the primary address and registered subaddresses; integrated/payment-ID
+    /// addresses are refused because SIWR challenges bind to one exact profile address.
+    pub async fn message_signing_key_for_address(
+        &self,
+        target: &MoneroAddress,
+    ) -> Result<(curve25519_dalek::Scalar, curve25519_dalek::EdwardsPoint), String> {
+        if target.payment_id().is_some() {
+            return Err("Integrated addresses are not supported for message signing; use a primary address or subaddress".into());
+        }
+
+        let inner = self.inner.read().await;
+        let spend_key = inner
+            .spend_key
+            .as_ref()
+            .ok_or("Wallet is locked — unlock it to sign")?;
+        let view_key = inner
+            .view_key
+            .as_ref()
+            .ok_or("Wallet is locked — unlock it to sign")?;
+        let view_pair = inner
+            .view_pair
+            .as_ref()
+            .ok_or("Wallet is locked — unlock it to sign")?;
+
+        let spend_sec: curve25519_dalek::Scalar = (**spend_key).into();
+        let spend_pub = spend_sec * ED25519_BASEPOINT_POINT;
+
+        if !target.is_subaddress() {
+            if target.to_string() == view_pair.legacy_address(inner.network).to_string() {
+                return Ok((spend_sec, spend_pub));
+            }
+            return Err("This wallet does not control the requested primary address".into());
+        }
+
+        let view_sec: curve25519_dalek::Scalar = (**view_key).into();
+        for (&account, &next) in &inner.subaddress_next {
+            let start = if account == 0 { 1 } else { 0 };
+            for address in start..next {
+                let Some(idx) = monero_address::SubaddressIndex::new(account, address) else {
+                    continue;
+                };
+                if target.to_string() == view_pair.subaddress(inner.network, idx).to_string() {
+                    let sub_sec = super::msg_sign::subaddress_spend_key(
+                        &spend_sec, &view_sec, account, address,
+                    );
+                    let sub_pub = sub_sec * ED25519_BASEPOINT_POINT;
+                    let target_spend: curve25519_dalek::EdwardsPoint = target.spend().into();
+                    if sub_pub != target_spend {
+                        return Err(
+                            "Derived subaddress key did not match the requested address".into()
+                        );
+                    }
+                    return Ok((sub_sec, sub_pub));
+                }
+            }
+        }
+
+        Err("This wallet does not control the requested subaddress; use an address from this wallet's Addresses tab".into())
+    }
+
     pub async fn set_daemon_url(&self, url: &str) {
         self.inner.write().await.daemon_url = Some(url.to_string());
     }

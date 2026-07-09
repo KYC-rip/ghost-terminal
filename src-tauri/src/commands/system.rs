@@ -405,6 +405,10 @@ const EMBED_LABEL: &str = "ros-embed";
 /// leak (a clearnet-created embed would load over clearnet while the UI shows Tor).
 /// Set on open, cleared on close. std Mutex is fine — never held across an await.
 static EMBED_MODE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// Last URL we asked/observed the embedded browser to load. We keep this ourselves
+/// because `Webview::url()` can panic inside wry/WKWebView when WebKit reports a nil
+/// URL during early/rapid child-webview navigation.
+static EMBED_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Resolve the webview proxy for the user's routing mode (shared by both browsers).
 ///
@@ -567,7 +571,7 @@ pub async fn browser_embed_open(
     // OS text-scale (os.css zooms .ros; this separate webview can't inherit it) — ROS
     // passes the matching factor, default 100%.
     let z = zoom.unwrap_or(1.0);
-    let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed))
+    let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed.clone()))
         // Suppress the webview's native right-click menu (Inspect / Reload / Back) on
         // every browsed page, matching the rest of the app. Runs in the page at
         // document-start on each navigation; capture-phase preventDefault wins even if
@@ -602,6 +606,9 @@ pub async fn browser_embed_open(
                 { let _ = wv.eval("(function(){try{var d=document.createElement('div');d.id='__ros_probe';d.style.cssText='position:fixed;left:4px;bottom:4px;z-index:2147483647;background:#000;color:#0f0;font:10px monospace;padding:2px 6px;opacity:.85;pointer-events:none';d.textContent='vw '+innerWidth+'x'+innerHeight+' dpr '+devicePixelRatio+(window.visualViewport?' vvscale '+visualViewport.scale:'');(document.body||document.documentElement).appendChild(d);}catch(e){}})();"); }
             }
             // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
+            if let Ok(mut g) = EMBED_URL.lock() {
+                *g = Some(payload.url().to_string());
+            }
             crate::emit_log(&app_ev, "BROWSER_LOAD", "info", &format!("{}|{}", phase, payload.url()));
         });
     if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
@@ -616,6 +623,7 @@ pub async fn browser_embed_open(
     // routing has since changed (its proxy is frozen at creation — see guard_browser_target).
     let created_mode = mode.clone().unwrap_or_else(|| crate::wallet::scanner::read_routing_mode(&app));
     if let Ok(mut g) = EMBED_MODE.lock() { *g = Some(created_mode); }
+    if let Ok(mut g) = EMBED_URL.lock() { *g = Some(parsed.to_string()); }
     Ok(())
 }
 
@@ -645,12 +653,16 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
             // query change). Same webview → same fixed proxy, so no routing/leak change; the
             // target was already vetted by guard_browser_target above. URL is JSON-escaped
             // so it can't break out of the JS string literal.
-            let same_doc_query_change = wv.url().ok().is_some_and(|cur| {
-                cur.scheme() == parsed.scheme()
-                    && cur.host_str() == parsed.host_str()
-                    && cur.path() == parsed.path()
-                    && cur.query() != parsed.query()
-            });
+            let same_doc_query_change = EMBED_URL
+                .lock()
+                .ok()
+                .and_then(|g| g.as_deref().and_then(|s| s.parse::<tauri::Url>().ok()))
+                .is_some_and(|cur| {
+                    cur.scheme() == parsed.scheme()
+                        && cur.host_str() == parsed.host_str()
+                        && cur.path() == parsed.path()
+                        && cur.query() != parsed.query()
+                });
             if same_doc_query_change {
                 let js = format!(
                     "window.location.replace({})",
@@ -659,8 +671,9 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
                 );
                 wv.eval(&js).map_err(|e| e.to_string())?;
             } else {
-                wv.navigate(parsed).map_err(|e| e.to_string())?;
+                wv.navigate(parsed.clone()).map_err(|e| e.to_string())?;
             }
+            if let Ok(mut g) = EMBED_URL.lock() { *g = Some(parsed.to_string()); }
         }
         None => crate::emit_log(&app, "BROWSER", "warn", "embed navigate: no ros-embed webview"),
     }
@@ -687,6 +700,7 @@ pub fn browser_embed_visible(app: AppHandle, visible: bool) -> Result<(), String
 pub fn browser_embed_close(app: AppHandle) -> Result<(), String> {
     if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
     if let Ok(mut g) = EMBED_MODE.lock() { *g = None; }
+    if let Ok(mut g) = EMBED_URL.lock() { *g = None; }
     Ok(())
 }
 

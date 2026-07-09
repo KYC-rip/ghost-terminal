@@ -1197,12 +1197,11 @@ pub struct SignedMessage {
     pub signer_address: String,
 }
 
-/// Sign an arbitrary UTF-8 message with the account whose PRIMARY address matches
-/// `address` (Monero `SigV1`, verifiable by monero-wallet-rpc `verify`). This is the
-/// signing primitive behind "Sign in with Ripley" — it proves control of `address`
-/// without moving funds. v1 signs with the account-0 primary (main) address only;
-/// the requested `address` MUST equal this wallet's main address. Requires the wallet
-/// unlocked (spend key resident). UNAUDITED crypto (see wallet/msg_sign.rs).
+/// Sign an arbitrary UTF-8 message with the key for the exact wallet address in
+/// `address` (primary or registered subaddress; integrated addresses are rejected).
+/// This is the signing primitive behind "Sign in with Ripley" — it proves control
+/// of `address` without moving funds. Requires the wallet unlocked (spend key
+/// resident). UNAUDITED crypto (see wallet/msg_sign.rs).
 #[tauri::command]
 pub async fn sign_message(
     state: State<'_, WalletState>,
@@ -1213,23 +1212,7 @@ pub async fn sign_message(
     let target = MoneroAddress::from_str(network, &address)
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
-    let spend_sec_z = state
-        .get_spend_key()
-        .await
-        .ok_or("Wallet is locked — unlock it to sign")?;
-    let spend_sec: curve25519_dalek::Scalar = (*spend_sec_z).into();
-    let spend_pub = spend_sec * curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
-
-    // The requested address must be THIS wallet's account-0 primary: its spend public
-    // key must equal spend_sec·G, and it must not be a subaddress. Anything else is
-    // refused (subaddress signing is a planned follow-up).
-    let target_spend: curve25519_dalek::EdwardsPoint = target.spend().into();
-    if target.is_subaddress() || target_spend != spend_pub {
-        return Err(
-            "This wallet's primary address does not match the requested address (only main-address signing is supported)".into(),
-        );
-    }
-
+    let (spend_sec, spend_pub) = state.message_signing_key_for_address(&target).await?;
     let signature = crate::wallet::msg_sign::sign_message_v1(&message, &spend_sec, &spend_pub);
     Ok(SignedMessage { signature, signer_address: target.to_string() })
 }
@@ -1648,5 +1631,4 @@ mod spend_confirm_tests {
         assert!(!body.contains("Send "), "fallback must not render a destination line");
     }
 }
-
 
