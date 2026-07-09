@@ -60,6 +60,10 @@ pub fn load_bundle_at_launch(app: &AppHandle) -> Option<protocol::RosBundle> {
             Ok(_) => log::warn!("[ota] cache archive hash mismatch — using fallback"),
             Err(e) => log::warn!("[ota] cache archive missing ({e}) — using fallback"),
         }
+        // The cached archive named by state.json is gone/corrupt: drop the stale pointer
+        // so status + the rollback gate reflect the fallback and the updater re-fetches
+        // that version instead of treating it as already-installed.
+        let _ = std::fs::remove_file(ota_dir(app).join("state.json"));
     }
 
     // Bundled fallback (first run, offline, or a bad cache).
@@ -87,11 +91,23 @@ pub fn active_version(app: &AppHandle) -> String {
         .unwrap_or_else(|| "fallback".to_string())
 }
 
-/// Current version as a comparable semver for the rollback gate: the cached state
-/// version, else `"0.0.0"` (no cache yet / bundled fallback → any published version is
-/// newer, so the first check adopts the real CDN bundle).
+/// Current version for the rollback gate, RECONCILED with reality: the cached state
+/// version only if its archive is present AND still hashes to `state.sha256`; otherwise
+/// `"0.0.0"`. Without this, a stale `state.json` (archive lost/corrupt → launch fell back
+/// to the bundled fallback) would make the updater treat that same signed version as
+/// "up to date" and never re-download it — stranding the user on the fallback until a
+/// higher version ships. Pure (no side effects); the stale pointer is cleared at launch
+/// by `load_bundle_at_launch`.
 fn current_semver(app: &AppHandle) -> String {
-    read_state(app).map(|s| s.version).unwrap_or_else(|| "0.0.0".to_string())
+    if let Some(state) = read_state(app) {
+        let path = ota_dir(app).join(format!("ros-{}.tar.zst", state.version));
+        if let Ok(bytes) = std::fs::read(&path) {
+            if ota::verify_archive_hash(&bytes, &state.sha256) {
+                return state.version;
+            }
+        }
+    }
+    "0.0.0".to_string()
 }
 
 /// The manifest URL to check. Pinned to `ota::OTA_MANIFEST_URL` in release; a DEV-ONLY
@@ -115,6 +131,15 @@ fn manifest_url() -> String {
         }
     }
     ota::OTA_MANIFEST_URL.to_string()
+}
+
+/// The archive URL to download, derived from the PINNED manifest URL's directory rather
+/// than the server-controlled `manifest.url` field — so the download origin is pinned to
+/// the same trusted host as the manifest, and a (signed) manifest can't redirect the
+/// fetch to an arbitrary host. e.g. `…/ota/manifest.json` → `…/ota/ros-<version>.tar.zst`.
+fn archive_url_for(manifest_url: &str, version: &str) -> String {
+    let base = manifest_url.rsplit_once('/').map(|(b, _)| b).unwrap_or(manifest_url);
+    format!("{base}/ros-{version}.tar.zst")
 }
 
 fn now_unix() -> i64 {
@@ -187,9 +212,11 @@ pub async fn check_and_stage_update(app: &AppHandle) -> CheckResult {
         Err(e) => return CheckResult::err(e.to_string()),
     };
 
-    // 3. Download the archive (bigger timeout; hard size cap), verify its hash.
+    // 3. Download the archive from the PINNED origin (derived from the manifest URL, not
+    //    the manifest's own `url` field), bigger timeout + hard size cap; verify its hash.
+    let archive_url = archive_url_for(&m_url, &manifest.version);
     let archive = match proxied_get_bytes(
-        app, &manifest.url, Duration::from_secs(120), Some(ota::OTA_MAX_BYTES),
+        app, &archive_url, Duration::from_secs(120), Some(ota::OTA_MAX_BYTES),
     ).await {
         Ok(b) => b,
         Err(e) => return CheckResult::err(format!("archive download failed: {e}")),

@@ -72,8 +72,6 @@
     "allow-agent-gateway-set-config",
     "allow-agent-gateway-rotate-key",
 
-    "allow-set-ui-mode",
-    "allow-check-ros-update",
-    "allow-ros-channel-status"
+    "allow-set-ui-mode"
   ]
 }

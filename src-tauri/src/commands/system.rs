@@ -176,7 +176,9 @@ pub async fn proxied_get_bytes(
     // IP leak): api.kyc.rip, and ros.rip for OTA updates.
     let target = if mode != "clearnet" {
         url.replace("https://api.kyc.rip", &format!("http://{KYC_API_ONION}/api"))
-            .replace("https://ros.rip", &format!("http://{}", crate::updater::ota::OTA_ONION_HOST))
+            // Trailing slash anchors the host so `ros.rip.evil.com` can't match; our OTA
+            // URLs are pinned to `https://ros.rip/ota/…` so they always carry a path.
+            .replace("https://ros.rip/", &format!("http://{}/", crate::updater::ota::OTA_ONION_HOST))
     } else {
         url.to_string()
     };
@@ -185,9 +187,16 @@ pub async fn proxied_get_bytes(
     // configured mode, and REFUSE (never fall back to clearnet) if Tor isn't up, so
     // an onion target can never leak to the system resolver / a direct connection.
     let route = if is_onion(&target) { "tor" } else { mode.as_str() };
+    // The cap is enforced DURING body collection on every route (Limited for Tor/SOCKS,
+    // a chunk loop for clearnet), so an oversized/hostile response is aborted mid-stream
+    // rather than fully buffered first.
+    let cap_usize = max_bytes.map(|c| c.min(usize::MAX as u64) as usize);
     let bytes: Result<Vec<u8>, String> = match route {
         "tor" => match app.state::<crate::tor::TorState>().get_client().await {
-            Some(tor) => crate::tor::tor_get(&tor, &target).await,
+            Some(tor) => match cap_usize {
+                Some(l) => crate::tor::tor_get_capped(&tor, &target, l).await,
+                None => crate::tor::tor_get(&tor, &target).await,
+            },
             None => Err("Tor is not connected yet (required for this request)".into()),
         },
         "custom" => {
@@ -195,7 +204,10 @@ pub async fn proxied_get_bytes(
             if proxy.trim().is_empty() {
                 Err("Custom routing selected but no proxy address is set".into())
             } else {
-                crate::tor::socks_get(&proxy, &target).await
+                match cap_usize {
+                    Some(l) => crate::tor::socks_get_capped(&proxy, &target, l).await,
+                    None => crate::tor::socks_get(&proxy, &target).await,
+                }
             }
         }
         _ => {
@@ -213,20 +225,24 @@ pub async fn proxied_get_bytes(
                         return Err(format!("response too large: {len} > {cap} bytes"));
                     }
                 }
-                resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
+                // Stream the body, enforcing the cap as it accumulates (a lying/absent
+                // Content-Length can't sneak an over-cap body past us).
+                let mut resp = resp;
+                let mut buf: Vec<u8> = Vec::new();
+                while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+                    if let Some(cap) = max_bytes {
+                        if buf.len() as u64 + chunk.len() as u64 > cap {
+                            return Err(format!("response too large (> {cap} bytes)"));
+                        }
+                    }
+                    buf.extend_from_slice(&chunk);
+                }
+                Ok(buf)
             }
             .await
         }
     };
-
-    let bytes = bytes?;
-    // Post-read cap (covers routes with no Content-Length, incl. Tor/SOCKS).
-    if let Some(cap) = max_bytes {
-        if bytes.len() as u64 > cap {
-            return Err(format!("response too large: {} > {cap} bytes", bytes.len()));
-        }
-    }
-    Ok(bytes)
+    bytes
 }
 
 #[derive(serde::Deserialize)]

@@ -245,6 +245,41 @@ pub async fn tor_get(tor: &TorClient<PreferredRuntime>, url: &str) -> Result<Vec
     tor_get_with_headers(tor, url, &[]).await
 }
 
+/// `tor_get` with a hard response-size cap enforced DURING body collection (via
+/// `http_body_util::Limited`), so an oversized/hostile response is aborted mid-stream
+/// rather than fully buffered then rejected. Used by the OTA updater (manifest/archive).
+pub async fn tor_get_capped(
+    tor: &TorClient<PreferredRuntime>,
+    url: &str,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    let (https, host, port, path) = parse_url(url)?;
+    let exchange = async {
+        let stream = tor
+            .connect((host.as_str(), port))
+            .await
+            .map_err(|e| format!("Tor connect to {host}:{port} failed: {e}"))?;
+        http_get_over(stream, https, &host, &path, &[], Some(limit)).await
+    };
+    tokio::time::timeout(TOR_REQUEST_TIMEOUT, exchange)
+        .await
+        .map_err(|_| format!("Tor GET to {host} timed out"))?
+}
+
+/// `socks_get` with the same during-collection size cap as `tor_get_capped`.
+pub async fn socks_get_capped(proxy: &str, url: &str, limit: usize) -> Result<Vec<u8>, String> {
+    let (https, host, port, path) = parse_url(url)?;
+    let exchange = async {
+        let stream = Socks5Stream::connect(proxy, (host.as_str(), port))
+            .await
+            .map_err(|e| format!("SOCKS connect to {host}:{port} via {proxy} failed: {e}"))?;
+        http_get_over(stream, https, &host, &path, &[], Some(limit)).await
+    };
+    tokio::time::timeout(TOR_REQUEST_TIMEOUT, exchange)
+        .await
+        .map_err(|_| format!("SOCKS GET to {host} timed out"))?
+}
+
 /// Like `tor_get` but attaches caller-supplied request headers (e.g. a DoH
 /// `Accept: application/dns-message`). Same graceful-degradation contract.
 pub async fn tor_get_with_headers(tor: &TorClient<PreferredRuntime>, url: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
@@ -254,7 +289,7 @@ pub async fn tor_get_with_headers(tor: &TorClient<PreferredRuntime>, url: &str, 
             .connect((host.as_str(), port))
             .await
             .map_err(|e| format!("Tor connect to {host}:{port} failed: {e}"))?;
-        http_get_over(stream, https, &host, &path, extra_headers).await
+        http_get_over(stream, https, &host, &path, extra_headers, None).await
     };
     tokio::time::timeout(TOR_REQUEST_TIMEOUT, exchange)
         .await
@@ -275,7 +310,7 @@ pub async fn socks_get_with_headers(proxy: &str, url: &str, extra_headers: &[(&s
         let stream = Socks5Stream::connect(proxy, (host.as_str(), port))
             .await
             .map_err(|e| format!("SOCKS connect to {host}:{port} via {proxy} failed: {e}"))?;
-        http_get_over(stream, https, &host, &path, extra_headers).await
+        http_get_over(stream, https, &host, &path, extra_headers, None).await
     };
     tokio::time::timeout(TOR_REQUEST_TIMEOUT, exchange)
         .await
@@ -285,7 +320,7 @@ pub async fn socks_get_with_headers(proxy: &str, url: &str, extra_headers: &[(&s
 /// Issue a GET over an already-connected byte stream, wrapping in TLS first when
 /// the scheme is https. Shared by `tor_get` (arti DataStream) and `socks_get`
 /// (SOCKS5 stream) — only the stream source differs.
-async fn http_get_over<S>(stream: S, https: bool, host: &str, path: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String>
+async fn http_get_over<S>(stream: S, https: bool, host: &str, path: &str, extra_headers: &[(&str, &str)], limit: Option<usize>) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
@@ -314,9 +349,9 @@ where
             .connect(server_name, stream)
             .await
             .map_err(|e| format!("TLS handshake with {host} failed: {e}"))?;
-        http_over_stream(tls_stream, request, None).await
+        http_over_stream(tls_stream, request, limit).await
     } else {
-        http_over_stream(stream, request, None).await
+        http_over_stream(stream, request, limit).await
     }
 }
 
