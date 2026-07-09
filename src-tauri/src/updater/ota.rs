@@ -40,7 +40,7 @@ pub const OTA_MAX_AGE_SECS: i64 = 30 * 24 * 3600;
 /// load: if the on-disk resource doesn't match, the binary's integrity is compromised.
 /// Regenerated together with the resource by `ripley-os/scripts/build-ota.mjs`.
 pub const FALLBACK_SHA256: &str =
-    "580b172eaa66d2977dbd35842efb785614013cbb864828c4a13def31ca4eadea";
+    "7f850d461f6d283136578522e88b1133d22c3bc8454fd0d6c60b738a25f7526d";
 
 /// The signed manifest served at `OTA_MANIFEST_URL`. Its detached `.sig` is Ed25519
 /// over the RAW bytes of this document exactly as served — so we verify the bytes
@@ -534,9 +534,14 @@ mod tests {
 
     #[test]
     fn bundled_fallback_matches_pinned_hash() {
-        // The archive we ship as resources/ros-fallback.tar.zst (== the fixture archive)
-        // must match the pinned FALLBACK_SHA256 the loader re-checks at runtime.
-        assert!(verify_archive_hash(FIX_ARCHIVE, FALLBACK_SHA256));
+        // The ACTUAL shipped fallback (resources/ros-fallback.tar.zst) must match the
+        // pinned FALLBACK_SHA256 the loader re-checks at runtime — this is what guards a
+        // stale hash after the fallback is rebuilt at release time.
+        const FALLBACK: &[u8] = include_bytes!("../../resources/ros-fallback.tar.zst");
+        assert!(verify_archive_hash(FALLBACK, FALLBACK_SHA256));
+        // And it must decompress + carry index.html (so it can actually serve as ROS).
+        let map = extract_tar_zst(FALLBACK).unwrap();
+        assert!(map.contains_key("index.html"));
     }
 
     #[test]
