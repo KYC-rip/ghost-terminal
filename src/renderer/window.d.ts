@@ -88,6 +88,16 @@ export interface IApi {
 
   // --- Proxy RPC ---
   proxyRequest: (payload: { method: string; params: any }) => Promise<{ success: boolean; result?: any; error?: string }>;
+  fetchPriceHistory: (pair: string) => Promise<{ success: boolean; points?: { time: number; value: number }[]; error?: string }>;
+
+  // --- Vigil strike wallet + session persistence ---
+  vigilSaveStrikeKey: (identityId: string, blob: { v: number; salt: string; iv: string; ct: string }) => Promise<{ success: boolean; error?: string }>;
+  vigilGetStrikeKey: (identityId: string) => Promise<{ v: number; salt: string; iv: string; ct: string } | null>;
+  vigilDeleteStrikeKey: (identityId: string) => Promise<{ success: boolean; error?: string }>;
+  vigilArchiveStrikeKey: (identityId: string) => Promise<{ success: boolean; error?: string }>;
+  vigilSaveSession: (identityId: string, session: object) => Promise<{ success: boolean; error?: string }>;
+  vigilGetSession: (identityId: string) => Promise<Record<string, any> | null>;
+  vigilClearSession: (identityId: string) => Promise<{ success: boolean; error?: string }>;
 
   // --- App Info & Updates ---
   getAppInfo: () => Promise<{ version: string; appDataPath: string; walletsPath: string; platform: NodeJS.Platform; isPackaged: boolean }>;

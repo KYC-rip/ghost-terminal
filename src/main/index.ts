@@ -8,6 +8,7 @@ import { WalletManager } from './WalletManager';
 import { SyncWatcher } from './SyncWatcher';
 import { AppConfig } from './types';
 import { registerIdentityHandlers } from './handlers/IdentityHandler';
+import { registerVigilHandlers } from './handlers/VigilHandler';
 import { AgentGateway } from './AgentGateway';
 
 if (process.defaultApp) {
@@ -239,6 +240,7 @@ app.whenReady().then(async () => {
 
   // 🔌 Register the Identity/Vault Handlers
   registerIdentityHandlers(store);
+  registerVigilHandlers(store);
 
   agentGateway = new AgentGateway(mainWindow, store);
   if (store.get('agent_config.enabled')) {
@@ -561,6 +563,29 @@ app.whenReady().then(async () => {
     } catch (error: any) {
       console.error('Update check failed:', error);
       return { success: false, error: error.message };
+    }
+  });
+
+  // Kraken's REST API blocks browser CORS, so the renderer cannot seed the
+  // vigil chart with history. The main process has no CORS and net.fetch
+  // rides the default session (Tor proxy when enabled).
+  ipcMain.handle('fetch-price-history', async (_, pair: string) => {
+    try {
+      if (typeof pair !== 'string' || !/^[A-Z0-9]{2,8}\/[A-Z0-9]{2,8}$/.test(pair)) {
+        return { success: false, error: 'Invalid pair' };
+      }
+      const restPair = pair.replace('/', '');
+      const res = await net.fetch(`https://api.kraken.com/0/public/OHLC?pair=${restPair}&interval=1`);
+      const data: any = await res.json();
+      if (data.error?.length) return { success: false, error: data.error.join(', ') };
+      const key = Object.keys(data.result || {}).find(k => k !== 'last');
+      if (!key) return { success: false, error: 'No OHLC data' };
+      // Candle: [time, open, high, low, close, vwap, volume, count] — keep closes
+      const points = (data.result[key] as any[]).map(c => ({ time: Number(c[0]), value: parseFloat(c[4]) }))
+        .filter(p => p.time > 0 && p.value > 0);
+      return { success: true, points };
+    } catch (e: any) {
+      return { success: false, error: e.message };
     }
   });
 

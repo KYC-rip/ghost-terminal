@@ -14,6 +14,7 @@ import { ExchangeView } from './components/ExchangeView';
 import { VigilView } from './components/VigilView';
 import { XMR402Modal } from './components/common/XMR402Modal';
 import { VaultProvider } from './contexts/VaultContext';
+import { VigilProvider, useVigil } from './contexts/VigilContext';
 
 const SkinOverlay = ({ config }: { config: any }) => {
   if (!config?.skin_background) return null;
@@ -59,6 +60,12 @@ function MainApp() {
 
   const [showScanlines, setShowScanlines] = useState(resolvedTheme === 'dark');
   const [autoLockMinutes, setAutoLockMinutes] = useState(0);
+  const vigil = useVigil();
+  // Auto-lock is never inhibited anymore: an armed EJECT keeps the wallet
+  // hot behind the locked UI (see vigilHotWallet), which is strictly safer
+  // than keeping the whole app unlocked.
+  const vigilArmed = vigil.state !== 'IDLE' && vigil.state !== 'COMPLETED' && vigil.state !== 'ERROR';
+
   const [uplink, setUplink] = useState<string>('SCANNING...');
   const [uplinkUrl, setUplinkUrl] = useState<string>('');
   const [sessionStartTime] = useState(Date.now());
@@ -279,6 +286,13 @@ function MainApp() {
     return (
       <div className="relative min-h-screen bg-xmr-base text-xmr-green font-mono overflow-hidden">
         <SkinOverlay config={appConfig} />
+        {vigilArmed && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-sm border border-xmr-ghost/50 bg-xmr-ghost/10 text-xmr-ghost text-[10px] font-black uppercase tracking-widest flex items-center gap-2 animate-pulse">
+            <span className="w-1.5 h-1.5 rounded-full bg-xmr-ghost" />
+            VIGIL ARMED — {vigil.activeSession?.mode || vigil.state}
+            {vigil.state === 'PAUSED_LOCKED' && ' · UNLOCK TO DISPATCH'}
+          </div>
+        )}
         <div className="relative z-10 w-full h-full">
           <AuthView
             onUnlock={unlock}
@@ -391,7 +405,7 @@ function MainApp() {
 
           <NavGroup label="Exchange" groupKey="exchange">
             <NavButton id="exchange" label="Exchange" icon={ArrowDown} />
-            {!isPackaged && <NavButton id="vigil" label="Vigil / Limit" icon={Crosshair} />}
+            <NavButton id="vigil" label="Vigil / Limit" icon={Crosshair} />
           </NavGroup>
 
           <NavGroup label="Tools" groupKey="tools">
@@ -507,7 +521,7 @@ function MainApp() {
               <div className={view === 'home' ? 'block' : 'hidden'}><HomeView setView={setView} stats={stats} loading={statsLoading} /></div>
                 <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView setView={setView} vault={vault} handleBurn={() => purgeIdentity(activeId)} appConfig={appConfig} /></div>
                 <div className={view === 'exchange' ? 'block' : 'hidden'}><ExchangeView localXmrAddress={address} /></div>
-                {!isPackaged && <div className={view === 'vigil' ? 'block' : 'hidden'}><VigilView localXmrAddress={address} /></div>}
+                <div className={view === 'vigil' ? 'block' : 'hidden'}><VigilView localXmrAddress={address} /></div>
 
               <div className={view === 'settings' ? 'block' : 'hidden'}><SettingsView /></div>
                 <div className={view === 'agent' ? 'block' : 'hidden'}><AgentTab /></div>
@@ -616,7 +630,11 @@ function MainApp() {
 export default function App() {
   return (
     <VaultProvider>
-      <MainApp />
+      {/* VigilProvider sits ABOVE the lock gate inside MainApp: an armed
+          vigil survives lock/unlock and dies only with the process. */}
+      <VigilProvider>
+        <MainApp />
+      </VigilProvider>
     </VaultProvider>
   );
 }

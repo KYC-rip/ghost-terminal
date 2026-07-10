@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, useRef } from 'react';
 import { Radio, XCircle, Shield, ArrowDown, Copy, Check } from 'lucide-react';
+import { HeartbeatChart } from './HeartbeatChart';
 // Lightweight toast-like notification (avoids react-hot-toast dependency)
 const notify = (msg: string) => console.log(`[Vigil] ${msg}`);
 
@@ -21,6 +22,7 @@ interface Props {
   realPrice?: number | null;
   priceConnected?: boolean;
   externalLogs?: LogLine[];
+  priceHistory?: { time: number; value: number }[];
 }
 
 // ─── Main Component ───
@@ -33,6 +35,7 @@ export function VigilDashboard({
   realPrice,
   priceConnected = true,
   externalLogs = [],
+  priceHistory = [],
 }: Props) {
   const isTriggered = state === 'TRIGGERED' || state === 'EXECUTING';
   const displayPrice = realPrice ?? parseFloat(config.triggerPrice) ?? 0;
@@ -98,6 +101,18 @@ export function VigilDashboard({
           <div className="absolute inset-0 bg-xmr-error/5 animate-pulse" />
         )}
 
+        {/* Live heartbeat chart as the card's background layer (web parity) */}
+        <div className="absolute inset-0 top-16 z-0">
+          <HeartbeatChart
+            triggerPrice={triggerVal}
+            stopPrice={hasStop ? parseFloat(config.stopPrice) : undefined}
+            mode={mode}
+            isTriggered={isTriggered}
+            realPrice={realPrice}
+            priceHistory={priceHistory}
+          />
+        </div>
+
         <div className="relative z-10">
           {/* Top bar */}
           <div className="flex justify-between items-start mb-6">
@@ -144,9 +159,9 @@ export function VigilDashboard({
           </div>
 
           {/* ─── Target Lines ─── */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 mt-24">
             {/* Main Target */}
-            <div className="p-3 rounded-sm border border-xmr-green/20 bg-xmr-green/5 space-y-1">
+            <div className="p-3 rounded-sm border border-xmr-green/20 bg-xmr-surface/35 backdrop-blur-[2px] space-y-1">
               <div className="text-[9px] text-xmr-dim font-mono uppercase tracking-widest flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-xmr-green" />
                 {mode === 'SNIPE' ? 'BUY DIP TARGET' : 'TAKE PROFIT TARGET'}
@@ -158,11 +173,8 @@ export function VigilDashboard({
             </div>
 
             {/* Stop / Strategy */}
-            <div className={`p-3 rounded-sm border space-y-1
-              ${hasStop
-                ? 'border-xmr-error/20 bg-xmr-error/5'
-                : 'border-xmr-border/20 bg-xmr-surface/30'
-              }
+            <div className={`p-3 rounded-sm border space-y-1 bg-xmr-surface/35 backdrop-blur-[2px]
+              ${hasStop ? 'border-xmr-error/20' : 'border-xmr-border/20'}
             `}>
               {hasStop ? (
                 <>

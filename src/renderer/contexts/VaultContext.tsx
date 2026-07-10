@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { vigilKeepsWalletOpen } from '../utils/vigilHotWallet';
 import { WalletService, Transaction } from '../services/walletService';
 
 export interface Identity { id: string; name: string; created: number; }
@@ -478,7 +479,15 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setStatus('READY');
 
     // 3. ⏳ Signal Soft Lock to backend (keeps RPC alive but acknowledges lock)
-    window.api.walletAction('close', {}).catch(() => { });
+    // — unless an armed EJECT vigil needs the wallet hot to execute
+    // unattended. The UI still locks and renderer state is purged above;
+    // only the wallet-rpc close is skipped. The vigil engine closes the
+    // wallet itself when the order reaches a terminal state while locked.
+    if (vigilKeepsWalletOpen()) {
+      console.log('🔒 UI locked — vault stays hot for armed EJECT vigil.');
+    } else {
+      window.api.walletAction('close', {}).catch(() => { });
+    }
 
   }, [addLog]);
 

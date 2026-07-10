@@ -1,12 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from 'react';
-import { Shield, Radio, Loader2, CheckCircle2, Copy, Check, AlertTriangle } from 'lucide-react';
+import { Shield, Radio, Loader2, CheckCircle2, Copy, Check, AlertTriangle, History, WifiOff, RotateCcw } from 'lucide-react';
 import { VigilConfig, type VigilConfigData } from './vigil/VigilConfig';
 import { VigilDashboard } from './vigil/VigilDashboard';
+import { StrikeWalletPanel } from './vigil/StrikeWalletPanel';
 import { Card } from './Card';
-import { AddressDisplay } from './common/AddressDisplay';
 import { CurrencySelector } from './CurrencySelector';
-import { useVigilEngine } from '../hooks/useVigilEngine';
+import { useVigil } from '../contexts/VigilContext';
 import { useVault } from '../hooks/useVault';
 import { getOrCreateSubaddress } from '../services/subaddressService';
 // Lightweight notification (avoids react-hot-toast dependency)
@@ -14,7 +14,7 @@ const notify = (msg: string) => console.log(`[Vigil] ${msg}`);
 
 // ─── Types ───
 
-type VigilState = 'IDLE' | 'WATCHING' | 'TRIGGERED' | 'EXECUTING' | 'COMPLETED' | 'ERROR';
+type VigilState = 'IDLE' | 'WATCHING' | 'TRIGGERED' | 'EXECUTING' | 'POLLING' | 'COMPLETED' | 'ERROR';
 
 interface VigilViewProps {
   localXmrAddress: string;
@@ -26,15 +26,33 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
   const {
     state,
     logs,
+    executionStatus,
+    progress,
     arm,
     abort,
+    retry,
     price,
     reset,
     wsConnected,
+    wsDegraded,
+    priceHistory,
+    reconnectFeed,
     activeSession,
     completedTrade,
-    depositInfo,
-  } = useVigilEngine();
+    pendingSession,
+    rearmPendingSession,
+    discardPendingSession,
+    strikeAddress,
+    strikeBalances,
+    strikeGas,
+    strikeCreated,
+    strikeUnlocked,
+    unlockStrike,
+    exportStrikeKey,
+    refreshStrike,
+    refundStrike,
+    regenerateStrike,
+  } = useVigil();
   const { createSubaddress, subaddresses } = useVault();
 
   const [mode, setMode] = useState<'SNIPE' | 'EJECT'>('EJECT'); // Default EJECT for wallet app
@@ -49,6 +67,7 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
     compliance: { kyc: 'ANY', log: 'ANY' },
   });
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [rearmError, setRearmError] = useState('');
 
   const isDanger = state === 'TRIGGERED' || state === 'EXECUTING';
   const vigilState = (state as VigilState) || 'IDLE';
@@ -120,13 +139,31 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
     setLocalConfig((prev) => ({ ...prev, triggerPrice: '' }));
   };
 
+  const handleRearm = async () => {
+    setRearmError('');
+    try {
+      await rearmPendingSession();
+    } catch (e: any) {
+      setRearmError(e.message || 'Re-arm failed');
+    }
+  };
+
+  // SNIPE arming requires a funded, unlocked strike wallet
+  const inputTicker = localConfig.inputCurrency?.ticker?.toUpperCase() || 'USDT';
+  const strikeTokenBalance = strikeBalances?.tokens?.[inputTicker];
+  const strikeFunded = strikeTokenBalance !== undefined
+    && parseFloat(localConfig.amount || '0') > 0
+    && parseFloat(strikeTokenBalance) >= parseFloat(localConfig.amount || '0');
+  const snipeBlocked = mode === 'SNIPE' && (!strikeUnlocked || !strikeFunded || !(strikeGas?.ok));
+
   // ─── Progress bar width ───
   const progressWidth = (() => {
     switch (vigilState) {
       case 'IDLE': return 'w-1/5';
-      case 'WATCHING': return 'w-3/5';
-      case 'TRIGGERED': return 'w-4/5';
-      case 'EXECUTING': return 'w-[90%]';
+      case 'WATCHING': return 'w-2/5';
+      case 'TRIGGERED': return 'w-3/5';
+      case 'EXECUTING': return 'w-4/5';
+      case 'POLLING': return 'w-[90%]';
       case 'COMPLETED': return 'w-full';
       case 'ERROR': return 'w-full';
       default: return 'w-0';
@@ -186,12 +223,79 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
         </div>
       </div>
 
+      {/* ─── Degraded feed banner ─── */}
+      {wsDegraded && vigilState === 'WATCHING' && (
+        <div className="px-4 py-2 bg-xmr-warning/10 border-b border-xmr-warning/30 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[10px] font-mono uppercase text-xmr-warning">
+            <WifiOff size={12} />
+            STALE FEED — price stream lost, triggers will not fire
+          </div>
+          <button
+            onClick={reconnectFeed}
+            className="px-3 py-1 border border-xmr-warning/50 text-xmr-warning text-[9px] font-black uppercase tracking-widest hover:bg-xmr-warning/10 transition-all"
+          >
+            Reconnect
+          </button>
+        </div>
+      )}
+
       {/* ─── Main Body ─── */}
       <div className="flex-1 w-full px-2 py-2 mx-auto transition-all duration-500 ease-in-out max-w-4xl">
 
         {/* IDLE: Configuration */}
         {vigilState === 'IDLE' && (
-          <div className="flex-1 p-1 relative flex flex-col items-center w-full">
+          <div className="flex-1 p-1 relative flex flex-col items-center w-full space-y-3">
+
+            {/* Persisted session recovery */}
+            {pendingSession && (
+              <div className="w-full max-w-3xl bg-xmr-ghost/5 border border-xmr-ghost/30 rounded-sm p-3 space-y-2 animate-in fade-in">
+                <div className="flex items-center gap-2 text-[10px] font-mono uppercase text-xmr-ghost">
+                  <History size={12} />
+                  {pendingSession.phase === 'POLLING'
+                    ? `Unfinished swap found (${pendingSession.tradeId})`
+                    : `Armed ${pendingSession.mode} session found from last run`}
+                </div>
+                <div className="text-[10px] text-xmr-dim font-mono">
+                  {pendingSession.triggers.map(t => `${t.id} ${t.operator} $${t.price}`).join(' | ')}
+                  {' — '}{pendingSession.config.amount} {pendingSession.config.inputCurrency?.ticker}
+                </div>
+                {pendingSession.mode === 'SNIPE' && pendingSession.phase !== 'POLLING' && !strikeUnlocked && (
+                  <div className="text-[10px] text-xmr-warning font-mono uppercase">Unlock the strike wallet below first</div>
+                )}
+                {rearmError && <div className="text-[10px] text-xmr-error font-mono uppercase">{rearmError}</div>}
+                <div className="flex gap-2">
+                  <button onClick={handleRearm}
+                    className="px-4 py-1.5 border border-xmr-ghost/50 text-xmr-ghost text-[9px] font-black uppercase tracking-widest hover:bg-xmr-ghost/10 transition-all">
+                    {pendingSession.phase === 'POLLING' ? 'Resume tracking' : 'Re-arm'}
+                  </button>
+                  <button onClick={discardPendingSession}
+                    className="px-4 py-1.5 border border-xmr-border text-xmr-dim text-[9px] font-black uppercase tracking-widest hover:text-xmr-error hover:border-xmr-error/50 transition-all">
+                    Discard
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* SNIPE funding panel */}
+            {mode === 'SNIPE' && (
+              <div className="w-full max-w-3xl">
+                <StrikeWalletPanel
+                  unlocked={strikeUnlocked}
+                  address={strikeAddress}
+                  balances={strikeBalances}
+                  gas={strikeGas}
+                  created={strikeCreated}
+                  requiredAmount={localConfig.amount}
+                  requiredTicker={inputTicker}
+                  onUnlock={(pwd) => unlockStrike(pwd, localConfig.inputCurrency?.network || 'ERC20')}
+                  onExportKey={exportStrikeKey}
+                  onRefresh={refreshStrike}
+                  onRefund={refundStrike}
+                  onRegenerate={(pwd) => regenerateStrike(pwd, localConfig.inputCurrency?.network || 'ERC20', localConfig.inputCurrency?.ticker)}
+                />
+              </div>
+            )}
+
             <VigilConfig
               mode={mode}
               setMode={setMode}
@@ -199,6 +303,10 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
               setData={(data: any) => setLocalConfig((prev) => ({ ...prev, ...data }))}
               onArm={handleArm}
               currentPrice={price || 0}
+              armDisabled={snipeBlocked}
+              armDisabledReason={mode === 'SNIPE'
+                ? (!strikeUnlocked ? 'UNLOCK STRIKE WALLET' : !strikeFunded ? 'FUND STRIKE WALLET' : !(strikeGas?.ok) ? 'STRIKE WALLET NEEDS ETH FOR GAS' : undefined)
+                : undefined}
             />
           </div>
         )}
@@ -214,17 +322,23 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
               realPrice={price}
               priceConnected={!!price && wsConnected !== false}
               externalLogs={logs}
+              priceHistory={priceHistory}
             />
           </div>
         )}
 
-        {/* EXECUTING: Spinner with logs */}
-        {vigilState === 'EXECUTING' && (
+        {/* EXECUTING / POLLING: Spinner with logs */}
+        {(vigilState === 'EXECUTING' || vigilState === 'POLLING') && (
           <div className="flex flex-col items-center justify-center min-h-[300px] space-y-6 animate-in fade-in">
-            <Loader2 size={48} className="text-xmr-error animate-spin" />
+            <Loader2 size={48} className={`animate-spin ${vigilState === 'POLLING' ? 'text-xmr-ghost' : 'text-xmr-error'}`} />
             <div className="text-xs font-mono text-current animate-pulse uppercase tracking-widest">
-              EXECUTING TRADE...
+              {vigilState === 'POLLING' ? (executionStatus || 'TRACKING SWAP...') : 'EXECUTING TRADE...'}
             </div>
+            {vigilState === 'POLLING' && (
+              <div className="w-full max-w-xs h-1 bg-xmr-border/30 rounded-full overflow-hidden">
+                <div className="h-full bg-xmr-ghost transition-all duration-700" style={{ width: `${progress}%` }} />
+              </div>
+            )}
 
             {/* Inline log stream */}
             <div className="w-full max-w-xl bg-xmr-base border border-xmr-border/20 rounded-sm p-3 max-h-[200px] overflow-y-auto font-mono text-[10px] space-y-0.5 custom-scrollbar">
@@ -285,40 +399,6 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
               </Card>
             )}
 
-            {/* SNIPE: Show deposit info */}
-            {mode === 'SNIPE' && depositInfo?.address && (
-              <Card className="p-6 w-full max-w-md bg-xmr-surface border-xmr-accent/20 space-y-4">
-                <div className="text-center space-y-2">
-                  <div className="text-[10px] text-xmr-accent font-mono uppercase tracking-widest">
-                    DEPOSIT REQUIRED
-                  </div>
-                  <p className="text-[9px] text-xmr-dim">
-                    Send the input amount to complete the swap
-                  </p>
-                </div>
-                <div className="p-3 bg-xmr-base border border-xmr-accent/20 rounded-sm space-y-2">
-                  <div className="flex justify-between text-[10px] font-mono uppercase">
-                    <span className="text-xmr-dim">Amount</span>
-                    <span className="text-xmr-accent font-bold">
-                      {depositInfo.amount} {depositInfo.ticker}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <AddressDisplay
-                      address={depositInfo.address}
-                      className="text-[10px] text-xmr-green font-bold flex-grow"
-                    />
-                    <button
-                      onClick={() => handleCopy(depositInfo.address)}
-                      className="text-xmr-accent hover:scale-110 transition-transform shrink-0"
-                    >
-                      {copyFeedback ? <Check size={14} /> : <Copy size={14} />}
-                    </button>
-                  </div>
-                </div>
-              </Card>
-            )}
-
             <button
               onClick={handleReset}
               className="px-8 py-3 border border-xmr-green/50 text-xmr-green text-[10px] font-black uppercase tracking-[0.2em] hover:bg-xmr-green/10 transition-all"
@@ -337,7 +417,7 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
                 VIGIL ERROR
               </h3>
               <p className="text-[10px] text-xmr-dim uppercase tracking-[0.2em]">
-                An unexpected error occurred
+                {executionStatus || 'An unexpected error occurred'}
               </p>
             </div>
 
@@ -351,12 +431,20 @@ export function VigilView({ localXmrAddress }: VigilViewProps) {
               ))}
             </div>
 
-            <button
-              onClick={handleReset}
-              className="px-8 py-3 border border-xmr-error/50 text-xmr-error text-[10px] font-black uppercase tracking-[0.2em] hover:bg-xmr-error/10 transition-all"
-            >
-              RESET
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={retry}
+                className="px-8 py-3 border border-xmr-warning/50 text-xmr-warning text-[10px] font-black uppercase tracking-[0.2em] hover:bg-xmr-warning/10 transition-all flex items-center gap-2"
+              >
+                <RotateCcw size={12} /> RETRY
+              </button>
+              <button
+                onClick={handleReset}
+                className="px-8 py-3 border border-xmr-error/50 text-xmr-error text-[10px] font-black uppercase tracking-[0.2em] hover:bg-xmr-error/10 transition-all"
+              >
+                RESET
+              </button>
+            </div>
           </div>
         )}
       </div>
