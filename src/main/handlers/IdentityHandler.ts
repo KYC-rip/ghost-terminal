@@ -4,22 +4,25 @@ import fs from 'fs/promises'; // 🚀 Force async API to prevent UI stutter
 import { existsSync } from 'fs';
 import path from 'path';
 import { WalletManager } from '../WalletManager';
+import { getWalletDirName } from '../networkPaths';
 
 export function registerIdentityHandlers(store: any) {
-  const walletDir = path.join(app.getPath('userData'), 'wallets');
+  // Resolved per call: identities are network-scoped (stressnet wallets live
+  // in their own dir) and the network can change at runtime via engine reload.
+  const walletDir = () => path.join(app.getPath('userData'), getWalletDirName(store.get('network') || 'mainnet'));
 
   // 🔍 Fetch list: Force reconciliation between physical disk and Store database
   ipcMain.handle('get-identities', async () => {
     try {
-      if (!existsSync(walletDir)) {
-        await fs.mkdir(walletDir, { recursive: true });
+      if (!existsSync(walletDir())) {
+        await fs.mkdir(walletDir(), { recursive: true });
       }
 
       // 1. Read the absolute truth: physical vault files on disk
-      const files = await fs.readdir(walletDir);
+      const files = await fs.readdir(walletDir());
       const keyFiles = files.filter(f => f.endsWith('.keys'));
 
-      console.log(`${keyFiles.length} key files found in ${walletDir}`)
+      console.log(`${keyFiles.length} key files found in ${walletDir()}`)
 
       // 2. Read auxiliary attributes: alias records in the Store
       const storedIds: any[] = store.get('identities') || [];
@@ -34,7 +37,7 @@ export function registerIdentityHandlers(store: any) {
           return existingMeta;
         } else {
           // 👻 "Ghost Wallet" detected: physical file present but no record in Store
-          const stats = await fs.stat(path.join(walletDir, fileName));
+          const stats = await fs.stat(path.join(walletDir(), fileName));
           return {
             id: id,
             name: id, // Default to filename as display name
@@ -86,8 +89,8 @@ export function registerIdentityHandlers(store: any) {
       // holds a file lock on .keys files, preventing deletion
       await WalletManager.closeWallet().catch(() => { });
 
-      const keysFile = path.join(walletDir, `${id}.keys`);
-      const cacheFile = path.join(walletDir, id); // wallet cache file (no extension)
+      const keysFile = path.join(walletDir(), `${id}.keys`);
+      const cacheFile = path.join(walletDir(), id); // wallet cache file (no extension)
 
       if (existsSync(keysFile)) await fs.unlink(keysFile);
       if (existsSync(cacheFile)) await fs.unlink(cacheFile);

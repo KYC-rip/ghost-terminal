@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
+import { getWalletDirName, getRpcFolderName, getNetworkFlag } from './networkPaths';
 
 export class DaemonManager {
   private binPath: string;
@@ -36,6 +37,27 @@ export class DaemonManager {
     this.rpcPath = path.join(this.binPath, `rpc-core/monero-wallet-rpc${ext}`);
 
     this.walletDir = path.join(app.getPath('userData'), 'wallets');
+    if (!fs.existsSync(this.walletDir)) fs.mkdirSync(this.walletDir, { recursive: true });
+  }
+
+  /**
+   * Resolve the wallet dir and rpc binary for the requested network.
+   * Called at startMoneroRpc time (engine reloads fully on network change),
+   * so there are no stale references. Throws when the stressnet binary is
+   * not bundled for this platform (capability manifest also hides the
+   * option in the UI; this is the backstop).
+   */
+  private applyNetworkPaths(network: string) {
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    this.rpcPath = path.join(this.binPath, `${getRpcFolderName(network)}/monero-wallet-rpc${ext}`);
+    this.walletDir = path.join(app.getPath('userData'), getWalletDirName(network));
+
+    if (!fs.existsSync(this.rpcPath)) {
+      if (network === 'stressnet') {
+        throw new Error('Stressnet build unavailable on this platform (missing rpc-stressnet binary)');
+      }
+      throw new Error(`monero-wallet-rpc binary missing at ${this.rpcPath}`);
+    }
     if (!fs.existsSync(this.walletDir)) fs.mkdirSync(this.walletDir, { recursive: true });
   }
 
@@ -148,6 +170,8 @@ export class DaemonManager {
     systemProxyAddress: string,
     network: string
   ): Promise<void> {
+    this.applyNetworkPaths(network);
+
     if (process.platform !== 'win32') {
       try {
         fs.chmodSync(this.rpcPath, 0o755);
@@ -169,11 +193,8 @@ export class DaemonManager {
         '--no-initial-sync'
       ];
 
-      if (network === 'stagenet') {
-        rpcArgs.push('--stagenet');
-      } else if (network === 'testnet') {
-        rpcArgs.push('--testnet');
-      }
+      const networkFlag = getNetworkFlag(network);
+      if (networkFlag) rpcArgs.push(networkFlag);
 
       const env = Object.assign({}, process.env);
       if (useTor) {

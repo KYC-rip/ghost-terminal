@@ -12,6 +12,7 @@ import { AddressDisplay } from './components/common/AddressDisplay';
 import { AgentTab } from './components/vault/AgentTab';
 import { ExchangeView } from './components/ExchangeView';
 import { VigilView } from './components/VigilView';
+import { setNetworkLabel, isStressnet } from './utils/networkMode';
 import { XMR402Modal } from './components/common/XMR402Modal';
 import { VaultProvider } from './contexts/VaultContext';
 
@@ -60,6 +61,7 @@ function MainApp() {
   const [showScanlines, setShowScanlines] = useState(resolvedTheme === 'dark');
   const [autoLockMinutes, setAutoLockMinutes] = useState(0);
   const [uplink, setUplink] = useState<string>('SCANNING...');
+  const [netLabel, setNetLabel] = useState<string>('');
   const [uplinkUrl, setUplinkUrl] = useState<string>('');
   const [sessionStartTime] = useState(Date.now());
   const [uptime, setUptime] = useState('00:00:00');
@@ -206,6 +208,8 @@ function MainApp() {
       try {
         const s = await window.api.getUplinkStatus();
         if (s) {
+          setNetworkLabel(s.networkLabel || '');
+          setNetLabel(s.networkLabel || '');
           if (s.nodeLabel) {
             setUplink(s.nodeLabel);
             setUplinkUrl(s.node);
@@ -389,10 +393,12 @@ function MainApp() {
           <NavButton id="home" label="Dashboard" icon={Ghost} />
           <NavButton id="vault" label="Vault" icon={Shield} badge={isSyncing ? `${syncPercent.toFixed(1)}%` : null} />
 
-          <NavGroup label="Exchange" groupKey="exchange">
-            <NavButton id="exchange" label="Exchange" icon={ArrowDown} />
-            {!isPackaged && <NavButton id="vigil" label="Vigil / Limit" icon={Crosshair} />}
-          </NavGroup>
+          {!isStressnet() && (
+            <NavGroup label="Exchange" groupKey="exchange">
+              <NavButton id="exchange" label="Exchange" icon={ArrowDown} />
+              {!isPackaged && <NavButton id="vigil" label="Vigil / Limit" icon={Crosshair} />}
+            </NavGroup>
+          )}
 
           <NavGroup label="Tools" groupKey="tools">
             <NavButton id="agent" label="Agent" icon={Bot} />
@@ -449,6 +455,11 @@ function MainApp() {
       <div className="flex-grow flex flex-col min-w-0 bg-transparent relative z-10">
         <header className="h-14 flex items-center justify-end px-8 border-b border-xmr-border/20 bg-xmr-surface/80 backdrop-blur-md shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
           <div className="flex gap-6 text-[10px] font-black uppercase tracking-[0.2em]" style={{ WebkitAppRegion: 'no-drag' } as any}>
+            {netLabel && (
+              <span className="flex items-center px-2 py-0.5 rounded-sm border border-xmr-warning/50 bg-xmr-warning/10 text-xmr-warning">
+                {netLabel}
+              </span>
+            )}
             <span className="flex items-center gap-2 text-xmr-dim">SESSION: <span className="text-xmr-green opacity-80 font-black">{uptime}</span></span>
             <span className="flex items-center gap-2 text-xmr-dim">XMR: <span className="text-xmr-accent font-black">${stats?.price.street || '---.--'}</span></span>
             <span className="flex items-center gap-2 text-xmr-dim">POOL: <span className={(stats?.network.mempool || 0) > 50 ? "text-orange-500" : "text-xmr-green"}>{stats?.network.mempool ?? '--'} TXs</span></span>
@@ -506,8 +517,8 @@ function MainApp() {
 
               <div className={view === 'home' ? 'block' : 'hidden'}><HomeView setView={setView} stats={stats} loading={statsLoading} /></div>
                 <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView setView={setView} vault={vault} handleBurn={() => purgeIdentity(activeId)} appConfig={appConfig} /></div>
-                <div className={view === 'exchange' ? 'block' : 'hidden'}><ExchangeView localXmrAddress={address} /></div>
-                {!isPackaged && <div className={view === 'vigil' ? 'block' : 'hidden'}><VigilView localXmrAddress={address} /></div>}
+                {!isStressnet() && <div className={view === 'exchange' ? 'block' : 'hidden'}><ExchangeView localXmrAddress={address} /></div>}
+                {!isPackaged && !isStressnet() && <div className={view === 'vigil' ? 'block' : 'hidden'}><VigilView localXmrAddress={address} /></div>}
 
               <div className={view === 'settings' ? 'block' : 'hidden'}><SettingsView /></div>
                 <div className={view === 'agent' ? 'block' : 'hidden'}><AgentTab /></div>

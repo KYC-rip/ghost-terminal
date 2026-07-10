@@ -1,5 +1,6 @@
 // ui/src/hooks/useFiatValue.ts
 import { useState, useEffect } from 'react';
+import { isStressnet } from '../utils/networkMode';
 
 // struct: { "BTC": { price: 98000, timestamp: 1712345678900 } }
 const priceCache: Record<string, { price: number; timestamp: number }> = {};
@@ -26,6 +27,12 @@ export function useFiatValue(ticker?: string, amount?: string | number, withPref
   };
 
   useEffect(() => {
+    // Stressnet coins have no fiat price — suppress all fiat display
+    if (isStressnet()) {
+        setFiatText(null);
+        setPremium(null);
+        return;
+    }
     if (!ticker || amount === undefined || amount === null || amount === '') {
         setFiatText(null);
         setPremium(null);

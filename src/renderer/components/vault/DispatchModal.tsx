@@ -4,6 +4,7 @@ import { useVault } from '../../contexts/VaultContext';
 import { DispatchPasswordGate } from './DispatchPasswordGate';
 import { DirectSendTab } from './DirectSendTab';
 import { GhostSendTab } from './GhostSendTab';
+import { isStressnet } from '../../utils/networkMode';
 
 interface DispatchModalProps {
   onClose: () => void;
@@ -71,7 +72,8 @@ export function DispatchModal({ onClose, initialAddress = '', sourceSubaddressIn
             {/* Sub-tabs: Direct / Ghost */}
             {[
               { id: 'direct' as const, label: 'Direct XMR', icon: <Send size={12} /> },
-              { id: 'ghost' as const, label: 'Ghost Send', icon: <Ghost size={12} /> },
+              // Ghost Send needs the swap API, which has no stressnet support
+              ...(isStressnet() ? [] : [{ id: 'ghost' as const, label: 'Ghost Send', icon: <Ghost size={12} /> }]),
             ].map((t) => (
               <button
                 key={t.id}

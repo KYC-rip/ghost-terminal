@@ -10,6 +10,8 @@ import { ReceiveModal } from './vault/ReceiveModal';
 import { type VaultContextType } from '../contexts/VaultContext';
 import { WalletService } from '../services/walletService';
 import { useFiatValue } from '../hooks/useFiatValue';
+import { FaucetCard } from './vault/FaucetCard';
+import { isStressnet } from '../utils/networkMode';
 
 interface VaultViewProps {
   setView: (v: any) => void;
@@ -171,6 +173,9 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 py-2 pt-0 animate-in fade-in zoom-in-95 duration-300 font-black relative">
+
+      {/* STRESSNET FAUCET — empty test wallets get one obvious action */}
+      {isStressnet() && totalBalance <= 0 && <FaucetCard address={address} />}
 
       {/* SYNC STATUS BANNER — only for heavy syncs (>1000 blocks behind) */}
       {isHeavySync && (

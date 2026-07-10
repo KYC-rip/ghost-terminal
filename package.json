@@ -22,7 +22,8 @@
     "predev": "npm run setup-bins",
     "prestart": "npm run setup-bins",
     "deploy:public": "cd .. && ./deploy-public.sh",
-    "deploy:subtree": "cd .. && git subtree push --prefix desktop git@github-xbtoshi:KYC-rip/ghost-terminal.git main"
+    "deploy:subtree": "cd .. && git subtree push --prefix desktop git@github-xbtoshi:KYC-rip/ghost-terminal.git main",
+    "test": "vitest run"
   },
   "build": {
     "publish": [
@@ -105,7 +106,8 @@
     "postcss": "8.5.6",
     "tailwindcss": "4.1.18",
     "typescript": "5.9.3",
-    "vite": "7.3.1"
+    "vite": "7.3.1",
+    "vitest": "^4.1.8"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

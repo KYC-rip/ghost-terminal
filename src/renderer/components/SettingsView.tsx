@@ -32,7 +32,7 @@ export function SettingsView() {
   const [isRescanning, setIsRescanning] = useState(false);
 
   // 📦 App Info & Updates state
-  const [appInfo, setAppInfo] = useState<{ version: string; appDataPath: string; walletsPath: string; platform: string } | null>(null);
+  const [appInfo, setAppInfo] = useState<{ version: string; appDataPath: string; walletsPath: string; platform: string; capabilities?: { stressnet: boolean } } | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<{
     checked: boolean;
@@ -301,21 +301,38 @@ export function SettingsView() {
               </button>
             </div>
 
-            {/* Network Toggle (Mainnet vs Stagenet) */}
-            <div className={`flex items-center justify-between p-4 border rounded-sm transition-all ${localSettings.network === 'stagenet' ? 'bg-xmr-accent/10 border-xmr-accent/40' : 'bg-xmr-green/5 border-xmr-border opacity-60'}`}>
+            {/* Network Selector (Mainnet / Stagenet / FCMP++ Stressnet) */}
+            <div className={`p-4 border rounded-sm transition-all space-y-3 ${localSettings.network !== 'mainnet' ? 'bg-xmr-accent/10 border-xmr-accent/40' : 'bg-xmr-green/5 border-xmr-border'}`}>
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <RefreshCw size={14} className={localSettings.network === 'stagenet' ? "text-xmr-accent animate-spin" : "text-xmr-dim"} />
-                  <span className={`text-xs font-black uppercase ${localSettings.network === 'stagenet' ? 'text-xmr-accent' : ''}`}>Stagenet_Protocol</span>
+                  <RefreshCw size={14} className={localSettings.network !== 'mainnet' ? "text-xmr-accent animate-spin" : "text-xmr-dim"} />
+                  <span className={`text-xs font-black uppercase ${localSettings.network !== 'mainnet' ? 'text-xmr-accent' : ''}`}>Network_Protocol</span>
                 </div>
-                <p className="text-xs text-xmr-dim uppercase font-black">Sandbox_Test_Network</p>
+                <p className="text-xs text-xmr-dim uppercase font-black">Wallets are stored per-network and never mix</p>
               </div>
-              <button
-                onClick={() => setLocalSettings({ ...localSettings, network: localSettings.network === 'stagenet' ? 'mainnet' : 'stagenet' })}
-                className={`w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.network === 'stagenet' ? 'bg-xmr-accent' : 'bg-xmr-base border border-xmr-border'}`}
-              >
-                <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.network === 'stagenet' ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
-              </button>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { id: 'mainnet', label: 'MAINNET' },
+                  { id: 'stagenet', label: 'STAGENET' },
+                  ...(appInfo?.capabilities?.stressnet ? [{ id: 'stressnet', label: 'STRESSNET FCMP++' }] : []),
+                ] as { id: string; label: string }[]).map((net) => (
+                  <button
+                    key={net.id}
+                    onClick={() => setLocalSettings({ ...localSettings, network: net.id })}
+                    className={`px-2 py-2 border rounded-sm text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer
+                      ${localSettings.network === net.id
+                        ? net.id === 'stressnet' ? 'bg-xmr-warning/10 border-xmr-warning text-xmr-warning' : 'bg-xmr-accent/10 border-xmr-accent text-xmr-accent'
+                        : 'bg-xmr-base border-xmr-border text-xmr-dim hover:border-xmr-dim/50'}`}
+                  >
+                    {net.label}
+                  </button>
+                ))}
+              </div>
+              {localSettings.network === 'stressnet' && (
+                <p className="text-[10px] text-xmr-warning uppercase font-black">
+                  FCMP++/CARROT beta stressnet — test coins only, chain may reset
+                </p>
+              )}
             </div>
 
             {/* System Proxy */}

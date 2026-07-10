@@ -41,6 +41,21 @@ const TARGETS = {
     }[remoteSubDir] || '0dbbab8147e3c6523c60ce5a62d35e3899606c727b7a2752c492f5fa8d07b3db',
     folder: 'rpc-core'
   },
+  // FCMP++/CARROT beta stressnet wallet-rpc (seraphis-migration build).
+  // OPTIONAL: missing artifacts must never fail a mainnet build -- the
+  // capability manifest simply hides stressnet mode on this platform.
+  // 'TBD' hash = binaries not yet published for that platform.
+  rpcStressnet: {
+    url: `https://raw.githubusercontent.com/KYC-rip/wallet-binaries/main/${remoteSubDir}/monero-rpc-stressnet.tar.gz`,
+    hash: {
+      'mac-arm64': 'TBD',
+      'mac-x64': 'TBD',
+      'linux-x64': 'TBD',
+      'win-x64': 'TBD'
+    }[remoteSubDir] || 'TBD',
+    folder: 'rpc-stressnet',
+    optional: true
+  },
 };
 
 const BIN_DIR = path.join(__dirname, '../resources/bin');
@@ -148,6 +163,20 @@ async function main() {
       downloadAndExtractTarGz('Tor Obfuscated Bundle', TARGETS.tor.url, TARGETS.tor.hash, TARGETS.tor.folder),
       downloadAndExtractTarGz('Monero Lone Wolf Engine', TARGETS.rpc.url, TARGETS.rpc.hash, TARGETS.rpc.folder)
     ]);
+
+    // Optional stressnet engine: tolerate-missing, record capability
+    let stressnet = false;
+    if (TARGETS.rpcStressnet.hash !== 'TBD') {
+      try {
+        await downloadAndExtractTarGz('FCMP++ Stressnet Engine', TARGETS.rpcStressnet.url, TARGETS.rpcStressnet.hash, TARGETS.rpcStressnet.folder);
+        stressnet = true;
+      } catch (err) {
+        console.warn(`  [OPTIONAL] Stressnet engine unavailable for ${remoteSubDir} (${err.message}). Feature will be hidden.`);
+      }
+    } else {
+      console.warn(`  [OPTIONAL] Stressnet binaries not yet published for ${remoteSubDir}. Feature will be hidden.`);
+    }
+    fs.writeFileSync(path.join(BIN_DIR, 'capabilities.json'), JSON.stringify({ stressnet }), 'utf8');
 
     console.log(`\n=== 🟢 Armory assembled. Ready for React rendering layer! ===\n`);
   } catch (err) {

@@ -8,6 +8,7 @@ import { WalletManager } from './WalletManager';
 import { SyncWatcher } from './SyncWatcher';
 import { AppConfig } from './types';
 import { registerIdentityHandlers } from './handlers/IdentityHandler';
+import { getNetworkLabel, getWalletDirName, parseCapabilities } from './networkPaths';
 import { AgentGateway } from './AgentGateway';
 
 if (process.defaultApp) {
@@ -121,7 +122,20 @@ if (!gotTheLock) {
 
 // 🟢 Global State Tracker (For UI polling)
 const isStagenet = store.get("network") === 'stagenet';
-let currentEngineState = { status: 'DISCONNECTED', node: '', nodeLabel: '', useTor: false, error: '', isStagenet };
+let currentEngineState = { status: 'DISCONNECTED', node: '', nodeLabel: '', useTor: false, error: '', isStagenet, networkLabel: getNetworkLabel(store.get("network") || 'mainnet') };
+
+function readBinCapabilities() {
+  try {
+    const binDir = app.isPackaged
+      ? join(process.resourcesPath, 'bin')
+      : join(__dirname, '../../resources/bin');
+    const raw = require('fs').readFileSync(join(binDir, 'capabilities.json'), 'utf8');
+    return parseCapabilities(raw);
+  } catch {
+    // Missing or unreadable manifest fails safe: stressnet hidden
+    return parseCapabilities(null);
+  }
+}
 let isSafeToExit = false;
 
 function emitAppLog(source: string, level: 'info' | 'error', message: string) {
@@ -240,7 +254,12 @@ app.whenReady().then(async () => {
   // 🔌 Register the Identity/Vault Handlers
   registerIdentityHandlers(store);
 
-  agentGateway = new AgentGateway(mainWindow, store);
+  // Agents never touch stressnet test wallets — gateway stays down there.
+  if (store.get('network') !== 'stressnet') {
+    agentGateway = new AgentGateway(mainWindow, store);
+  } else {
+    console.log('[AgentGateway] Disabled on stressnet.');
+  }
   if (store.get('agent_config.enabled')) {
     agentGateway.start();
   }
@@ -326,9 +345,10 @@ app.whenReady().then(async () => {
     return {
       version: app.getVersion(),
       appDataPath: app.getPath('appData'),
-      walletsPath: join(app.getPath('userData'), 'wallets'),
+      walletsPath: join(app.getPath('userData'), getWalletDirName(store.get('network') || 'mainnet')),
       platform: process.platform,
-      isPackaged: app.isPackaged
+      isPackaged: app.isPackaged,
+      capabilities: readBinCapabilities()
     };
   });
 
@@ -809,12 +829,12 @@ async function reloadEngine(forceRestart = false) {
       customNodeAddress: config.customNodeAddress
     };
 
-    currentEngineState = { status: 'ONLINE', node: targetNode, nodeLabel: NodeManager.activeNodeLabel, useTor, error: '', isStagenet: config.network === 'stagenet' };
+    currentEngineState = { status: 'ONLINE', node: targetNode, nodeLabel: NodeManager.activeNodeLabel, useTor, error: '', isStagenet: config.network === 'stagenet', networkLabel: getNetworkLabel(config.network) };
     mainWindow?.webContents.send('engine-status', currentEngineState);
 
   } catch (error: any) {
     console.error('[Engine] Start failed:', error);
-    currentEngineState = { status: 'ERROR', node: '', nodeLabel: '', useTor: false, error: error.message, isStagenet: config.network === 'stagenet' };
+    currentEngineState = { status: 'ERROR', node: '', nodeLabel: '', useTor: false, error: error.message, isStagenet: config.network === 'stagenet', networkLabel: getNetworkLabel(config.network) };
     mainWindow?.webContents.send('engine-status', currentEngineState);
   }
 }
