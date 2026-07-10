@@ -61,20 +61,48 @@ pub fn emit_sync_status(app: &AppHandle, status: &str, height: u64, daemon_heigh
     }));
 }
 
+/// Work around WebKitGTK triggering NVIDIA's Wayland EGL path during startup.
+///
+/// `WEBKIT_DISABLE_DMABUF_RENDERER` alone is not enough on some current
+/// NVIDIA/Wayland stacks: WebKitGTK still creates a Wayland EGL display and the
+/// driver can segfault before Tauri gets a window on screen. If XWayland is
+/// available, make GTK choose it before GTK/WebKit initialization. Leave every
+/// explicit user choice intact, and keep native Wayland for non-NVIDIA systems.
+#[cfg(target_os = "linux")]
+fn configure_linux_webview_environment() {
+    let wayland_session = std::env::var("XDG_SESSION_TYPE")
+        .map(|session| session.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false)
+        || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let nvidia_loaded = std::path::Path::new("/proc/driver/nvidia/version").exists()
+        || std::path::Path::new("/sys/module/nvidia").exists();
+
+    if !wayland_session || !nvidia_loaded {
+        return;
+    }
+
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
+    // `DISPLAY` is provided by XWayland on normal KDE/GNOME Wayland sessions.
+    // Do not force X11 without it: a Wayland-only environment should retain its
+    // user-selected backend rather than fail with an opaque display error.
+    let xwayland_available = std::env::var_os("DISPLAY")
+        .map(|display| !display.is_empty())
+        .unwrap_or(false);
+    if std::env::var_os("GDK_BACKEND").is_none() && xwayland_available {
+        std::env::set_var("GDK_BACKEND", "x11");
+        eprintln!("[linux] NVIDIA + Wayland detected; using XWayland for WebKitGTK stability");
+    } else if !xwayland_available {
+        eprintln!("[linux] NVIDIA + Wayland detected but no XWayland display is available; keeping the configured GDK backend");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKitGTK's DMABUF/EGL renderer segfaults on the NVIDIA driver during
-    // platform-display init (crash lands in libnvidia-egl-wayland), especially on
-    // Wayland — a well-known WebKit/NVIDIA bug that takes down the whole app on
-    // launch. Disable the DMABUF renderer so the webview uses a safe path. Set
-    // before the webview is created (Builder::run below). Overridable: we only set
-    // it when the user hasn't already, so power users can opt back in.
     #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        }
-    }
+    configure_linux_webview_environment();
 
     // Install a process-wide rustls crypto provider (ring) BEFORE any TLS is
     // used. Adding tokio-rustls (for TLS-over-Tor) left rustls without an
