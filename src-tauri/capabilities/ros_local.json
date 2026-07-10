@@ -12,6 +12,7 @@
     "allow-get-config",
     "allow-save-config",
     "allow-save-config-and-reload",
+    "allow-watch-sync-set",
     "allow-get-tor-status",
     "allow-tor-circuit",
     "allow-restart-tor",

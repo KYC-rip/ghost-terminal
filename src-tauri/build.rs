@@ -52,6 +52,7 @@ const APP_COMMANDS: &[&str] = &[
     "save_config",
     "save_config_only",
     "save_config_and_reload",
+    "watch_sync_set",
     "get_app_info",
     "reveal_path",
     "get_ui_mode",

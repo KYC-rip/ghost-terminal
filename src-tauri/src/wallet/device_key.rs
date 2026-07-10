@@ -25,7 +25,7 @@
 //! Subkeys are HKDF-SHA256-derived with distinct info strings, so no AEAD context
 //! ever reuses a raw root key.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use hkdf::Hkdf;
@@ -37,6 +37,8 @@ use zeroize::Zeroizing;
 const KEYRING_SERVICE: &str = "ripley-terminal";
 const KEYRING_ENTRY: &str = "watch-key-v1";
 const CACHE_KEY_FILE: &str = "device.key";
+const WATCH_KEY_SLOT_FILE: &str = "watch-key.slot";
+const MAX_WATCH_KEY_SLOT: u32 = 64;
 
 /// File-backed root for the cache key. Loaded once at boot; None only if the
 /// filesystem refuses us (then the cache degrades to legacy plaintext).
@@ -44,7 +46,8 @@ static FILE_KEY: OnceLock<Option<Zeroizing<[u8; 32]>>> = OnceLock::new();
 
 /// Keychain-backed root for the watch key. Lazily populated by
 /// `ensure_watch_key` (user-action or consented-boot); a failed/denied attempt
-/// stays None and MAY be retried — the user can click Enable again.
+/// stays None and advances to a fresh keychain slot for the next retry, so a
+/// one-off Deny does not permanently strand the feature.
 static WATCH_ROOT: Mutex<Option<Zeroizing<[u8; 32]>>> = Mutex::new(None);
 
 /// Load (or create on first run) the FILE key. No prompts, no keychain — safe to
@@ -92,11 +95,17 @@ fn load_or_create_file_key(path: &std::path::Path) -> Option<Zeroizing<[u8; 32]>
 /// (Enable click, or boot when watchSync is already on) — this is what can show
 /// the OS keychain prompt. Blocking keyring work runs in spawn_blocking (it
 /// panics inside tokio on Linux otherwise). Returns whether the key is ready.
-pub async fn ensure_watch_key() -> bool {
+pub async fn ensure_watch_key(app: &AppHandle) -> bool {
     if WATCH_ROOT.lock().map(|g| g.is_some()).unwrap_or(false) {
         return true;
     }
-    let loaded = tokio::task::spawn_blocking(load_or_create_keychain_key)
+    let slot_path = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(WATCH_KEY_SLOT_FILE);
+    log::info!("[watch-sync] ensure_watch_key using slot file {}", slot_path.display());
+    let loaded = tokio::task::spawn_blocking(move || load_or_create_keychain_key(&slot_path))
         .await
         .unwrap_or(None);
     match loaded {
@@ -110,16 +119,42 @@ pub async fn ensure_watch_key() -> bool {
     }
 }
 
-fn load_or_create_keychain_key() -> Option<Zeroizing<[u8; 32]>> {
-    let entry = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_ENTRY) {
+fn load_or_create_keychain_key(slot_path: &Path) -> Option<Zeroizing<[u8; 32]>> {
+    let slot = read_watch_key_slot(slot_path);
+    let entry_name = watch_key_entry_name(slot);
+    log::info!("[watch-sync] loading keychain entry {entry_name} (slot {slot})");
+    match load_or_create_keychain_key_for(&entry_name) {
+        Some(k) => {
+            log::info!("[watch-sync] keychain entry {entry_name} loaded");
+            Some(k)
+        }
+        None => {
+            // If the OS remembered a denied ACL for this keychain item, retrying the
+            // exact same item can fail without a new prompt. Advance the slot so the
+            // next explicit enable attempt uses a fresh keychain item and can ask
+            // again. We do not immediately try the next slot here: one click should
+            // produce at most one native keychain prompt.
+            let next = slot.saturating_add(1).min(MAX_WATCH_KEY_SLOT);
+            if next != slot {
+                write_watch_key_slot(slot_path, next);
+                log::info!("watch key: advanced retry slot to {next}");
+            }
+            None
+        }
+    }
+}
+
+fn load_or_create_keychain_key_for(entry_name: &str) -> Option<Zeroizing<[u8; 32]>> {
+    let entry = match keyring::Entry::new(KEYRING_SERVICE, entry_name) {
         Ok(e) => e,
         Err(e) => {
-            log::warn!("watch key: keychain entry unavailable ({e})");
+            log::warn!("[watch-sync] keychain entry {entry_name} unavailable ({e})");
             return None;
         }
     };
     match entry.get_secret() {
         Ok(bytes) if bytes.len() == 32 => {
+            log::info!("[watch-sync] keychain read ok for {entry_name}");
             let mut k = Zeroizing::new([0u8; 32]);
             k.copy_from_slice(&bytes);
             Some(k)
@@ -127,30 +162,63 @@ fn load_or_create_keychain_key() -> Option<Zeroizing<[u8; 32]>> {
         Ok(bytes) => {
             // Wrong-sized secret = corrupt/foreign entry. Don't overwrite it (it may
             // belong to something else); treat the keychain as unavailable.
-            log::warn!("watch key: keychain entry has unexpected length {}", bytes.len());
+            log::warn!(
+                "[watch-sync] keychain entry {entry_name} has unexpected length {}",
+                bytes.len()
+            );
             None
         }
         Err(keyring::Error::NoEntry) => {
+            log::info!("[watch-sync] keychain entry {entry_name} missing; creating");
             let mut k = Zeroizing::new([0u8; 32]);
             rand::rngs::OsRng.fill_bytes(&mut *k);
             match entry.set_secret(&*k) {
                 Ok(()) => {
-                    log::info!("watch key: created new keychain entry");
+                    log::info!("[watch-sync] created new keychain entry {entry_name}");
                     Some(k)
                 }
                 Err(e) => {
                     // Could not PERSIST the key → nothing encrypted with it would
                     // survive a restart. Refuse rather than strand data.
-                    log::warn!("watch key: keychain write failed ({e})");
+                    log::warn!(
+                        "[watch-sync] keychain write failed for {entry_name}: {e:?}"
+                    );
                     None
                 }
             }
         }
         Err(e) => {
             // NoStorageAccess / PlatformFailure / user denied the ACL prompt.
-            log::warn!("watch key: keychain read failed ({e})");
+            log::warn!("[watch-sync] keychain read failed for {entry_name}: {e:?}");
             None
         }
+    }
+}
+
+fn watch_key_entry_name(slot: u32) -> String {
+    if slot == 0 {
+        KEYRING_ENTRY.to_string()
+    } else {
+        format!("{KEYRING_ENTRY}-retry-{slot}")
+    }
+}
+
+fn read_watch_key_slot(path: &Path) -> u32 {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map(|slot| slot.min(MAX_WATCH_KEY_SLOT))
+        .unwrap_or(0)
+}
+
+fn write_watch_key_slot(path: &Path, slot: u32) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(path, slot.to_string()) {
+        log::warn!("[watch-sync] failed to write retry slot {} ({e})", path.display());
+    } else {
+        log::info!("[watch-sync] wrote retry slot {slot} to {}", path.display());
     }
 }
 

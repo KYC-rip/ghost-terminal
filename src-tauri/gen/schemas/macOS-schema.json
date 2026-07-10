@@ -2703,6 +2703,12 @@
           "markdownDescription": "Enables the vigil_save_strike_key command without any pre-configured scope."
         },
         {
+          "description": "Enables the watch_sync_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-watch-sync-set",
+          "markdownDescription": "Enables the watch_sync_set command without any pre-configured scope."
+        },
+        {
           "description": "Denies the agent_gateway_rotate_key command without any pre-configured scope.",
           "type": "string",
           "const": "deny-agent-gateway-rotate-key",
@@ -3217,6 +3223,12 @@
           "type": "string",
           "const": "deny-vigil-save-strike-key",
           "markdownDescription": "Denies the vigil_save_strike_key command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the watch_sync_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-watch-sync-set",
+          "markdownDescription": "Denies the watch_sync_set command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

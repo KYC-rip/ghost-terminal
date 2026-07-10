@@ -598,12 +598,6 @@ pub async fn browser_embed_open(
             // loads. Only on "end" — touching zoom mid-load can blank the webview.
             if phase == "end" {
                 embed_pin_zoom(&app_ev, &wv, z);
-                // Dev-only probe: a tiny badge in the page corner with the CSS viewport +
-                // devicePixelRatio, so a screenshot shows whether a scaling bug is layout
-                // zoom (vw shrinks), magnification (vw normal but content clips), or bounds
-                // (vw ≈ 2× the frame). Never ships in release builds.
-                #[cfg(debug_assertions)]
-                { let _ = wv.eval("(function(){try{var d=document.createElement('div');d.id='__ros_probe';d.style.cssText='position:fixed;left:4px;bottom:4px;z-index:2147483647;background:#000;color:#0f0;font:10px monospace;padding:2px 6px;opacity:.85;pointer-events:none';d.textContent='vw '+innerWidth+'x'+innerHeight+' dpr '+devicePixelRatio+(window.visualViewport?' vvscale '+visualViewport.scale:'');(document.body||document.documentElement).appendChild(d);}catch(e){}})();"); }
             }
             // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
             if let Ok(mut g) = EMBED_URL.lock() {

@@ -75,6 +75,9 @@ pub fn default_config() -> serde_json::Value {
         "show_scanlines": true,
         "hide_zero_balances": false,
         "include_prereleases": false,
+        "watchSync": false,
+        "watchSyncAsked": false,
+        "watchSyncKeychainExplained": false,
         "sync_all_wallets": false,
         "fast_sync": false,
         "shortcuts": {
@@ -325,14 +328,22 @@ pub async fn watch_sync_set(
     pool: tauri::State<'_, crate::wallet::SyncPool>,
     enabled: bool,
 ) -> Result<(), String> {
+    log::info!("[watch-sync] watch_sync_set entered enabled={enabled}");
+    crate::emit_log(
+        &app,
+        "Wallet",
+        "info",
+        &format!("👁 Sync at launch toggle requested: {enabled}"),
+    );
     // Enabling needs the keychain-backed watch key FIRST (this is the moment the
     // OS may prompt — the user just clicked Enable, so it has clear context). A
     // denied/unavailable keychain fails the whole toggle: the flag is not set,
     // the renderer reverts the checkbox, and nothing is stored anywhere.
-    if enabled && !crate::wallet::device_key::ensure_watch_key().await {
+    if enabled && !crate::wallet::device_key::ensure_watch_key(&app).await {
         // Record that the question was answered so the one-time consent modal
         // doesn't loop; the feature stays off until a successful re-enable.
         set_config_bool(&app, "watchSyncAsked", true).await?;
+        log::warn!("[watch-sync] enable rejected: keychain unavailable or denied");
         crate::emit_log(&app, "Wallet", "error",
             "👁 Sync at launch needs the system keychain to protect the view key — the keychain was denied or unavailable, so it stays off.");
         return Err("keychain unavailable or denied".into());
@@ -352,6 +363,7 @@ pub async fn watch_sync_set(
         }
         crate::emit_log(&app, "Wallet", "info",
             "👁 Sync at launch enabled — watch-only sync starts from the next launch.");
+        log::info!("[watch-sync] enabled successfully");
     } else {
         pool.stop_all().await;
         let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -360,6 +372,7 @@ pub async fn watch_sync_set(
         }
         crate::emit_log(&app, "Wallet", "info",
             "👁 Sync at launch disabled — persisted view keys removed.");
+        log::info!("[watch-sync] disabled successfully");
     }
     Ok(())
 }

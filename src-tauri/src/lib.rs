@@ -184,44 +184,6 @@ pub fn run() {
                 let _ = crate::wallet::scanner::ensure_tor(&tor_boot).await;
             });
 
-            // Watch tier boot: load the device key from the OS keychain, ask the
-            // one-time consent, then start view-only pool scanners from persisted
-            // view pairs — the chain syncs BEFORE any unlock. Spending (and the
-            // balance/history UI) still requires the password; this only warms the
-            // scan. See wallet::device_key for the tier model.
-            let watch_boot = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                // File-backed cache key: no prompts, safe unconditionally.
-                wallet::device_key::init_file_key(&watch_boot);
-                // Consent is asked IN-APP by the wallet UI after the first unlock (a
-                // native boot dialog was jarring UX) — the renderer reads
-                // watchSyncAsked via get_config and calls watch_sync_set. Boot only
-                // ACTS on an already-made choice — including the keychain load
-                // below, which can show the OS prompt and is therefore gated on it:
-                if crate::wallet::scanner::read_config_bool(&watch_boot, "watchSync") {
-                    if !wallet::device_key::ensure_watch_key().await {
-                        emit_log(&watch_boot, "Wallet", "warn",
-                            "👁 Watch sync is enabled but the system keychain refused the key — skipping boot sync (re-enable in Settings ▸ Node to retry).");
-                        return;
-                    }
-                    let data_dir = watch_boot
-                        .path()
-                        .app_data_dir()
-                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                    let ids = wallet::storage::list_watch_ids(&data_dir);
-                    if !ids.is_empty() {
-                        emit_log(&watch_boot, "Sync", "info", &format!(
-                            "👁 Watch sync: starting view-only scan for {} wallet(s) before unlock…", ids.len()));
-                        let pool = watch_boot.state::<wallet::SyncPool>();
-                        for id in ids {
-                            if let Some(vp) = wallet::storage::load_watch(&data_dir, &id) {
-                                pool.start(&watch_boot, id, vp, 0).await;
-                            }
-                        }
-                    }
-                }
-            });
-
             // The main window is built HERE, not declared in tauri.conf.json, so its
             // URL follows the persisted `ui_mode`: "classic" → the bundled legacy
             // renderer (full `default` capability — local-context only), "ros" →
@@ -320,6 +282,80 @@ pub fn run() {
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(900.0, 600.0)
                 .build()?;
+
+            // Watch tier boot: use persisted view keys to start a view-only scan
+            // before a wallet is unlocked. This needs the watch key from the OS
+            // keychain. On first use, explain that request in our own words before
+            // macOS presents its generic Keychain password dialog.
+            let watch_boot = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+                // File-backed cache key: no prompts, safe unconditionally.
+                wallet::device_key::init_file_key(&watch_boot);
+                if !crate::wallet::scanner::read_config_bool(&watch_boot, "watchSync") {
+                    return;
+                }
+
+                // Give the desktop shell time to become visible before placing any
+                // permission UI in front of it. This is intentionally a short grace
+                // period rather than a renderer readiness dependency: the boot sync
+                // path must work for both the local and remote ROS UIs.
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+                if !crate::wallet::scanner::read_config_bool(&watch_boot, "watchSyncKeychainExplained") {
+                    let continue_sync = watch_boot
+                        .dialog()
+                        .message(
+                            "Watch Sync can update your balances and transaction history before you unlock a wallet.\n\nTo start it, Ripley Terminal needs access to its encrypted watch-only key in your macOS Keychain. It never reads your wallet password, recovery phrase, or spend key.\n\nmacOS may ask for your login Keychain password next.",
+                        )
+                        .title("Start Watch Sync")
+                        .buttons(MessageDialogButtons::OkCancelCustom(
+                            "Continue".into(),
+                            "Not now".into(),
+                        ))
+                        .blocking_show();
+                    if !continue_sync {
+                        emit_log(
+                            &watch_boot,
+                            "Wallet",
+                            "info",
+                            "👁 Watch sync was skipped at startup — it will be offered again next launch.",
+                        );
+                        return;
+                    }
+                }
+
+                if !wallet::device_key::ensure_watch_key(&watch_boot).await {
+                    emit_log(&watch_boot, "Wallet", "warn",
+                        "👁 Watch sync is enabled but the system keychain refused the key — skipping boot sync (re-enable in Settings ▸ Node to retry).");
+                    return;
+                }
+                // Record the explanation only after Keychain access succeeded. If
+                // macOS denies it, show the context again on the next launch.
+                let _ = commands::config::set_config_bool(
+                    &watch_boot,
+                    "watchSyncKeychainExplained",
+                    true,
+                )
+                .await;
+
+                let data_dir = watch_boot
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let ids = wallet::storage::list_watch_ids(&data_dir);
+                if !ids.is_empty() {
+                    emit_log(&watch_boot, "Sync", "info", &format!(
+                        "👁 Watch sync: starting view-only scan for {} wallet(s) before unlock…", ids.len()));
+                    let pool = watch_boot.state::<wallet::SyncPool>();
+                    for id in ids {
+                        if let Some(vp) = wallet::storage::load_watch(&data_dir, &id) {
+                            pool.start(&watch_boot, id, vp, 0).await;
+                        }
+                    }
+                }
+            });
 
             // Signed-OTA: only in ota mode, check the update channel in the background and
             // STAGE any newer verified bundle for the NEXT launch (never hot-swap — decision

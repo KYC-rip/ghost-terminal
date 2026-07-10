@@ -56,6 +56,7 @@
     "allow-save-config",
     "allow-save-config-only",
     "allow-save-config-and-reload",
+    "allow-watch-sync-set",
     "allow-get-app-info",
     "allow-reveal-path",
     "allow-get-ui-mode",
