@@ -386,6 +386,7 @@ pub fn run() {
             commands::wallet::open_wallet,
             commands::wallet::close_wallet,
             commands::wallet::get_mnemonic,
+            commands::wallet::sign_message,
             // Account operations
             commands::wallet::get_accounts,
             commands::wallet::create_account,
@@ -441,6 +442,7 @@ pub fn run() {
             commands::system::proxied_get,
             commands::system::resolve_openalias,
             commands::system::ros_native_fetch,
+            commands::system::ros_native_fetch_bytes,
             commands::system::open_native_browser,
             commands::system::browser_embed_open,
             commands::system::browser_embed_bounds,

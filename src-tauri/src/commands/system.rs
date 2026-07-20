@@ -260,8 +260,11 @@ pub struct RosFetchReq {
 /// node, no IP leak). Returns { ok, status, body }; status is exact for clearnet/
 /// custom (reqwest) and coarse for the Tor arti path (the transport treats non-2xx
 /// as an error → surfaced as ok:false).
-#[tauri::command]
-pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value, String> {
+/// Shared routing for BOTH fetch commands: resolves the uplink (Tor / custom SOCKS / clearnet),
+/// applies the api.kyc.rip → .onion rewrite, and returns the raw (status, bytes). Keeping this in
+/// one place means the text and binary commands can never drift on routing or leak behaviour.
+async fn route_fetch(app: &AppHandle, req: &RosFetchReq) -> Result<(u16, Vec<u8>), String> {
+    let app = app.clone();
     let mode = crate::wallet::scanner::read_routing_mode(&app);
     let method = req.method.as_deref().unwrap_or("GET").to_uppercase();
     let body = req.body.clone().unwrap_or_default().into_bytes();
@@ -311,10 +314,32 @@ pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value,
         _ => ros_reqwest(reqwest::Client::builder(), &method, &target, &req.headers, &body, has_body).await,
     };
 
-    match outcome {
+    outcome
+}
+
+/// General HTTP behind a hosted RipleyOS renderer (window.__rosNative.fetch). TEXT bodies.
+/// UNCHANGED shape `{ ok, status, body }` — `proxiedPost` and already-deployed renderers depend on
+/// it. Note the lossy UTF-8 conversion: this command cannot carry binary, which is exactly why
+/// `ros_native_fetch_bytes` exists.
+#[tauri::command]
+pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value, String> {
+    match route_fetch(&app, &req).await {
         Ok((status, bytes)) => Ok(json!({ "ok": status < 400, "status": status, "body": String::from_utf8_lossy(&bytes) })),
         Err(e) => Ok(json!({ "ok": false, "status": 502, "body": e })),
     }
+}
+
+/// Same routing, BINARY-safe. Returns the response body as raw bytes over IPC
+/// (`tauri::ipc::Response`) — no base64, no UTF-8 conversion, so images/archives survive intact.
+/// Carries no status field by design (ipc::Response is bytes only): a non-2xx or transport failure
+/// is surfaced as an Err, which reaches JS as a rejected invoke.
+#[tauri::command]
+pub async fn ros_native_fetch_bytes(app: AppHandle, req: RosFetchReq) -> Result<tauri::ipc::Response, String> {
+    let (status, bytes) = route_fetch(&app, &req).await?;
+    if status >= 400 {
+        return Err(format!("upstream {status}"));
+    }
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Shared reqwest send (clearnet + custom-SOCKS): full method/headers/body → (status, body).

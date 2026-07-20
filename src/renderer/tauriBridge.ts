@@ -34,6 +34,27 @@ function createTauriApi() {
     // Fetch an external URL through the configured uplink (Tor/SOCKS/clearnet) so
     // the renderer never leaks the user's IP with a direct clearnet fetch.
     proxiedGet: (url: string) => invoke('proxied_get', { url }),
+
+    // SIWR ("Sign in with Ripley"): sign a login challenge with the wallet's
+    // spend key → Monero SigV2 signature (no funds move).
+    signMessage: (message: string) => invoke('sign_message', { message }) as Promise<string>,
+
+    // POST a body through the wallet's configured uplink (Tor/SOCKS/clearnet), so
+    // the SIWR callback doesn't leak the wallet's IP. Returns { ok, status, body }.
+    // Binary-safe sibling of the fetch below: returns the response body as raw bytes
+    // (tauri::ipc::Response) instead of a lossy UTF-8 string, so images and other binary
+    // downloads survive. Rejects on non-2xx / transport failure. Optional by convention —
+    // ripley-os feature-detects it and falls back to the string path on older shells.
+    fetchBytes: async (req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) => {
+      const out = await invoke('ros_native_fetch_bytes', { req });
+      // Tauri hands raw bytes back as ArrayBuffer | number[] depending on version/transport.
+      return out instanceof ArrayBuffer ? new Uint8Array(out) : new Uint8Array(out as number[]);
+    },
+
+    proxiedPost: (url: string, body: string) =>
+      invoke('ros_native_fetch', {
+        req: { url, method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
+      }) as Promise<{ ok: boolean; status: number; body: string }>,
     saveIdentities: async (ids: any) => {
       // The frontend sends the full identity list after modifications.
       // We need to persist this since Rust commands also manage identities.
