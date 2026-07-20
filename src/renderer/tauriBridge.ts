@@ -4,7 +4,7 @@
  *
  * This allows the entire React frontend to work unchanged during migration.
  */
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
@@ -41,6 +41,26 @@ function createTauriApi() {
 
     // POST a body through the wallet's configured uplink (Tor/SOCKS/clearnet), so
     // the SIWR callback doesn't leak the wallet's IP. Returns { ok, status, body }.
+    // Native wallpaper file store (RipleyOS platform.wallpaper): bytes → $APPDATA/wallpapers as a
+    // rev-addressed file, handed back as an asset-protocol URL the webview STREAMS from disk —
+    // no multi-MB blob on the JS heap, no IndexedDB read on later boots. Bytes travel as the RAW
+    // invoke payload (never base64); key/rev ride in headers.
+    wallpaper: {
+      save: async (key: string, rev: number, bytes: Uint8Array) => {
+        try {
+          const path = await invoke<string>('wallpaper_save', bytes, { headers: { 'x-wp-key': key, 'x-wp-rev': String(rev) } });
+          return path ? convertFileSrc(path) : null;
+        } catch { return null; }
+      },
+      url: async (key: string, rev: number) => {
+        try {
+          const path = await invoke<string | null>('wallpaper_url', { key, rev });
+          return path ? convertFileSrc(path) : null;
+        } catch { return null; }
+      },
+      clear: async (key: string) => { try { await invoke('wallpaper_clear', { key }); } catch { /* best-effort */ } },
+    },
+
     // Binary-safe sibling of the fetch below: returns the response body as raw bytes
     // (tauri::ipc::Response) instead of a lossy UTF-8 string, so images and other binary
     // downloads survive. Rejects on non-2xx / transport failure. Optional by convention —

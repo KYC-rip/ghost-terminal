@@ -13,7 +13,13 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https: wss:; media-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https: wss:; media-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/wallpapers/**"
+        ]
+      }
     }
   },
   "bundle": {
@@ -30,7 +36,11 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["monero", "ripley", "xmr402"]
+        "schemes": [
+          "monero",
+          "ripley",
+          "xmr402"
+        ]
       }
     }
   }
