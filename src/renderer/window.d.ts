@@ -15,6 +15,8 @@ export interface AppConfig {
   };
   hide_zero_balances?: boolean;
   include_prereleases?: boolean;
+  sync_all_wallets?: boolean;
+  fast_sync?: boolean;
   agent_config?: {
     enabled: boolean;
     apiKey: string;

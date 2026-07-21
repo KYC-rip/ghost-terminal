@@ -77,8 +77,8 @@ export function ExchangeView({ localXmrAddress }: ExchangeViewProps) {
   const [routeDrawerOpen, setRouteDrawerOpen] = useState(false);
   const [sortBy, setSortBy] = useState<'suggested' | 'rate' | 'speed'>('suggested');
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-  const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const generatingSubRef = useRef(false);
@@ -812,7 +812,7 @@ export function ExchangeView({ localXmrAddress }: ExchangeViewProps) {
         {/* Target */}
         <div className="flex gap-2 items-center bg-xmr-base border border-xmr-border/30 px-2 rounded-sm h-14">
           <div className="w-[45%] shrink-0">
-            <CurrencySelector label="" selected={toCoin} onSelect={setToCoin} currencies={currencies} hideBorder themeColor={isGhost ? 'xmr-ghost' : undefined} variant="drawer" drawerTitle="Target Asset" />
+            <CurrencySelector label="" selected={toCoin!} onSelect={setToCoin} currencies={currencies} hideBorder themeColor={isGhost ? 'xmr-ghost' : undefined} variant="drawer" drawerTitle="Target Asset" />
           </div>
           <div className="flex-grow text-right text-lg font-bold pr-1 text-xmr-green min-w-0">
             {isQuoting ? <span className="animate-pulse text-xmr-dim">...</span> : selectedRoute ? selectedRoute.amount_to.toFixed(6) : '0.0000'}
