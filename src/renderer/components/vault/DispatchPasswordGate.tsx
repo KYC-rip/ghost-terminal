@@ -1,4 +1,3 @@
-import React from 'react';
 import { Lock, Loader2 } from 'lucide-react';
 
 interface DispatchPasswordGateProps {
@@ -34,10 +33,10 @@ export function DispatchPasswordGate({
         }}
         placeholder="••••••••••••"
         className={`w-full max-w-xs bg-xmr-base border p-3 text-xl font-black text-xmr-green text-center focus:border-xmr-accent outline-none transition-all ${
-          passwordError ? 'border-red-600' : 'border-xmr-border'
+          passwordError ? 'border-xmr-error' : 'border-xmr-border'
         }`}
       />
-      {passwordError && <div className="text-[11px] text-red-500 uppercase mt-2 animate-pulse">{passwordError}</div>}
+      {passwordError && <div className="text-[11px] text-xmr-error uppercase mt-2 animate-pulse">{passwordError}</div>}
       <div className="flex gap-3 mt-6 w-full max-w-xs">
         <button
           onClick={onCancel}

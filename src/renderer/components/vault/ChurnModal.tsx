@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { X, Wind, Loader2 } from 'lucide-react';
 
 interface ChurnModalProps {
@@ -26,7 +26,7 @@ export function ChurnModal({ onClose, onChurn, unlockedBalance }: ChurnModalProp
 
   return (
     <div className="fixed top-0 bottom-0 right-0 left-[14rem] z-[100] flex items-center justify-center p-6 bg-xmr-base/90 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="w-full max-w-lg bg-xmr-base/80 text-xmr-dim p-8 border-4 border-xmr-green relative rounded-lg">
+      <div className="w-full max-w-lg bg-xmr-base/80 text-xmr-dim p-8 border-2 border-xmr-green relative rounded-sm">
         <button onClick={onClose} disabled={isProcessing} className="absolute top-4 right-4 cursor-pointer disabled:opacity-50">
           <X size={24} />
         </button>
@@ -52,21 +52,21 @@ export function ChurnModal({ onClose, onChurn, unlockedBalance }: ChurnModalProp
 
           <div className="flex items-center justify-center gap-4 text-xmr-green py-4 opacity-80">
             <div className="flex flex-col gap-2">
-              <div className="w-8 h-8 rounded-full border-2 border border-xmr-green bg-xmr-green/10 flex items-center justify-center"><span className="text-[10px]">10</span></div>
-              <div className="w-8 h-8 rounded-full border-2 border border-xmr-green bg-xmr-green/10 flex items-center justify-center"><span className="text-[10px]">10</span></div>
-              <div className="w-8 h-8 rounded-full border-2 border border-xmr-green bg-xmr-green/10 flex items-center justify-center"><span className="text-[10px]">10</span></div>
+              <div className="w-8 h-8 rounded-full border-2 border-xmr-green bg-xmr-green/10 flex items-center justify-center"><span className="text-[10px]">10</span></div>
+              <div className="w-8 h-8 rounded-full border-2 border-xmr-green bg-xmr-green/10 flex items-center justify-center"><span className="text-[10px]">10</span></div>
+              <div className="w-8 h-8 rounded-full border-2 border-xmr-green bg-xmr-green/10 flex items-center justify-center"><span className="text-[10px]">10</span></div>
             </div>
             <div className="flex flex-col gap-2">
               <div className="h-0.5 w-12 bg-xmr-green/50 text-transparent">_</div>
               <div className="h-0.5 w-12 bg-xmr-green/50 text-transparent">_</div>
               <div className="h-0.5 w-12 bg-xmr-green/50 text-transparent">_</div>
             </div>
-            <div className="w-16 h-16 rounded-full border-4 border border-xmr-green bg-xmr-green/20 flex items-center justify-center animate-pulse shadow-[0_0_15px_rgba(0,255,0,0.4)]">
+            <div className="w-16 h-16 rounded-full border-4 border-xmr-green bg-xmr-green/20 flex items-center justify-center animate-pulse shadow-[0_0_15px_var(--brand-color)]">
               <span className="font-mono font-black text-sm">30</span>
             </div>
           </div>
 
-          {error && <div className="text-red-500 text-xs font-mono">{error}</div>}
+          {error && <div className="text-xmr-error text-xs font-mono">{error}</div>}
 
           <button
             onClick={handleSubmit}

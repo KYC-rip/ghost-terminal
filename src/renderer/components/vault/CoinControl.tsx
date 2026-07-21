@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Coins, Shield, Lock as LockIcon, Wind, Send } from 'lucide-react';
 import { Card } from '../Card';
 import { TableHeader } from './TableHeader';

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { Shield, ShieldCheck, Users, Globe, ShieldAlert } from 'lucide-react';
 import { Card } from './Card';
 import { AuthForm } from './auth/AuthForm';
@@ -104,7 +104,7 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
     onSwitchIdentity(id);
   };
 
-  const handleUnlockSubmit = async (e: React.FormEvent) => {
+  const handleUnlockSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (isProcessing) return;
 
@@ -236,7 +236,7 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
             seedLanguage={seedLanguage} setSeedLanguage={setSeedLanguage}
             error={error} isProcessing={isProcessing} logs={logs}
             handleUnlockSubmit={handleUnlockSubmit}
-            handleCreateFinalize={() => { }}
+
           />
 
           {!isProcessing && step === 'AUTH' && (
@@ -263,7 +263,7 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
                 <button
                   type="button"
                   onClick={toggleNetwork}
-                  className={`px-2 py-0.5 rounded border text-xs font-black transition-all cursor-pointer ${routingMode === 'tor'
+                  className={`px-2 py-0.5 rounded-sm border text-xs font-black transition-all cursor-pointer ${routingMode === 'tor'
                     ? 'border-xmr-green/50 text-xmr-green hover:bg-xmr-green/10'
                     : 'border-xmr-accent/50 text-xmr-accent hover:bg-xmr-accent/10'
                     }`}

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
@@ -38,14 +37,24 @@ export default function SpreadChart() {
     dateStr: string;
   } | null>(null);
 
+  const root = getComputedStyle(document.documentElement);
+  const brandColor = root.getPropertyValue('--brand-color').trim();
+  const borderColor = root.getPropertyValue('--border-color').trim();
+  const textPrimary = root.getPropertyValue('--text-primary').trim();
+  const textDim = root.getPropertyValue('--text-dim').trim();
+  const chartLine = root.getPropertyValue('--chart-line').trim();
+  const chartAreaTop = root.getPropertyValue('--chart-area-top').trim();
+  const chartGrid = root.getPropertyValue('--chart-grid').trim();
+  const textAccent = root.getPropertyValue('--text-accent').trim();
+
   const colors = {
-    text: theme === 'light' ? '#111827' : '#00ff41',
-    grid: theme === 'light' ? 'rgba(0,0,0,0.05)' : 'rgba(20, 60, 20, 0.3)',
-    border: theme === 'light' ? '#cbd5e1' : '#004d13',
-    areaLine: theme === 'light' ? '#047857' : '#00ff41',
-    areaTop: theme === 'light' ? 'rgba(4, 120, 87, 0.1)' : 'rgba(0, 255, 65, 0.15)',
-    paperLine: theme === 'light' ? '#64748b' : '#ffffff',
-    liqLine: '#ea580c',
+    text: textPrimary || '#00ff41',
+    grid: chartGrid || 'rgba(20, 60, 20, 0.3)',
+    border: borderColor || '#004d13',
+    areaLine: chartLine || brandColor,
+    areaTop: chartAreaTop || 'rgba(0, 255, 65, 0.15)',
+    paperLine: textDim || '#64748b',
+    liqLine: textAccent || '#ea580c',
     nodeLine: '#0891b2',
     volColor: theme === 'light' ? 'rgba(4, 120, 87, 0.3)' : 'rgba(0, 50, 0, 0.5)',
   };
@@ -194,7 +203,7 @@ export default function SpreadChart() {
                   <>
                     <button onClick={() => toggleSeries('vol')} className={`transition-all border-l border-xmr-border/30 pl-3 ${visibleSeries.vol ? 'text-xmr-green' : 'text-xmr-dim opacity-30'}`}>TXs: {Math.floor(hoverData.txActivity || 0)}</button>
                     <button onClick={() => toggleSeries('liq')} className={`transition-all ${visibleSeries.liq ? 'text-xmr-accent' : 'text-xmr-dim opacity-30'}`}>LIQ: {Math.floor(hoverData.liquidity || 0)}</button>
-                    <button onClick={() => toggleSeries('nodes')} className={`transition-all ${visibleSeries.nodes ? 'text-cyan-500' : 'text-xmr-dim opacity-30'}`}>NODES: {Math.floor(hoverData.nodes || 0)}</button>
+                    <button onClick={() => toggleSeries('nodes')} className={`transition-all ${visibleSeries.nodes ? 'text-xmr-green opacity-70' : 'text-xmr-dim opacity-30'}`}>NODES: {Math.floor(hoverData.nodes || 0)}</button>
                   </>
                 )}
               </div>
@@ -202,7 +211,7 @@ export default function SpreadChart() {
           ) : (
             <div className="flex flex-col">
               <div className="text-xs text-xmr-green font-black tracking-widest mb-1 flex items-center gap-2 uppercase">
-                <div className={`w-1.5 h-1.5 rounded-full ${isLoading ? 'bg-yellow-500' : 'bg-xmr-green animate-pulse'}`}></div>
+                <div className={`w-1.5 h-1.5 rounded-full ${isLoading ? 'bg-xmr-warning' : 'bg-xmr-green animate-pulse'}`}></div>
                 INTEL_FEED :: {isLoading ? 'SYNCING...' : 'LIVE'}
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-black uppercase">
@@ -212,7 +221,7 @@ export default function SpreadChart() {
                   <>
                     <button onClick={() => toggleSeries('vol')} className={`transition-all border-l border-xmr-border/30 pl-3 ${visibleSeries.vol ? 'text-xmr-green' : 'text-xmr-dim opacity-30'}`}>▮ VOL</button>
                     <button onClick={() => toggleSeries('liq')} className={`transition-all ${visibleSeries.liq ? 'text-xmr-accent' : 'text-xmr-dim opacity-30'}`}>~ LIQ</button>
-                    <button onClick={() => toggleSeries('nodes')} className={`transition-all ${visibleSeries.nodes ? 'text-cyan-500' : 'text-xmr-dim opacity-30'}`}>~ NODES</button>
+                    <button onClick={() => toggleSeries('nodes')} className={`transition-all ${visibleSeries.nodes ? 'text-xmr-green opacity-70' : 'text-xmr-dim opacity-30'}`}>~ NODES</button>
                   </>
                 )}
               </div>

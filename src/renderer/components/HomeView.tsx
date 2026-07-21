@@ -1,5 +1,5 @@
 import React, { Suspense } from 'react';
-import { Activity, BarChart3, Shield, Zap, Globe, Lock, Ghost, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Activity, BarChart3, Globe, Lock, Ghost, TrendingUp, AlertTriangle } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { Card } from './Card';
 
@@ -123,7 +123,7 @@ export function HomeView({ setView, stats, loading }: HomeViewProps) {
          </button>
 
          <Card topGradientAccentColor="xmr-dim" className="flex flex-col justify-center relative overflow-hidden">
-            <div className="flex items-center gap-3 text-red-500 animate-pulse">
+            <div className="flex items-center gap-3 text-xmr-error animate-pulse">
                <AlertTriangle size={20} />
                <span className="text-xs font-black uppercase tracking-tighter">Sentinel_Active</span>
             </div>

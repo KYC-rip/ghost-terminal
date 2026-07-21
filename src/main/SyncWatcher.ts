@@ -102,7 +102,7 @@ export class SyncWatcher {
         this.lastStoreTime = Date.now();
         this.emitLog('Watcher', 'info', '💾 Auto-saving wallet sync progress');
       }
-    } catch (e) { /* Ignore */ }
+    } catch (e) { console.warn('[SyncWatcher] Periodic store failed:', e); }
   }
 
   private emitLog(source: string, level: 'info' | 'error', message: string) {
@@ -123,7 +123,8 @@ export class SyncWatcher {
         this.lastDaemonHeightFetch = now;
       }
       return this.cachedDaemonHeight;
-    } catch {
+    } catch (e) {
+      console.warn('[SyncWatcher] Daemon height fetch failed:', e);
       return this.cachedDaemonHeight;
     }
   }
@@ -262,7 +263,7 @@ export class SyncWatcher {
           }
         });
       }
-    } catch (e) { /* Ignore */ }
+    } catch (e) { console.warn('[SyncWatcher] Sync status check failed:', e); }
   }
 
   private async checkBalance(): Promise<void> {
@@ -273,6 +274,6 @@ export class SyncWatcher {
         this.pushEvent({ type: 'BALANCE_CHANGED', payload: { balance: result.balance, unlocked: result.unlocked_balance } });
       }
       this.lastKnownBalance = result.balance;
-    } catch (e) { /* Ignore */ }
+    } catch (e) { console.warn('[SyncWatcher] Balance check failed:', e); }
   }
 }

@@ -20,8 +20,8 @@
   --radius-md: var(--skin-radius-md, 0.5rem);
   --radius-lg: var(--skin-radius-lg, 0.75rem);
   --radius-xl: var(--skin-radius-xl, 1rem);
-  --radius-2xl: var(--skin-radius-xl, 1rem);
-  --radius-3xl: var(--skin-radius-xl, 1.5rem);
+  --radius-2xl: var(--skin-radius-2xl, 1rem);
+  --radius-3xl: var(--skin-radius-3xl, 1.5rem);
 }
 
 :root {
@@ -36,6 +36,8 @@
   --skin-radius-md: 4px;
   --skin-radius-lg: 6px;
   --skin-radius-xl: 8px;
+  --skin-radius-2xl: 12px;
+  --skin-radius-3xl: 16px;
 }
 
 .dark {
@@ -106,6 +108,8 @@
   --skin-radius-md: 4px;
   --skin-radius-lg: 6px;
   --skin-radius-xl: 8px;
+  --skin-radius-2xl: 12px;
+  --skin-radius-3xl: 16px;
 }
 
 .skin-clean {
@@ -113,6 +117,8 @@
   --skin-radius-md: 10px;
   --skin-radius-lg: 14px;
   --skin-radius-xl: 20px;
+  --skin-radius-2xl: 24px;
+  --skin-radius-3xl: 28px;
 }
 
 .skin-monero {
@@ -120,6 +126,8 @@
   --skin-radius-md: 8px;
   --skin-radius-lg: 10px;
   --skin-radius-xl: 14px;
+  --skin-radius-2xl: 18px;
+  --skin-radius-3xl: 22px;
 }
 
 /* ─── SKIN: Clean (Professional / Financial) ─── */

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { X, Scissors, Loader2 } from 'lucide-react';
 
 interface SplinterModalProps {
@@ -31,7 +31,7 @@ export function SplinterModal({ onClose, onSplinter, unlockedBalance }: Splinter
 
   return (
     <div className="fixed top-0 bottom-0 right-0 left-[14rem] z-[100] flex items-center justify-center p-6 bg-xmr-base/90 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="w-full max-w-lg max-h-[90vh] bg-xmr-base/80 text-xmr-dim border-4 border-xmr-accent relative rounded-lg flex flex-col">
+      <div className="w-full max-w-lg max-h-[90vh] bg-xmr-base/80 text-xmr-dim border-2 border-xmr-accent relative rounded-sm flex flex-col">
         <button onClick={onClose} disabled={isProcessing} className="absolute top-4 right-4 cursor-pointer disabled:opacity-50 z-10">
           <X size={24} />
         </button>
@@ -57,7 +57,7 @@ export function SplinterModal({ onClose, onSplinter, unlockedBalance }: Splinter
           </div>
 
           <div className="flex items-center justify-center gap-4 text-xmr-accent py-4 opacity-80">
-            <div className="w-16 h-16 rounded-full border-4 border border-xmr-accent bg-xmr-accent/20 flex items-center justify-center animate-pulse shadow-[0_0_15px_rgba(255,255,255,0.4)]">
+            <div className="w-16 h-16 rounded-full border-4 border-xmr-accent bg-xmr-accent/20 flex items-center justify-center animate-pulse shadow-[0_0_15px_var(--text-accent)]">
                <span className="font-mono font-black text-sm">100</span>
             </div>
             <div className="flex flex-col gap-2">
@@ -66,9 +66,9 @@ export function SplinterModal({ onClose, onSplinter, unlockedBalance }: Splinter
               <div className="h-0.5 w-12 bg-xmr-accent/50 text-transparent">_</div>
             </div>
             <div className="flex flex-col gap-2">
-              <div className="w-8 h-8 rounded-full border-2 border border-xmr-accent bg-xmr-accent/10 flex items-center justify-center"><span className="text-[10px]">33</span></div>
-              <div className="w-8 h-8 rounded-full border-2 border border-xmr-accent bg-xmr-accent/10 flex items-center justify-center"><span className="text-[10px]">33</span></div>
-              <div className="w-8 h-8 rounded-full border-2 border border-xmr-accent bg-xmr-accent/10 flex items-center justify-center"><span className="text-[10px]">34</span></div>
+              <div className="w-8 h-8 rounded-full border-2 border-xmr-accent bg-xmr-accent/10 flex items-center justify-center"><span className="text-[10px]">33</span></div>
+              <div className="w-8 h-8 rounded-full border-2 border-xmr-accent bg-xmr-accent/10 flex items-center justify-center"><span className="text-[10px]">33</span></div>
+              <div className="w-8 h-8 rounded-full border-2 border-xmr-accent bg-xmr-accent/10 flex items-center justify-center"><span className="text-[10px]">34</span></div>
             </div>
           </div>
 
@@ -84,7 +84,7 @@ export function SplinterModal({ onClose, onSplinter, unlockedBalance }: Splinter
             />
           </div>
 
-          {error && <div className="text-red-500 text-xs font-mono">{error}</div>}
+          {error && <div className="text-xmr-error text-xs font-mono">{error}</div>}
         </div>
 
         {/* Sticky footer button */}

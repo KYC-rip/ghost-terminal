@@ -75,8 +75,7 @@ export function ComplianceSelector({
            </button>
            <button onClick={() => onSelect('STANDARD')} disabled={disabled} className={`${baseBtn} ${currentLevel === 'STANDARD' ? activeStyles.STANDARD : inactiveBtn}`}>
              <ShieldCheck size={12} className="shrink-0" />
-            <span>STD</span> {/* Abbreviation for small screens? No, STANDARD fits fine */}
-            <span className="hidden xs:inline">ARD</span> {/* Optional: hide suffix on very small screens; flex-1 usually handles it */}
+             <span>STANDARD</span>
            </button>
            <button onClick={() => onSelect('STRICT')} disabled={disabled} className={`${baseBtn} ${currentLevel === 'STRICT' ? activeStyles.STRICT : inactiveBtn}`}>
              <Lock size={12} className="shrink-0" />
@@ -104,7 +103,7 @@ export function ComplianceSelector({
 
         <div className="flex items-center gap-2 md:gap-3 shrink-0">
            {/* Summary Badge */}
-           <div className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[11px] font-mono font-bold whitespace-nowrap ${summary.color} ${summary.bg}`}>
+           <div className={`flex items-center gap-1.5 px-2 py-1 rounded-sm border text-[11px] font-mono font-bold whitespace-nowrap ${summary.color} ${summary.bg}`}>
               {summary.label === 'MAX PRIVACY' && <Lock size={10} className="shrink-0" />}
               {summary.label === 'BEST RATE (RISK)' && <Zap size={10} className="shrink-0" />}
               {summary.label === 'BALANCED' && <ShieldCheck size={10} className="shrink-0" />}

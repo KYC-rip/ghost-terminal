@@ -92,7 +92,18 @@ async function client<T>(type: APIType, endpoint: string, { body, ...customConfi
     clearTimeout(id);
 
     if (!result.ok) {
-      throw new APIError(result.statusText || `HTTP Error ${result.status}`, result.status, await result.json());
+      // Surface the server's structured error body ({ error, code, detail })
+      // instead of a generic "HTTP Error 500". Fall back to statusText only
+      // when the body isn't JSON (e.g. a Cloudflare HTML error page).
+      let data: any = undefined;
+      let message = result.statusText || `HTTP Error ${result.status}`;
+      try {
+        data = await result.json();
+        message = data?.error || data?.message || data?.detail || message;
+      } catch {
+        // Non-JSON error body — keep the generic message.
+      }
+      throw new APIError(message, result.status, data);
     }
 
     if (customResponseHandler) {

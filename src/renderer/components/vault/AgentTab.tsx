@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Bot, Shield, Zap, Key, RefreshCw, BarChart3, Activity, Terminal as TerminalIcon, ChevronDown, ChevronUp } from 'lucide-react';
 import { Card } from '../Card';
 import { useVault } from '../../hooks/useVault';

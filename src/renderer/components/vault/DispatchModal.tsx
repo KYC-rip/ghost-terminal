@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { X, Send, Ghost } from 'lucide-react';
 import { useVault } from '../../contexts/VaultContext';
 import { DispatchPasswordGate } from './DispatchPasswordGate';
@@ -50,7 +50,7 @@ export function DispatchModal({ onClose, initialAddress = '', sourceSubaddressIn
   };
 
   const content = (
-      <div className={`w-full ${inline ? '' : 'max-w-xl bg-xmr-surface border border-xmr-border rounded-lg'} relative flex flex-col ${inline ? 'h-full' : 'max-h-[85vh]'} overflow-hidden`}>
+      <div className={`w-full ${inline ? '' : 'max-w-xl bg-xmr-surface border border-xmr-border rounded-sm'} relative flex flex-col ${inline ? 'h-full' : 'max-h-[85vh]'} overflow-hidden`}>
         {/* ══ PASSWORD GATE ══ */}
         {showPasswordGate && (
           <DispatchPasswordGate
@@ -77,7 +77,7 @@ export function DispatchModal({ onClose, initialAddress = '', sourceSubaddressIn
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all rounded-lg flex items-center gap-1.5 cursor-pointer ${
+                className={`px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all rounded-sm flex items-center gap-1.5 cursor-pointer ${
                   tab === t.id
                     ? 'text-xmr-accent border border-xmr-accent/30 bg-xmr-accent/5'
                     : 'text-xmr-dim hover:text-xmr-accent border border-transparent'

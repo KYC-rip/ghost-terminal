@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Tag, DollarSign, Copy, CheckCircle2, QrCode, ArrowDownToLine, Shuffle } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useVault } from '../../contexts/VaultContext';
@@ -81,7 +81,7 @@ export function ReceiveModal({ onClose, existingAddress, inline }: ReceiveModalP
     copyText: string; copied: boolean; onCopy: () => void; sublabel?: string;
   }) => (
     <div className="flex flex-col items-center gap-4">
-      <div className="p-3 bg-white rounded">
+      <div className="p-3 bg-white rounded-sm">
         <QRCodeSVG
           value={qrValue} size={qrSize} level="M" includeMargin={false}
           imageSettings={imgSrc ? { src: imgSrc, x: undefined, y: undefined, height: imgSize || 34, width: imgSize || 34, excavate: true } : undefined}
@@ -102,7 +102,7 @@ export function ReceiveModal({ onClose, existingAddress, inline }: ReceiveModalP
   );
 
   const content = (
-      <div className={`w-full ${inline ? '' : 'max-w-xl bg-xmr-surface border border-xmr-border rounded-lg'} relative flex flex-col ${inline ? 'h-full' : 'max-h-[85vh]'} overflow-hidden`}>
+      <div className={`w-full ${inline ? '' : 'max-w-xl bg-xmr-surface border border-xmr-border rounded-sm'} relative flex flex-col ${inline ? 'h-full' : 'max-h-[85vh]'} overflow-hidden`}>
 
         {/* Header — matches tab bar style when inline */}
         <div className={`flex items-center justify-between ${inline ? 'px-3 py-2 bg-xmr-surface/50' : 'px-6 py-4'} border-b border-xmr-border/${inline ? '15' : '40'}`}>
@@ -114,7 +114,7 @@ export function ReceiveModal({ onClose, existingAddress, inline }: ReceiveModalP
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all rounded-lg flex items-center gap-1.5 cursor-pointer ${tab === t.id
+                className={`px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all rounded-sm flex items-center gap-1.5 cursor-pointer ${tab === t.id
                     ? 'text-xmr-green border border-xmr-green/30 bg-xmr-green/5'
                     : 'text-xmr-dim hover:text-xmr-green border border-transparent'
                   }`}

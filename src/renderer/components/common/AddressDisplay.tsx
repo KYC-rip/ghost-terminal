@@ -1,4 +1,4 @@
-import React from 'react';
+import type { MouseEvent } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 
@@ -18,7 +18,7 @@ interface AddressDisplayProps {
 export function AddressDisplay({ address, className = '', truncate = false, length = 12, showCopyIndicator = false }: AddressDisplayProps) {
   const { copied, copy } = useCopyToClipboard();
 
-  const handleCopy = (e: React.MouseEvent) => {
+  const handleCopy = (e: MouseEvent) => {
     e.stopPropagation();
     copy(address);
   };
@@ -52,7 +52,7 @@ export function AddressDisplay({ address, className = '', truncate = false, leng
     >
       <code className={`font-mono flex flex-wrap gap-x-1 group-hover:opacity-80 transition-colors`}>
         {copied && <div className={`absolute flex items-center gap-1 transition-all duration-300 ${copied ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-2 pointer-events-none'}`}>
-          <span className="text-xs font-black bg-xmr-green text-xmr-base px-1 rounded leading-tight">COPIED</span>
+          <span className="text-xs font-black bg-xmr-green text-xmr-base px-1 rounded-sm leading-tight">COPIED</span>
           <Check size={10} className="text-xmr-green" />
         </div>}
         {formattedBlocks}

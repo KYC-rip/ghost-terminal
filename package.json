@@ -1,7 +1,7 @@
 {
   "name": "ripley-terminal",
   "displayName": "Ripley Terminal",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "description": "Tactical Monero Desktop Wallet",
   "repository": {
     "type": "git",

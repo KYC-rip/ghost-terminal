@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronUp, Copy, ExternalLink, Info, Loader2, Key, ShieldCheck, Fingerprint, CheckCircle, ShieldAlert, Zap, Ghost } from 'lucide-react';
 import { Card } from '../Card';
 import { TableHeader } from './TableHeader';
@@ -296,23 +296,23 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                 </div>
 
                 {verifyResult && (
-                  <div className={`p-3 border rounded-sm animate-in zoom-in-95 duration-200 ${verifyResult.good === false ? 'bg-red-500/10 border-red-500/30' : 'bg-xmr-green/10 border-xmr-green/30'}`}>
+                  <div className={`p-3 border rounded-sm animate-in zoom-in-95 duration-200 ${verifyResult.good === false ? 'bg-xmr-error/10 border-xmr-error/30' : 'bg-xmr-green/10 border-xmr-green/30'}`}>
                     <div className="flex items-start gap-3">
-                      <div className={`mt-0.5 p-1 rounded-full ${verifyResult.good === false ? 'bg-red-500/20 text-red-500' : 'bg-xmr-green/20 text-xmr-green'}`}>
+                      <div className={`mt-0.5 p-1 rounded-full ${verifyResult.good === false ? 'bg-xmr-error/20 text-xmr-error' : 'bg-xmr-green/20 text-xmr-green'}`}>
                         {verifyResult.good === false ? <ShieldAlert size={16} /> : <CheckCircle size={16} />}
                       </div>
                       <div className="flex-grow space-y-1">
-                        <div className={`text-[11px] font-black uppercase tracking-wider ${verifyResult.good === false ? 'text-red-500' : 'text-xmr-green'}`}>
+                        <div className={`text-[11px] font-black uppercase tracking-wider ${verifyResult.good === false ? 'text-xmr-error' : 'text-xmr-green'}`}>
                           {verifyResult.good === false ? 'Verification Failed' : 'Payment Verified'}
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-[10px]">
                           <div className="flex flex-col">
                             <span className="text-xmr-dim font-bold uppercase text-[9px]">Amount_Received</span>
-                            <span className="text-white font-mono">{verifyResult.received} XMR</span>
+                            <span className="text-xmr-green font-mono">{verifyResult.received} XMR</span>
                           </div>
                           <div className="flex flex-col">
                             <span className="text-xmr-dim font-bold uppercase text-[9px]">Confirmations</span>
-                            <span className="text-white font-mono">{verifyResult.confirmations}</span>
+                            <span className="text-xmr-green font-mono">{verifyResult.confirmations}</span>
                           </div>
                         </div>
                         {verifyResult.inPool && (
@@ -357,7 +357,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                         <div className={`absolute left-0 top-0 bottom-0 w-[2px] opacity-0 group-hover:opacity-100 transition-opacity ${isIncoming ? 'bg-xmr-green' : 'bg-xmr-accent'}`} />
 
                         {/* Type indicator */}
-                        <div className={`w-7 h-7 rounded-md flex items-center justify-center mr-3 shrink-0 ${isIncoming ? 'bg-xmr-green/8 border border-xmr-green/20' : 'bg-xmr-accent/8 border border-xmr-accent/20'}`}>
+                        <div className={`w-7 h-7 rounded-sm flex items-center justify-center mr-3 shrink-0 ${isIncoming ? 'bg-xmr-green/8 border border-xmr-green/20' : 'bg-xmr-accent/8 border border-xmr-accent/20'}`}>
                           {isIncoming ? (
                             <ArrowDownLeft size={13} className="text-xmr-green" />
                           ) : (
@@ -372,10 +372,10 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                               {isIncoming ? 'Received' : 'Dispatched'}
                             </span>
                             {ghostTrades[tx.id] && (
-                              <span className="text-[7px] px-1.5 py-0.5 bg-xmr-accent/10 border border-xmr-accent/20 rounded text-xmr-accent font-black tracking-wider">Ghost</span>
+                              <span className="text-[7px] px-1.5 py-0.5 bg-xmr-accent/10 border border-xmr-accent/20 rounded-sm text-xmr-accent font-black tracking-wider">Ghost</span>
                             )}
                             {xmr402Info && (
-                              <span className="text-[7px] px-1.5 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-blue-500 font-black tracking-wider">XMR402</span>
+                              <span className="text-[7px] px-1.5 py-0.5 bg-xmr-warning/10 border border-xmr-warning/20 rounded-sm text-xmr-warning font-black tracking-wider">XMR402</span>
                             )}
                           </div>
                           <div className="text-[9px] text-xmr-dim/40 mt-0.5 truncate">
@@ -390,7 +390,10 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                             {isIncoming ? '+' : '-'}{tx.amount}
                           </div>
                           <div className="text-[9px] text-xmr-dim/40 font-bold">
-                            XMR{formatFiat(tx.amount) ? ` · ≈ ${formatFiat(tx.amount)}` : ''}
+                            XMR
+                            {formatFiat(tx.amount) && (
+                              <span className="text-xmr-dim/30 font-mono ml-1">· ≈ {formatFiat(tx.amount)}</span>
+                            )}
                           </div>
                         </div>
 
@@ -405,10 +408,10 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                         <div className="px-4 py-4 bg-xmr-green/5 border-t border-b border-xmr-green/10 space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
                           {/* XMR402 Panel */}
                           {xmr402Info && (
-                            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-sm flex justify-between items-center">
+                            <div className="p-3 bg-xmr-warning/10 border border-xmr-warning/20 rounded-sm flex justify-between items-center">
                               <div>
-                                <div className="text-[9px] text-blue-500 uppercase font-black tracking-widest">XMR402 Protocol Executed</div>
-                                <div className="text-xs text-white font-mono break-all opacity-80 mt-1">Nonce: {xmr402Info.nonce}</div>
+                                <div className="text-[9px] text-xmr-warning uppercase font-black tracking-widest">XMR402 Protocol Executed</div>
+                                <div className="text-xs text-xmr-green font-mono break-all opacity-80 mt-1">Nonce: {xmr402Info.nonce}</div>
                               </div>
                               {xmr402Info.returnUrl && (
                                 <button
@@ -419,7 +422,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                     if (xmr402Info.proof) callbackUrl.searchParams.set('xmr402_proof', xmr402Info.proof);
                                     (window as any).api.openExternal(callbackUrl.toString());
                                   }}
-                                  className="shrink-0 ml-4 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-black uppercase tracking-wider rounded-sm transition-colors cursor-pointer flex items-center gap-1 shadow-[0_0_10px_rgba(59,130,246,0.2)]"
+                                  className="shrink-0 ml-4 px-3 py-1.5 bg-xmr-warning hover:opacity-90 text-xmr-base text-[10px] font-black uppercase tracking-wider rounded-sm transition-colors cursor-pointer flex items-center gap-1 shadow-[0_0_10px_var(--warning-color)]"
                                 >
                                   <ExternalLink size={12} /> Retry Callback
                                 </button>
@@ -483,8 +486,8 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                               )}
                               {tx.doubleSpendSeen && (
                                 <div className="space-y-1">
-                                  <label className="text-xs text-red-500 uppercase font-black tracking-widest block">DoubleSpend_Alert</label>
-                                  <span className="text-xs font-black text-red-500 animate-pulse">WARNING: CONFLICT DETECTED</span>
+                                  <label className="text-xs text-xmr-error uppercase font-black tracking-widest block">DoubleSpend_Alert</label>
+                                  <span className="text-xs font-black text-xmr-error animate-pulse">WARNING: CONFLICT DETECTED</span>
                                 </div>
                               )}
                             </div>
@@ -594,7 +597,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                               ) : (
                                 <div className="text-xs font-mono text-xmr-dim opacity-60 flex items-center gap-2">
                                   <span>¿Unknown Destination?</span>
-                                  <span className="text-xs bg-xmr-dim/10 px-1 rounded uppercase tracking-tighter">Privacy Protected</span>
+                                  <span className="text-xs bg-xmr-dim/10 px-1 rounded-sm uppercase tracking-tighter">Privacy Protected</span>
                                 </div>
                               )}
                             </div>

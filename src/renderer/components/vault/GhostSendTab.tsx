@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Ghost, ArrowRight, DollarSign, Loader2, CheckCircle2, AlertTriangle, Wallet, RefreshCw } from 'lucide-react';
 import { useVault } from '../../contexts/VaultContext';
 import { useStats } from '../../hooks/useStats';
@@ -138,6 +138,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
           toNetwork: ghostCurrency!.network || 'Mainnet',
           destinationAddress: ghostReceiverAddr,
           provider: route?.provider || quote.provider,
+          engine: route?.engine || quote.engine,
           source: 'ghost',
         });
         setTradeResponse(trade);
@@ -171,8 +172,8 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
               setGhostPhase('error');
               if (pollingRef.current) clearInterval(pollingRef.current);
             }
-          } catch {
-            /* swallow polling errors */
+          } catch (e) {
+            console.warn('[GhostSend] Poll failed, retrying:', e);
           }
         }, 10000);
       } catch (e: any) {
@@ -216,7 +217,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
               </label>
               {ghostReceiverAddr.length > 0 && !isGhostAddrValidating && (
                 <span
-                  className={`text-xs uppercase tracking-widest ${isGhostAddrValid ? 'text-xmr-green' : 'text-red-500 animate-pulse'
+                  className={`text-xs uppercase tracking-widest ${isGhostAddrValid ? 'text-xmr-green' : 'text-xmr-error animate-pulse'
                     }`}
                 >
                   {isGhostAddrValid ? 'Valid Format' : ghostAddrError || 'Invalid Format'}
@@ -228,7 +229,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
               value={ghostReceiverAddr}
               onChange={(e) => setGhostReceiverAddr(e.target.value)}
               placeholder={`${ghostCurrency?.ticker.toUpperCase() || 'Asset'} address`}
-              className={`w-full bg-xmr-base border p-3 text-xs text-xmr-green focus:border-xmr-accent outline-none transition-colors ${ghostReceiverAddr.length > 0 && isGhostAddrValid === false ? 'border-red-600' : 'border-xmr-border'
+              className={`w-full bg-xmr-base border p-3 text-xs text-xmr-green focus:border-xmr-accent outline-none transition-colors ${ghostReceiverAddr.length > 0 && isGhostAddrValid === false ? 'border-xmr-error' : 'border-xmr-border'
                 }`}
             />
           </div>
@@ -424,8 +425,8 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
 
       {ghostPhase === 'error' && (
         <div className="py-12 flex flex-col items-center gap-4 text-center">
-          <AlertTriangle size={48} className="text-red-500" />
-          <div className="text-sm uppercase text-red-500 font-black">Ghost Send Failed</div>
+          <AlertTriangle size={48} className="text-xmr-error" />
+          <div className="text-sm uppercase text-xmr-error font-black">Ghost Send Failed</div>
           <div className="text-[11px] text-xmr-dim">{ghostError}</div>
           <button
             onClick={resetGhost}

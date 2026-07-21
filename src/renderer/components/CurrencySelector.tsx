@@ -66,7 +66,7 @@ function CurrencyList({ loading, displayList, filteredCount, selected, onSelect 
                 </div>
                 <div className="text-xs text-[var(--local-text-dim)] flex items-center gap-2">
                   {c.name}
-                  <span className="bg-[var(--color-xmr-surface)] border border-[var(--local-border)] px-1 rounded text-[var(--local-text-dim)]/80">
+                  <span className="bg-[var(--color-xmr-surface)] border border-[var(--local-border)] px-1 rounded-sm text-[var(--local-text-dim)]/80">
                     {c.network}
                   </span>
                 </div>
@@ -274,7 +274,7 @@ export function CurrencySelector({
           type="button"
           onClick={() => setIsOpen(!isOpen)}
 
-          className={`w-full flex items-center justify-between px-2 md:px-4 py-2.5 rounded transition-all duration-200 ${hideBorder ? 'border-0' : 'border'}
+          className={`w-full flex items-center justify-between px-2 md:px-4 py-2.5 rounded-sm transition-all duration-200 ${hideBorder ? 'border-0' : 'border'}
             ${bg} text-[var(--local-text-dim)] 
             ${isOpen
               ? "ring-1 ring-[var(--local-brand)]/50 border-[var(--local-brand)] text-[var(--local-brand)]"
@@ -386,7 +386,7 @@ export function CurrencySelector({
             position ? (
               <div
                 ref={portalRef}
-                className={`fixed z-[100] rounded-md shadow-2xl flex flex-col max-h-[48vh] md:max-h-[40vh] animate-in fade-in zoom-in-95 duration-100
+                className={`fixed z-[100] rounded-sm shadow-2xl flex flex-col max-h-[48vh] md:max-h-[40vh] animate-in fade-in zoom-in-95 duration-100
                    ${forceDark ? 'dark' : ''}
                    bg-[var(--color-xmr-surface)] border border-[var(--local-border)]
                 `}
@@ -398,7 +398,7 @@ export function CurrencySelector({
                 }}
               >
                 {/* Search Input */}
-                <div className="p-3 border-b border-[var(--local-border)] sticky top-0 bg-[var(--color-xmr-surface)] z-10 rounded-t-md">
+                <div className="p-3 border-b border-[var(--local-border)] sticky top-0 bg-[var(--color-xmr-surface)] z-10 rounded-t-sm">
                   <div className="relative">
                     <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--local-text-dim)]" />
                     <input
@@ -425,7 +425,7 @@ export function CurrencySelector({
 
                 {/* Footer Status */}
                 {!loading && (
-                  <div className="p-2 border-t border-[var(--local-border)] bg-[var(--color-xmr-surface)] text-xs text-[var(--local-text-dim)] flex justify-between rounded-b-md font-mono">
+                  <div className="p-2 border-t border-[var(--local-border)] bg-[var(--color-xmr-surface)] text-xs text-[var(--local-text-dim)] flex justify-between rounded-b-sm font-mono">
                     <span>STATUS: ONLINE</span>
                     <span>{includedCurrencies.length} ASSETS</span>
                   </div>

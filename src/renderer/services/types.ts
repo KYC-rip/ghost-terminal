@@ -107,7 +107,8 @@ export interface BatchQuoteResult {
   trade_id: string;
   request_id: string;
   provider: string;
-  amount_from_estimated: number; 
+  engine?: string;
+  amount_from_estimated: number;
   amount_to: number;
   success: boolean;
   error?: string;

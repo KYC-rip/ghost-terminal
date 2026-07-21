@@ -35,6 +35,7 @@ export interface TradeDetails {
 
 export interface ExchangeRoute {
   provider: string;
+  engine?: string;
   amount_to: number;
   amount_from: number;
   kyc: string;
@@ -53,6 +54,7 @@ export interface ExchangeQuote {
   min: number;
   max: number;
   provider: string;
+  engine?: string;
   kyc_rating: string;
   eta: number;
   routes?: ExchangeRoute[];
@@ -240,7 +242,12 @@ export function createTrade(params: CreateTradeParams): Promise<ExchangeResponse
       address_to: params.destinationAddress, fixed_rate: params.fixed || false,
       address_memo: params.memo, to_currency_memo: !!params.memo,
       provider: params.provider, isPayment: params.isPayment || false,
-      source: params.source || 'swap',
+      // Namespace the source with `rt:` (ripley-terminal) so wallet-originated
+      // trades are distinguishable from the website, which uses the bare
+      // 'swap'/'ghost'/'pay' values. The backend stores this verbatim; its
+      // functional source-branches (ghost bridge legs, pay, telegram) strip the
+      // prefix via baseSource(), so behavior is unchanged.
+      source: `rt:${params.source || 'swap'}`,
       engine: params.engine,
     }
   }).then(normalizeExchangeResponse);
@@ -408,6 +415,7 @@ export async function quoteBatchTrades(
     providerUsage[selectedRoute.provider] = (providerUsage[selectedRoute.provider] || 0) + 1;
     finalResults.push({
       request_id: res.req.id, trade_id: res.quoteId, provider: selectedRoute.provider,
+      engine: selectedRoute.engine,
       amount_from_estimated: selectedRoute.amount_from, amount_to: res.req.amountTo,
       success: true, original_request: res.req
     });
@@ -429,7 +437,7 @@ export async function executeBatchTrades(quotes: BatchQuoteResult[], destination
         id: q.trade_id, amountFrom: q.amount_from_estimated, amountTo: q.amount_to,
         fromTicker: q.original_request.fromTicker, fromNetwork: q.original_request.fromNetwork,
         toTicker: q.original_request.toTicker, toNetwork: q.original_request.toNetwork,
-        destinationAddress: destAddr, provider: q.provider, source: "dispenser"
+        destinationAddress: destAddr, provider: q.provider, engine: q.engine, source: "dispenser"
       });
       return {
         request_id: q.request_id, trade_id: trade.trade_id || trade.id || '',
@@ -469,7 +477,8 @@ export const fetchBridgeEstimate = async (from: string, to: string, amount: numb
       try {
         const errData = await res.json();
         if (errData.error) errMsg = errData.error;
-      } catch {
+      } catch (e) {
+        console.warn('[Swap] Error body parse failed:', e);
         errMsg = await res.text() || res.statusText;
       }
       throw new Error(errMsg.split('error":')?.[1]?.replaceAll(/["\\}]/g, '') || errMsg);
@@ -633,7 +642,8 @@ export async function fetchBridgeStatusV2(id: string, engine?: string): Promise<
     try {
       const trade2 = await apiClient<BridgeTradeV2>(`/v2/exchange/status/${secondId}${params}`);
       return [trade1, trade2];
-    } catch {
+    } catch (e) {
+      console.warn('[Swap] Second leg status fetch failed:', e);
       return [trade1];
     }
   }

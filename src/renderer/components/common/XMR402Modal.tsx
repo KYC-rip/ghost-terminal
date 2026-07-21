@@ -142,7 +142,7 @@ export const XMR402Modal: React.FC = () => {
           initial={{ scale: 0.9, opacity: 0, y: 20 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.9, opacity: 0, y: 20 }}
-          className="w-full max-w-lg bg-xmr-base border border-xmr-accent/30 shadow-[0_0_50px_rgba(0,255,65,0.1)] overflow-hidden rounded-lg"
+          className="w-full max-w-lg bg-xmr-base border border-xmr-accent/30 shadow-[0_0_50px_rgba(0,255,65,0.1)] overflow-hidden rounded-sm"
         >
           {/* Header */}
           <div className="bg-xmr-accent/10 border-b border-xmr-accent/20 p-4 flex justify-between items-center">
@@ -155,7 +155,7 @@ export const XMR402Modal: React.FC = () => {
                 <p className="text-[10px] text-xmr-dim uppercase tracking-widest font-black">XMR402 // Tactical Execution Request</p>
               </div>
             </div>
-            <button onClick={handleDeny} className="text-xmr-dim hover:text-red-500 transition-colors cursor-pointer">
+            <button onClick={handleDeny} className="text-xmr-dim hover:text-xmr-error transition-colors cursor-pointer">
               <X size={20} />
             </button>
           </div>
@@ -174,7 +174,7 @@ export const XMR402Modal: React.FC = () => {
               </div>
               <div className="text-right">
                 <div className="text-[10px] text-xmr-dim uppercase font-black tracking-widest">Network</div>
-                <div className={`text-[10px] font-black uppercase ${isStagenet ? 'text-orange-500' : 'text-xmr-green'}`}>
+                <div className={`text-[10px] font-black uppercase ${isStagenet ? 'text-xmr-accent' : 'text-xmr-green'}`}>
                   {isStagenet ? 'STAGENET' : 'MAINNET'}
                 </div>
               </div>
@@ -266,7 +266,7 @@ export const XMR402Modal: React.FC = () => {
                         <span>{activeAccount?.label || 'Account_0'}</span>
                         {showAccountSelector ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                       </div>
-                      <span className={Number(activeAccount?.unlockedBalance) < Number(amount) ? 'text-red-500 animate-pulse' : 'text-xmr-green'}>
+                      <span className={Number(activeAccount?.unlockedBalance) < Number(amount) ? 'text-xmr-error animate-pulse' : 'text-xmr-green'}>
                         Balance: {activeAccount?.unlockedBalance || '0.0000'} XMR
                       </span>
                     </div>
@@ -296,7 +296,7 @@ export const XMR402Modal: React.FC = () => {
                                   <span className="opacity-50">#{acc.index}</span>
                                   {acc.label}
                                 </div>
-                                <span className={Number(acc.unlockedBalance) < Number(amount) ? 'text-red-500/50' : 'text-xmr-green/70'}>
+                                <span className={Number(acc.unlockedBalance) < Number(amount) ? 'text-xmr-error/50' : 'text-xmr-green/70'}>
                                   {acc.unlockedBalance} XMR
                                 </span>
                               </button>
@@ -321,7 +321,7 @@ export const XMR402Modal: React.FC = () => {
                     />
                   </div>
                   {error && (
-                    <div className="flex items-center gap-2 text-red-500 text-[10px] font-black uppercase italic animate-pulse">
+                    <div className="flex items-center gap-2 text-xmr-error text-[10px] font-black uppercase italic animate-pulse">
                       <AlertCircle size={12} /> {error}
                     </div>
                   )}
@@ -341,7 +341,7 @@ export const XMR402Modal: React.FC = () => {
                   </button>
                   <button
                     onClick={handleDeny}
-                    className="px-6 py-4 border border-xmr-border text-xmr-dim font-black uppercase text-xs tracking-widest hover:border-red-500 hover:text-red-500 transition-all cursor-pointer"
+                    className="px-6 py-4 border border-xmr-border text-xmr-dim font-black uppercase text-xs tracking-widest hover:border-xmr-error hover:text-xmr-error transition-all cursor-pointer"
                   >
                     Deny
                   </button>
