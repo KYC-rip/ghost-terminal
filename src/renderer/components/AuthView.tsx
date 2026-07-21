@@ -1,9 +1,14 @@
 import { useState, useEffect, type FormEvent } from 'react';
-import { Shield, ShieldCheck, Users, Globe, ShieldAlert } from 'lucide-react';
+import { Shield, ShieldCheck, Users, Globe, ShieldAlert, LayoutGrid } from 'lucide-react';
 import { Card } from './Card';
 import { AuthForm } from './auth/AuthForm';
 import { IdentitySwitcher } from './auth/IdentitySwitcher';
 import { LogEntry } from '../contexts/VaultContext';
+
+/** Tauri-only: classic wallet ↔ RipleyOS desktop switch (Electron preload has no setUiMode). */
+function canSwitchUiMode(): boolean {
+  try { return typeof (window as any).api?.setUiMode === 'function'; } catch { return false; }
+}
 
 interface Identity { id: string; name: string; created: number; }
 
@@ -65,6 +70,28 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
   const [isProcessing, setIsProcessing] = useState(false);
   const [appVersion, setAppVersion] = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [rosSwitching, setRosSwitching] = useState(false);
+  const [canRos, setCanRos] = useState(false);
+  useEffect(() => { setCanRos(canSwitchUiMode()); }, []);
+
+  /** Relaunch into RipleyOS desktop (beta). Does not require vault unlock — ui_mode is shell config. */
+  const enterRipleyOs = async () => {
+    if (!canSwitchUiMode() || rosSwitching) return;
+    if (!confirm(
+      'Open RipleyOS desktop (beta)?\n\n'
+      + 'The app will relaunch into the privacy OS UI. Your classic wallet stays on this device.\n\n'
+      + 'Return anytime: RipleyOS Settings → “Exit to classic wallet”.',
+    )) return;
+    setRosSwitching(true);
+    setError('');
+    try {
+      await (window as any).api.setUiMode('ros');
+      // Process relaunches on success — this line never runs.
+    } catch (err: any) {
+      setError(`ROS_SWITCH_FAILED: ${(err?.message || String(err)).toUpperCase()}`);
+      setRosSwitching(false);
+    }
+  };
 
   // Clear any stale error when navigating between auth steps — a failed unlock's
   // "INVALID PASSWORD" must not linger on the create/restore screens.
@@ -308,6 +335,45 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
             </div>
           )}
         </Card>
+
+        {/* RipleyOS entrance — shell-level switch (no vault unlock required).
+            Same setUiMode as Settings → Use_RipleyOS_Desktop, surfaced here so beta
+            isn't buried three clicks deep. Tauri only. */}
+        {/* Unlock (AUTH) or first-run create (no vault yet) — don't bury beta behind Settings. */}
+        {canRos && !isProcessing && (step === 'AUTH' || (step === 'NEW_PASSWORD' && identities.length === 0)) && (
+          <div className="rounded-lg border border-xmr-green/25 bg-xmr-green/5 px-4 py-3.5 space-y-2.5">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-xmr-green/30 bg-xmr-base/60">
+                <LayoutGrid size={16} className="text-xmr-green" />
+              </span>
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-black uppercase tracking-widest text-xmr-green">
+                    RipleyOS Desktop
+                  </span>
+                  <span className="text-[9px] font-black uppercase tracking-widest text-xmr-accent border border-xmr-accent/40 px-1.5 py-0.5 rounded">
+                    Beta
+                  </span>
+                </div>
+                <p className="text-[10px] text-xmr-dim uppercase leading-relaxed font-black tracking-wide">
+                  Privacy OS · Swap · Markets · skins. Same app · relaunches. Exit via ROS Settings anytime.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={rosSwitching}
+              onClick={enterRipleyOs}
+              className="w-full py-2.5 border border-xmr-green/50 bg-xmr-green/10 hover:bg-xmr-green hover:text-xmr-base text-xmr-green text-[11px] font-black uppercase tracking-[0.18em] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+            >
+              {rosSwitching ? (
+                <>Relaunching…</>
+              ) : (
+                <>Open RipleyOS · Relaunch</>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* FOOTER */}
         <div className="text-center space-y-4 pt-4">
