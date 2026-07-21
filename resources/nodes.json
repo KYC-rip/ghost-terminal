@@ -71,7 +71,8 @@
         "node2-eu.monero.love:18089"
       ],
       "kyc.rip": [
-        "https://rpc-mainnet.kyc.rip"
+        "https://rpc-mainnet.kyc.rip",
+        "https://node.kyc.rip"
       ],
       "monero.one": [
         "https://node.monero.one"
