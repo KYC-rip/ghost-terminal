@@ -18,7 +18,8 @@ use std::collections::HashMap;
 /// features fetch directly); tightening this to IPC-only is a follow-up once ROS's direct
 /// network needs are confirmed.
 pub const ROS_CSP: &str = "default-src 'self'; \
-script-src 'self'; \
+script-src 'self' 'wasm-unsafe-eval'; \
+worker-src 'self'; \
 style-src 'self' 'unsafe-inline'; \
 img-src 'self' data: blob: https:; \
 font-src 'self' data:; \
@@ -243,5 +244,16 @@ mod tests {
         }
         let zst = zstd::stream::encode_all(&tar_buf[..], 3).unwrap();
         assert!(RosBundle::from_archive(&zst).is_err());
+    }
+
+    #[test]
+    fn csp_allows_pinned_local_ai_runtime_without_remote_scripts() {
+        // RipleyOS Local AI compiles a same-origin WebLLM worker + WebAssembly
+        // module. Keep those narrow capabilities available to the signed ros://
+        // bundle while remote and inline scripts remain forbidden.
+        assert!(ROS_CSP.contains("script-src 'self' 'wasm-unsafe-eval'"));
+        assert!(ROS_CSP.contains("worker-src 'self'"));
+        assert!(!ROS_CSP.contains("script-src 'self' 'unsafe-inline'"));
+        assert!(!ROS_CSP.contains("script-src https:"));
     }
 }
