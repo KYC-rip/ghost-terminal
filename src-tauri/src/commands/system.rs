@@ -245,19 +245,32 @@ async fn agent_web_client(url: &tauri::Url, proxy: Option<&str>) -> Result<reqwe
     if let Some(proxy) = proxy {
         builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| e.to_string())?);
     } else if host.parse::<IpAddr>().is_err() {
-        // Resolve once, reject any private answer, then pin the public address so
-        // DNS rebinding cannot swap in loopback between validation and connect.
-        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|e| format!("web_read DNS failed: {e}"))?
-            .collect();
-        if addresses.is_empty() {
-            return Err("web_read DNS returned no addresses".into());
+        let uri = url
+            .as_str()
+            .parse::<hyper::Uri>()
+            .map_err(|_| "web_read URL could not be matched against the system proxy")?;
+        let uses_system_proxy =
+            hyper_util::client::proxy::matcher::Matcher::from_system().intercept(&uri).is_some();
+        if !uses_system_proxy {
+            // For a direct connection, resolve once, reject any private answer,
+            // then pin the public address so DNS rebinding cannot swap in
+            // loopback between validation and connect.
+            let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|e| format!("web_read DNS failed: {e}"))?
+                .collect();
+            if addresses.is_empty() {
+                return Err("web_read DNS returned no addresses".into());
+            }
+            if addresses.iter().any(|address| !is_public_web_ip(address.ip())) {
+                return Err("web_read DNS resolved to a local or private-network address".into());
+            }
+            builder = builder.resolve(host, addresses[0]);
         }
-        if addresses.iter().any(|address| !is_public_web_ip(address.ip())) {
-            return Err("web_read DNS resolved to a local or private-network address".into());
-        }
-        builder = builder.resolve(host, addresses[0]);
+        // With an OS proxy, the proxy resolves the public hostname. Do not
+        // reject or pin the local resolver's address: fake-IP TUN proxies
+        // deliberately return 198.18/15 tokens (e.g. Clash), while reqwest's
+        // matching system-proxy transport sends the original hostname.
     }
     builder.build().map_err(|e| e.to_string())
 }
@@ -999,6 +1012,7 @@ mod tests {
             "http://172.16.1.1/",
             "http://192.168.1.1/",
             "http://169.254.169.254/latest/meta-data/",
+            "http://198.18.0.99/",
             "http://127.0.0.1/",
             "http://2130706433/",
             "http://[::1]/",
@@ -1012,6 +1026,7 @@ mod tests {
             );
         }
     }
+
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
