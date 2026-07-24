@@ -69,6 +69,7 @@ const APP_COMMANDS: &[&str] = &[
     "select_background_image",
     "check_for_updates",
     "proxied_get",
+    "agent_web_read",
     "resolve_openalias",
     "ros_native_fetch",
     "open_native_browser",

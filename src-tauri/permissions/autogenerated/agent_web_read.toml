@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agent-web-read"
+description = "Enables the agent_web_read command without any pre-configured scope."
+commands.allow = ["agent_web_read"]
+
+[[permission]]
+identifier = "deny-agent-web-read"
+description = "Denies the agent_web_read command without any pre-configured scope."
+commands.deny = ["agent_web_read"]

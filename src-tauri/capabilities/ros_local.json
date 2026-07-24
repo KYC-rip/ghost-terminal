@@ -68,6 +68,7 @@
     "allow-agent-gateway-status",
     "allow-agent-gateway-set-config",
     "allow-agent-gateway-rotate-key",
+    "allow-agent-web-read",
     "allow-local-ai-status",
     "allow-local-ai-download",
     "allow-local-ai-load",

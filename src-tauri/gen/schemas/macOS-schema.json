@@ -2205,6 +2205,12 @@
           "markdownDescription": "Enables the agent_gateway_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the agent_web_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-agent-web-read",
+          "markdownDescription": "Enables the agent_web_read command without any pre-configured scope."
+        },
+        {
           "description": "Enables the arm_transfer_grant command without any pre-configured scope.",
           "type": "string",
           "const": "allow-arm-transfer-grant",
@@ -2761,6 +2767,12 @@
           "type": "string",
           "const": "deny-agent-gateway-status",
           "markdownDescription": "Denies the agent_gateway_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the agent_web_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-agent-web-read",
+          "markdownDescription": "Denies the agent_web_read command without any pre-configured scope."
         },
         {
           "description": "Denies the arm_transfer_grant command without any pre-configured scope.",
