@@ -18,6 +18,14 @@ tauri-build = { version = "2", features = [] }
 # in, so this adds no new build weight.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView"] }
+# Native Local AI: llama.cpp with Metal keeps inference out of the WKWebView
+# (where WebGPU is unavailable) and offloads the full quantized model to Apple GPU.
+llama-cpp-2 = { version = "0.1.152", default-features = false, features = ["metal", "sampler"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# CPU fallback for the native shells on platforms where we have not enabled a
+# llama.cpp GPU backend yet. The renderer surfaces the runtime honestly.
+llama-cpp-2 = { version = "0.1.152", default-features = false, features = ["sampler"] }
 
 # Device-bound key for the watch tier (encrypted output cache + persisted view
 # pairs). Feature set is deliberate: native stores on macOS/Windows, secret-service
@@ -84,6 +92,7 @@ hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+encoding_rs = "0.8"
 # TLS over the arti stream for HTTPS GETs (nodes.json, price). Pure-Rust rustls
 # (ring provider, enabled by tokio-rustls default features); native cert store.
 tokio-rustls = "0.26"

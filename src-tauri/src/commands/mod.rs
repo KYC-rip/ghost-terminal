@@ -8,3 +8,4 @@ pub mod kvstore;
 pub mod system;
 pub mod agent_gateway;
 pub mod wallpaper;
+pub mod local_ai;

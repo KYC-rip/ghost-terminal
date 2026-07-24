@@ -2451,6 +2451,42 @@
           "markdownDescription": "Enables the get_xmr402_payment command without any pre-configured scope."
         },
         {
+          "description": "Enables the local_ai_clear_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-ai-clear-all",
+          "markdownDescription": "Enables the local_ai_clear_all command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_ai_complete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-ai-complete",
+          "markdownDescription": "Enables the local_ai_complete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_ai_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-ai-download",
+          "markdownDescription": "Enables the local_ai_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_ai_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-ai-load",
+          "markdownDescription": "Enables the local_ai_load command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_ai_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-ai-remove",
+          "markdownDescription": "Enables the local_ai_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_ai_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-ai-status",
+          "markdownDescription": "Enables the local_ai_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_native_browser command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-native-browser",
@@ -2971,6 +3007,42 @@
           "type": "string",
           "const": "deny-get-xmr402-payment",
           "markdownDescription": "Denies the get_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_ai_clear_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-ai-clear-all",
+          "markdownDescription": "Denies the local_ai_clear_all command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_ai_complete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-ai-complete",
+          "markdownDescription": "Denies the local_ai_complete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_ai_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-ai-download",
+          "markdownDescription": "Denies the local_ai_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_ai_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-ai-load",
+          "markdownDescription": "Denies the local_ai_load command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_ai_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-ai-remove",
+          "markdownDescription": "Denies the local_ai_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_ai_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-ai-status",
+          "markdownDescription": "Denies the local_ai_status command without any pre-configured scope."
         },
         {
           "description": "Denies the open_native_browser command without any pre-configured scope.",

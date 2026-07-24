@@ -197,6 +197,11 @@ pub fn run() {
                 });
             }
 
+            // Native Local AI owns one process-wide llama.cpp backend and keeps the
+            // selected GGUF model resident between turns. The ROS capability exposes
+            // only fixed model ids and lifecycle commands—never paths or executables.
+            app.manage(commands::local_ai::NativeLocalAiState::new()?);
+
             // Bootstrap Tor at startup — but ONLY if the user's routing mode is Tor.
             // The wallet scanner connects Tor lazily on first use; a hosted RipleyOS
             // renderer never runs the scanner, so without this its native fetches
@@ -513,6 +518,13 @@ pub fn run() {
             commands::agent_gateway::agent_gateway_status,
             commands::agent_gateway::agent_gateway_set_config,
             commands::agent_gateway::agent_gateway_rotate_key,
+            // Native Local AI (fixed, pinned GGUF registry)
+            commands::local_ai::local_ai_status,
+            commands::local_ai::local_ai_download,
+            commands::local_ai::local_ai_load,
+            commands::local_ai::local_ai_complete,
+            commands::local_ai::local_ai_remove,
+            commands::local_ai::local_ai_clear_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -68,6 +68,12 @@
     "allow-agent-gateway-status",
     "allow-agent-gateway-set-config",
     "allow-agent-gateway-rotate-key",
+    "allow-local-ai-status",
+    "allow-local-ai-download",
+    "allow-local-ai-load",
+    "allow-local-ai-complete",
+    "allow-local-ai-remove",
+    "allow-local-ai-clear-all",
 
     "allow-set-ui-mode",
     "allow-check-ros-update",
