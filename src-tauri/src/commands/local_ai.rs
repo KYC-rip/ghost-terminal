@@ -118,6 +118,8 @@ pub struct NativeLocalAiStatus {
     installed: bool,
     loaded: bool,
     bytes: u64,
+    downloaded_bytes: u64,
+    downloading: bool,
     runtime: String,
     accelerated: bool,
 }
@@ -145,11 +147,12 @@ fn runtime_label(backend: &LlamaBackend) -> (String, bool) {
 #[tauri::command]
 pub async fn local_ai_status(
     app: AppHandle,
-    _state: State<'_, NativeLocalAiState>,
+    state: State<'_, NativeLocalAiState>,
     model_id: String,
 ) -> Result<NativeLocalAiStatus, String> {
     let model = spec(&model_id)?;
     let path = model_path(&app, model)?;
+    let downloading = state.download.try_lock().is_err();
     // The runtime mutex is held for the whole of a load or generation. Take it
     // on the blocking pool — parking an async worker for seconds would starve
     // the IPC executor when the UI polls status during a turn.
@@ -161,11 +164,21 @@ pub async fn local_ai_status(
             .lock()
             .map_err(|_| "Local AI runtime lock poisoned".to_string())?;
         let (label, accelerated) = runtime_label(&runtime.backend);
+        let is_installed = installed(&path, model);
+        let downloaded_bytes = if is_installed {
+            model.bytes
+        } else {
+            fs::metadata(path.with_extension("gguf.part"))
+                .map(|meta| meta.len().min(model.bytes))
+                .unwrap_or(0)
+        };
         Ok(NativeLocalAiStatus {
             model_id,
-            installed: installed(&path, model),
+            installed: is_installed,
             loaded: runtime.model_id.as_deref() == Some(model.id) && runtime.model.is_some(),
             bytes: model.bytes,
+            downloaded_bytes,
+            downloading,
             runtime: label,
             accelerated,
         })
