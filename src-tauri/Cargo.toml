@@ -17,7 +17,14 @@ tauri-build = { version = "2", features = [] }
 # (layout) — which tauri doesn't expose. Same versions/features wry already pulls
 # in, so this adds no new build weight.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView", "WKSnapshotConfiguration"] }
+# Native window capture (commands::system::capture_window_png): WKWebView snapshots ITSELF, so it
+# needs no Screen Recording permission — unlike a display-capture crate, which on macOS would put a
+# TCC prompt in front of copying a window.
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSData", "NSDictionary", "NSError"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSImage", "NSBitmapImageRep", "NSImageRep", "NSGraphics"] }
+block2 = "0.6"
 # Native Local AI: llama.cpp with Metal keeps inference out of the WKWebView
 # (where WebGPU is unavailable) and offloads the full quantized model to Apple GPU.
 llama-cpp-2 = { version = "0.1.152", default-features = false, features = ["metal", "sampler"] }

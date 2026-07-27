@@ -1138,3 +1138,126 @@ pub async fn clipboard_write_image(app: AppHandle, png_base64: String) -> Result
         .write_image(&image)
         .map_err(|e| format!("clipboard rejected the image: {e}"))
 }
+
+/// Snapshot a REGION of the webview and return it as base64 PNG.
+///
+/// Why native: the web path serialises the whole window into one `data:` URI and loads it into an
+/// <img>. On a large window at devicePixelRatio 2 that document can exceed what the webview will
+/// decode, and it re-RENDERS rather than capturing, so effects like backdrop-filter come out
+/// approximated. WKWebView snapshots what it actually drew.
+///
+/// Why `takeSnapshot` rather than a display-capture crate: it is the webview snapshotting ITSELF,
+/// so macOS asks for no Screen Recording permission. Putting a TCC prompt in front of "copy this
+/// window" would be a poor trade in a privacy-focused OS.
+///
+/// The rect is in CSS points (the webview's own coordinate space), which is what
+/// getBoundingClientRect gives the caller — no scale-factor conversion here; WKWebView renders the
+/// snapshot at the backing scale itself.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn capture_window_png(
+    app: AppHandle,
+    label: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<String, String> {
+    use block2::RcBlock;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
+    use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
+
+    if !(width >= 1.0 && height >= 1.0) {
+        return Err("capture rect must have a positive size".into());
+    }
+
+    // The main window is labelled "main" or "ros" depending on ui_mode, so the caller is not asked
+    // to know: an empty label means "whichever window is focused", falling back to the only one.
+    let win = if label.is_empty() {
+        let mut wins: Vec<_> = app.webview_windows().into_iter().collect();
+        wins.sort_by_key(|(l, _)| l.clone());
+        wins.iter()
+            .find(|(_, w)| w.is_focused().unwrap_or(false))
+            .or_else(|| wins.first())
+            .map(|(_, w)| w.clone())
+            .ok_or_else(|| "no webview window to capture".to_string())?
+    } else {
+        app.get_webview_window(&label)
+            .ok_or_else(|| format!("no webview window '{label}'"))?
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+
+    win.with_webview(move |pw| {
+        // SAFETY: on macOS tauri's webview handle IS a WKWebView; the same cast is used by
+        // embed_pin_zoom above.
+        let view = unsafe { &*(pw.inner() as *const WKWebView) };
+
+        // with_webview runs its closure on the main thread; ASK for the marker rather than
+        // asserting it, so a future change of that guarantee fails loudly instead of being UB.
+        let mtm = match objc2::MainThreadMarker::new() {
+            Some(m) => m,
+            None => {
+                let _ = tx.send(Err("snapshot must be taken on the main thread".into()));
+                return;
+            }
+        };
+        let cfg = unsafe { WKSnapshotConfiguration::new(mtm) };
+        unsafe {
+            cfg.setRect(NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)));
+        }
+
+        let tx2 = tx.clone();
+        let handler = RcBlock::new(move |image: *mut NSImage, _err: *mut objc2_foundation::NSError| {
+            let out = (|| -> Result<Vec<u8>, String> {
+                if image.is_null() {
+                    return Err("the webview returned no snapshot".into());
+                }
+                // SAFETY: non-null image owned by the callback for its duration.
+                let image: &NSImage = unsafe { &*image };
+                let tiff = unsafe { image.TIFFRepresentation() }
+                    .ok_or_else(|| "snapshot had no bitmap representation".to_string())?;
+                let rep = unsafe { NSBitmapImageRep::imageRepWithData(&tiff) }
+                    .ok_or_else(|| "snapshot could not be read as a bitmap".to_string())?;
+                let png = unsafe {
+                    rep.representationUsingType_properties(
+                        NSBitmapImageFileType::PNG,
+                        &NSDictionary::new(),
+                    )
+                }
+                .ok_or_else(|| "snapshot could not be encoded as PNG".to_string())?;
+                Ok(png.to_vec())
+            })();
+            let _ = tx2.send(out);
+        });
+
+        unsafe {
+            view.takeSnapshotWithConfiguration_completionHandler(Some(&cfg), &handler);
+        }
+    })
+    .map_err(|e| format!("could not reach the webview: {e}"))?;
+
+    // The completion handler runs on the main queue; this command is async and off it, so a bounded
+    // wait here cannot deadlock the UI. A timeout rather than a block: a snapshot that never calls
+    // back must surface as an error the caller can fall back from, not a hung screenshot.
+    let bytes = rx
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "the webview did not return a snapshot in time".to_string())??;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn capture_window_png(
+    _app: AppHandle,
+    _label: String,
+    _x: f64,
+    _y: f64,
+    _width: f64,
+    _height: f64,
+) -> Result<String, String> {
+    // Only macOS has the WKWebView snapshot path; every other target keeps the DOM rasteriser.
+    Err("native window capture is macOS-only".into())
+}
