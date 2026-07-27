@@ -1,6 +1,7 @@
 //! Miscellaneous app/system commands: pick a skin background image, and check
 //! GitHub for app updates.
 
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use serde_json::{json, Value};
@@ -156,6 +157,206 @@ fn is_onion(url: &str) -> bool {
 pub async fn proxied_get(app: AppHandle, url: String) -> Result<String, String> {
     let bytes = proxied_get_bytes(&app, &url, Duration::from_secs(15), None).await?;
     String::from_utf8(bytes).map_err(|e| format!("non-UTF-8 response: {e}"))
+}
+
+const AGENT_WEB_READ_MAX_BYTES: u64 = 1024 * 1024;
+const AGENT_WEB_READ_MAX_REDIRECTS: usize = 5;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWebReadResponse {
+    status: u16,
+    final_url: String,
+    content_type: Option<String>,
+    body: String,
+}
+
+fn is_public_web_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, _, _] = ip.octets();
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_multicast()
+                || a == 0
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 192 && b == 0)
+                || (a == 198 && (b == 18 || b == 19))
+                || a >= 240)
+        }
+        IpAddr::V6(ip) => {
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return is_public_web_ip(IpAddr::V4(v4));
+            }
+            let first = ip.segments()[0];
+            !(ip.is_unspecified()
+                || ip.is_loopback()
+                || ip.is_multicast()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+                || (ip.segments()[0] == 0x2001 && ip.segments()[1] == 0x0db8))
+        }
+    }
+}
+
+fn validate_agent_web_url(raw: &str) -> Result<tauri::Url, String> {
+    let url = tauri::Url::parse(raw).map_err(|_| "web_read requires a valid absolute URL")?;
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err("web_read allows only http:// or https:// URLs".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("web_read does not allow URL credentials".into());
+    }
+    let host = url.host_str().ok_or("web_read URL has no host")?.to_ascii_lowercase();
+    if host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host.ends_with(".lan")
+    {
+        return Err("web_read blocks local and private-network hosts".into());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !is_public_web_ip(ip) {
+            return Err("web_read blocks local and private-network addresses".into());
+        }
+    } else if !host.contains('.') {
+        return Err("web_read requires a public hostname".into());
+    }
+    let port = url.port_or_known_default().ok_or("web_read URL has no valid port")?;
+    if port != 80 && port != 443 {
+        return Err("web_read allows only standard web ports 80 and 443".into());
+    }
+    Ok(url)
+}
+
+async fn agent_web_client(url: &tauri::Url, proxy: Option<&str>) -> Result<reqwest::Client, String> {
+    let host = url.host_str().ok_or("web_read URL has no host")?;
+    let port = url.port_or_known_default().ok_or("web_read URL has no valid port")?;
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(20))
+        .user_agent(concat!("ripley-terminal-web-read/", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| e.to_string())?);
+    } else if host.parse::<IpAddr>().is_err() {
+        let uri = url
+            .as_str()
+            .parse::<hyper::Uri>()
+            .map_err(|_| "web_read URL could not be matched against the system proxy")?;
+        let uses_system_proxy =
+            hyper_util::client::proxy::matcher::Matcher::from_system().intercept(&uri).is_some();
+        if !uses_system_proxy {
+            // For a direct connection, resolve once, reject any private answer,
+            // then pin the public address so DNS rebinding cannot swap in
+            // loopback between validation and connect.
+            let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|e| format!("web_read DNS failed: {e}"))?
+                .collect();
+            if addresses.is_empty() {
+                return Err("web_read DNS returned no addresses".into());
+            }
+            if addresses.iter().any(|address| !is_public_web_ip(address.ip())) {
+                return Err("web_read DNS resolved to a local or private-network address".into());
+            }
+            builder = builder.resolve(host, addresses[0]);
+        }
+        // With an OS proxy, the proxy resolves the public hostname. Do not
+        // reject or pin the local resolver's address: fake-IP TUN proxies
+        // deliberately return 198.18/15 tokens (e.g. Clash), while reqwest's
+        // matching system-proxy transport sends the original hostname.
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+async fn agent_web_read_reqwest(url: tauri::Url, proxy: Option<&str>) -> Result<AgentWebReadResponse, String> {
+    let mut current = url;
+    for redirects in 0..=AGENT_WEB_READ_MAX_REDIRECTS {
+        let client = agent_web_client(&current, proxy).await?;
+        let mut response = client.get(current.clone()).send().await.map_err(|e| e.to_string())?;
+        if response.status().is_redirection() {
+            if redirects == AGENT_WEB_READ_MAX_REDIRECTS {
+                return Err("web_read exceeded its redirect limit".into());
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or("web_read redirect omitted Location")?;
+            current = validate_agent_web_url(
+                current.join(location).map_err(|_| "web_read returned an invalid redirect")?.as_str(),
+            )?;
+            continue;
+        }
+        if let Some(length) = response.content_length() {
+            if length > AGENT_WEB_READ_MAX_BYTES {
+                return Err(format!(
+                    "web_read response is too large ({length} bytes; limit {AGENT_WEB_READ_MAX_BYTES})"
+                ));
+            }
+        }
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            if bytes.len() as u64 + chunk.len() as u64 > AGENT_WEB_READ_MAX_BYTES {
+                return Err(format!(
+                    "web_read response exceeded its {AGENT_WEB_READ_MAX_BYTES} byte limit"
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        return Ok(AgentWebReadResponse {
+            status,
+            final_url: current.to_string(),
+            content_type,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        });
+    }
+    Err("web_read exceeded its redirect limit".into())
+}
+
+/// Read-only, size-capped public-web access for the shared model tool catalog.
+/// The shell owns the GET-only boundary; the renderer supplies only a URL.
+#[tauri::command]
+pub async fn agent_web_read(app: AppHandle, url: String) -> Result<AgentWebReadResponse, String> {
+    let parsed = validate_agent_web_url(&url)?;
+    let mode = crate::wallet::scanner::read_routing_mode(&app);
+    if mode == "tor" || is_onion(parsed.as_str()) {
+        let bytes = proxied_get_bytes(
+            &app,
+            parsed.as_str(),
+            Duration::from_secs(20),
+            Some(AGENT_WEB_READ_MAX_BYTES),
+        )
+        .await?;
+        return Ok(AgentWebReadResponse {
+            status: 200,
+            final_url: parsed.to_string(),
+            content_type: None,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        });
+    }
+    let proxy = if mode == "custom" {
+        let value = crate::wallet::scanner::read_proxy_address(&app);
+        if value.trim().is_empty() {
+            return Err("Custom routing is selected but no proxy is configured.".into());
+        }
+        Some(value)
+    } else {
+        None
+    };
+    agent_web_read_reqwest(parsed, proxy.as_deref()).await
 }
 
 /// Binary-safe sibling of `proxied_get`: fetch a URL through the CONFIGURED uplink
@@ -773,7 +974,7 @@ fn version_gt(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_onion, version_gt};
+    use super::{is_onion, validate_agent_web_url, version_gt};
 
     #[test]
     fn detects_onion_case_insensitively() {
@@ -795,6 +996,37 @@ mod tests {
         assert!(version_gt("2.1.0-beta", "2.0.0"));
         assert!(!version_gt("2.0.0-beta", "2.0.0")); // prerelease suffix ignored
     }
+
+    #[test]
+    fn web_read_accepts_only_public_standard_web_urls() {
+        assert!(validate_agent_web_url("https://example.com/article?q=1").is_ok());
+        assert!(validate_agent_web_url("http://example.com/").is_ok());
+        assert!(validate_agent_web_url("http://exampleonionaddress.onion/").is_ok());
+
+        for blocked in [
+            "file:///etc/passwd",
+            "ftp://example.com/file",
+            "http://localhost/admin",
+            "http://service.local/",
+            "http://10.0.0.1/",
+            "http://172.16.1.1/",
+            "http://192.168.1.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://198.18.0.99/",
+            "http://127.0.0.1/",
+            "http://2130706433/",
+            "http://[::1]/",
+            "http://[fc00::1]/",
+            "https://user:secret@example.com/",
+            "https://example.com:8443/",
+        ] {
+            assert!(
+                validate_agent_web_url(blocked).is_err(),
+                "{blocked} should be blocked"
+            );
+        }
+    }
+
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

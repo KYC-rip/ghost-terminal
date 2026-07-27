@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const FREE_ID: &str = "Qwen3.5-2B-q4f16_1-MLC";
 const PRO_ID: &str = "Qwen3.5-4B-q4f16_1-MLC";
@@ -118,6 +118,8 @@ pub struct NativeLocalAiStatus {
     installed: bool,
     loaded: bool,
     bytes: u64,
+    downloaded_bytes: u64,
+    downloading: bool,
     runtime: String,
     accelerated: bool,
 }
@@ -145,11 +147,12 @@ fn runtime_label(backend: &LlamaBackend) -> (String, bool) {
 #[tauri::command]
 pub async fn local_ai_status(
     app: AppHandle,
-    _state: State<'_, NativeLocalAiState>,
+    state: State<'_, NativeLocalAiState>,
     model_id: String,
 ) -> Result<NativeLocalAiStatus, String> {
     let model = spec(&model_id)?;
     let path = model_path(&app, model)?;
+    let downloading = state.download.try_lock().is_err();
     // The runtime mutex is held for the whole of a load or generation. Take it
     // on the blocking pool — parking an async worker for seconds would starve
     // the IPC executor when the UI polls status during a turn.
@@ -161,11 +164,21 @@ pub async fn local_ai_status(
             .lock()
             .map_err(|_| "Local AI runtime lock poisoned".to_string())?;
         let (label, accelerated) = runtime_label(&runtime.backend);
+        let is_installed = installed(&path, model);
+        let downloaded_bytes = if is_installed {
+            model.bytes
+        } else {
+            fs::metadata(path.with_extension("gguf.part"))
+                .map(|meta| meta.len().min(model.bytes))
+                .unwrap_or(0)
+        };
         Ok(NativeLocalAiStatus {
             model_id,
-            installed: installed(&path, model),
+            installed: is_installed,
             loaded: runtime.model_id.as_deref() == Some(model.id) && runtime.model.is_some(),
             bytes: model.bytes,
+            downloaded_bytes,
+            downloading,
             runtime: label,
             accelerated,
         })
@@ -208,7 +221,11 @@ async fn download_client(app: &AppHandle, allow_clearnet: bool) -> Result<reqwes
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(60 * 60));
+        .timeout(Duration::from_secs(60 * 60))
+        // Large Hugging Face/Xet responses have occasionally ended with an h2
+        // body decoder error. HTTP/1.1 plus Range retries is slower to connect
+        // but much more resilient for multi-gigabyte model artifacts.
+        .http1_only();
     match mode.as_str() {
         "tor" if !allow_clearnet => {
             return Err(
@@ -226,6 +243,82 @@ async fn download_client(app: &AppHandle, allow_clearnet: bool) -> Result<reqwes
         _ => {}
     }
     builder.build().map_err(|e| e.to_string())
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, u64, u64)> {
+    let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = end.parse().ok()?;
+    let total = total.parse().ok()?;
+    (start <= end && end < total).then_some((start, end, total))
+}
+
+fn validate_download_response(
+    response: &reqwest::Response,
+    offset: u64,
+    expected_total: u64,
+) -> Result<(), String> {
+    if offset == 0 {
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(format!(
+                "model server returned {} for a full download",
+                response.status()
+            ));
+        }
+        if let Some(length) = response.content_length() {
+            if length != expected_total {
+                return Err(format!(
+                    "model size mismatch before download: expected {expected_total}, got {length}"
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(format!(
+            "model server did not honor resume at byte {offset} (returned {})",
+            response.status()
+        ));
+    }
+    let header = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+        .ok_or_else(|| "model server returned an invalid Content-Range".to_string())?;
+    if header.0 != offset || header.2 != expected_total {
+        return Err(format!(
+            "model resume mismatch: requested byte {offset} of {expected_total}, got bytes {}-{}/{}",
+            header.0, header.1, header.2
+        ));
+    }
+    if let Some(length) = response.content_length() {
+        let expected_length = header.1 - header.0 + 1;
+        if length != expected_length {
+            return Err(format!(
+                "model resume length mismatch: expected {expected_length}, got {length}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn detailed_reqwest_error(error: &reqwest::Error) -> String {
+    use std::error::Error;
+
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !message.contains(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        source = cause.source();
+    }
+    message
 }
 
 async fn confirm_tor_clearnet_download(
@@ -284,63 +377,143 @@ pub async fn local_ai_download(
 
     confirm_tor_clearnet_download(&app, allow_clearnet.unwrap_or(false)).await?;
     let part = target.with_extension("gguf.part");
-    let _ = tokio::fs::remove_file(&part).await;
+    let client = download_client(&app, allow_clearnet.unwrap_or(false)).await?;
+    let mut received = tokio::fs::metadata(&part)
+        .await
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    if received > model.bytes {
+        tokio::fs::remove_file(&part)
+            .await
+            .map_err(|e| format!("discard oversized partial model: {e}"))?;
+        received = 0;
+    }
+    let mut digest = Sha256::new();
+    if received > 0 {
+        let mut existing = tokio::fs::File::open(&part)
+            .await
+            .map_err(|e| format!("open partial model: {e}"))?;
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        loop {
+            let count = existing
+                .read(&mut buffer)
+                .await
+                .map_err(|e| format!("read partial model: {e}"))?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+    }
     emit_progress(
         &app,
         model,
-        0,
+        received,
         "downloading",
-        "Starting native model download…",
+        if received == 0 {
+            "Starting native model download…".to_string()
+        } else {
+            format!("Resuming {}…", model.filename)
+        },
     );
-    let client = download_client(&app, allow_clearnet.unwrap_or(false)).await?;
-    let mut response = client
-        .get(model.url)
-        .send()
-        .await
-        .map_err(|e| format!("download model: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("download model: {e}"))?;
-    if let Some(length) = response.content_length() {
-        if length != model.bytes {
-            return Err(format!(
-                "model size mismatch before download: expected {}, got {length}",
-                model.bytes
-            ));
-        }
-    }
-
-    let mut file = tokio::fs::File::create(&part)
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&part)
         .await
         .map_err(|e| format!("create partial model: {e}"))?;
-    let mut digest = Sha256::new();
-    let mut received = 0_u64;
     let mut last_emit = Instant::now();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("download model: {e}"))?
-    {
-        received = received
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| "model size overflow".to_string())?;
-        if received > model.bytes {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err("downloaded model exceeded its pinned size".into());
+    let mut reconnects = 0_u32;
+    const MAX_RECONNECTS: u32 = 12;
+    while received < model.bytes {
+        let mut request = client.get(model.url);
+        if received > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={received}-"));
         }
-        digest.update(&chunk);
-        file.write_all(&chunk)
+        let mut response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                reconnects += 1;
+                if reconnects > MAX_RECONNECTS {
+                    return Err(format!(
+                        "download model failed after {MAX_RECONNECTS} reconnects: {}. The partial download was preserved.",
+                        detailed_reqwest_error(&error)
+                    ));
+                }
+                emit_progress(
+                    &app,
+                    model,
+                    received,
+                    "downloading",
+                    format!("Connection interrupted. Resuming… ({reconnects}/{MAX_RECONNECTS})"),
+                );
+                tokio::time::sleep(Duration::from_millis(
+                    500 * 2_u64.pow(reconnects.min(4) - 1),
+                ))
+                .await;
+                continue;
+            }
+        };
+        validate_download_response(&response, received, model.bytes)?;
+
+        let mut stream_error = None;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    received = received
+                        .checked_add(chunk.len() as u64)
+                        .ok_or_else(|| "model size overflow".to_string())?;
+                    if received > model.bytes {
+                        let _ = tokio::fs::remove_file(&part).await;
+                        return Err("downloaded model exceeded its pinned size".into());
+                    }
+                    digest.update(&chunk);
+                    file.write_all(&chunk)
+                        .await
+                        .map_err(|e| format!("write model: {e}"))?;
+                    if last_emit.elapsed() >= Duration::from_millis(250) {
+                        emit_progress(
+                            &app,
+                            model,
+                            received,
+                            "downloading",
+                            format!("Downloading {}…", model.filename),
+                        );
+                        last_emit = Instant::now();
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    stream_error = Some(detailed_reqwest_error(&error));
+                    break;
+                }
+            }
+        }
+        if received == model.bytes {
+            break;
+        }
+
+        file.flush()
             .await
-            .map_err(|e| format!("write model: {e}"))?;
-        if last_emit.elapsed() >= Duration::from_millis(250) {
-            emit_progress(
-                &app,
-                model,
-                received,
-                "downloading",
-                format!("Downloading {}…", model.filename),
-            );
-            last_emit = Instant::now();
+            .map_err(|e| format!("flush partial model: {e}"))?;
+        reconnects += 1;
+        if reconnects > MAX_RECONNECTS {
+            return Err(format!(
+                "download model failed after {MAX_RECONNECTS} reconnects: {}. The partial download was preserved.",
+                stream_error.unwrap_or_else(|| "server ended the response early".to_string())
+            ));
         }
+        emit_progress(
+            &app,
+            model,
+            received,
+            "downloading",
+            format!("Connection interrupted. Resuming… ({reconnects}/{MAX_RECONNECTS})"),
+        );
+        tokio::time::sleep(Duration::from_millis(
+            500 * 2_u64.pow(reconnects.min(4) - 1),
+        ))
+        .await;
     }
     file.flush()
         .await
@@ -678,5 +851,16 @@ mod tests {
         assert!(complete_json_end(
             r#"prefix {"say":"{done}","steps":[]} suffix"#
         ));
+    }
+
+    #[test]
+    fn parses_valid_content_ranges() {
+        assert_eq!(
+            parse_content_range("bytes 11119423-2856936479/2856936480"),
+            Some((11_119_423, 2_856_936_479, 2_856_936_480))
+        );
+        assert_eq!(parse_content_range("bytes */2856936480"), None);
+        assert_eq!(parse_content_range("bytes 8-7/10"), None);
+        assert_eq!(parse_content_range("items 0-9/10"), None);
     }
 }

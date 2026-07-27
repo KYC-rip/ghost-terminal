@@ -476,6 +476,7 @@ pub fn run() {
             commands::system::select_background_image,
             commands::system::check_for_updates,
             commands::system::proxied_get,
+            commands::system::agent_web_read,
             commands::system::resolve_openalias,
             commands::system::ros_native_fetch,
             commands::system::ros_native_fetch_bytes,
