@@ -1113,3 +1113,28 @@ mod openalias_tests {
         assert_eq!(evaluate_response(true, true, false, &txts, "xmr").unwrap(), txts[0]);
     }
 }
+
+/// Put a PNG on the system clipboard as an IMAGE.
+///
+/// The webview cannot do this itself: WKWebView exposes a text-only clipboard, so RipleyOS's
+/// window-screenshot silently fell back to writing a file in the desktop build while working fine
+/// in a browser. `navigator.clipboard.write` with an image is simply unavailable there.
+///
+/// Takes base64 rather than a byte array because that is what crosses the IPC boundary cheaply and
+/// without the argument being reinterpreted as a JSON number array.
+#[tauri::command]
+pub async fn clipboard_write_image(app: AppHandle, png_base64: String) -> Result<(), String> {
+    use base64::Engine as _;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png_base64.as_bytes())
+        .map_err(|e| format!("clipboard image is not valid base64: {e}"))?;
+    // Decoded here rather than trusted: a malformed PNG must be a clean error, not a panic that
+    // takes the app down for a screenshot.
+    let image = tauri::image::Image::from_bytes(&bytes)
+        .map_err(|e| format!("clipboard image is not a readable PNG: {e}"))?;
+    app.clipboard()
+        .write_image(&image)
+        .map_err(|e| format!("clipboard rejected the image: {e}"))
+}

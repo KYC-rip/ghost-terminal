@@ -116,6 +116,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         // The ros:// protocol: the sole content source for the OTA (ros_source=ota) ROS
         // window. Serves the in-memory, on-device-verified bundle managed as RosBundle.
         // We attach the app CSP to HTML responses ourselves so the untrusted bundle is
@@ -414,6 +415,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::system::clipboard_write_image,
             // Wallet lifecycle
             commands::wallet::create_wallet,
             commands::wallet::open_wallet,

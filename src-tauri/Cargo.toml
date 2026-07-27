@@ -40,11 +40,15 @@ features = ["apple-native", "windows-native", "sync-secret-service"]
 # Core framework
 # macos-proxy → wry/mac-proxy: without it WebviewWindowBuilder::proxy_url is a
 # silent no-op on macOS (the SOCKS/HTTP proxy code is cfg-gated). Needs macOS 14+.
-tauri = { version = "2", features = ["tray-icon", "devtools", "macos-proxy", "unstable", "protocol-asset"] }
+# image-png: lets tauri::image::Image decode the PNG the webview hands us for clipboard copy.
+tauri = { version = "2", features = ["tray-icon", "devtools", "macos-proxy", "unstable", "protocol-asset", "image-png"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
+# Used from RUST only (commands::system::clipboard_write_image), so it needs no JS capability:
+# WKWebView exposes a text-only clipboard, so the webview cannot write an image itself.
+tauri-plugin-clipboard-manager = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
