@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "ros-local",
-  "description": "Verified local RipleyOS bundle served over the ros:// protocol (ui_mode=ros, ros_source=ota). Same narrow invoke surface as ros_remote — ONLY what ripley-os/src/os/platform/native.ts uses — and deliberately NO fs:*, shell:*, dialog:*, or core:default. Even an OTA-verified bundle is treated as untrusted per the threat model (a stolen update key could push a malicious *signed* bundle), so it must never reach the filesystem or a shell. ISOLATION: a ros:// custom-protocol page is LOCAL context in Tauri, so the broad `default` capability (windows:[\"main\"]) WOULD apply to it if the OTA window shared that label — verified empirically. The OTA window therefore uses a DISTINCT label \"ros\", and this capability is scoped to it; default (main) cannot reach it. Keep in sync with ros_remote.json + native.ts.",
-  "windows": ["ros"],
+  "description": "Verified local RipleyOS bundle served over the ros:// protocol (ui_mode=ros, ros_source=ota). Same narrow invoke surface as ros_remote \u2014 ONLY what ripley-os/src/os/platform/native.ts uses \u2014 and deliberately NO fs:*, shell:*, dialog:*, or core:default. Even an OTA-verified bundle is treated as untrusted per the threat model (a stolen update key could push a malicious *signed* bundle), so it must never reach the filesystem or a shell. ISOLATION: a ros:// custom-protocol page is LOCAL context in Tauri, so the broad `default` capability (windows:[\"main\"]) WOULD apply to it if the OTA window shared that label \u2014 verified empirically. The OTA window therefore uses a DISTINCT label \"ros\", and this capability is scoped to it; default (main) cannot reach it. Keep in sync with ros_remote.json + native.ts.",
+  "windows": [
+    "ros"
+  ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-
     "allow-ros-native-fetch",
     "allow-resolve-openalias",
     "allow-get-config",
@@ -24,7 +25,6 @@
     "allow-browser-embed-visible",
     "allow-browser-embed-close",
     "allow-browser-embed-deliver-xmr402",
-
     "allow-create-wallet",
     "allow-open-wallet",
     "allow-close-wallet",
@@ -75,9 +75,10 @@
     "allow-local-ai-complete",
     "allow-local-ai-remove",
     "allow-local-ai-clear-all",
-
     "allow-set-ui-mode",
     "allow-check-ros-update",
-    "allow-ros-channel-status"
+    "allow-ros-channel-status",
+    "allow-capture-window-png",
+    "allow-clipboard-write-image"
   ]
 }

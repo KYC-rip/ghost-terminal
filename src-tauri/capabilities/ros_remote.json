@@ -1,16 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "ros-remote",
-  "description": "Remote RipleyOS (ui_mode=ros, beta): ONLY the invoke surface ripley-os/src/os/platform/native.ts actually uses — the wallet channel, routing config, Tor status, the ROS browser, and the classic-exit toggle. Deliberately NO fs:*, shell:*, dialog:*, or core:default: the page is served from app.ros.rip, so a compromised CDN / MITM must never reach the filesystem or a shell. Keep this list in sync with native.ts.",
+  "description": "Remote RipleyOS (ui_mode=ros, beta): ONLY the invoke surface ripley-os/src/os/platform/native.ts actually uses \u2014 the wallet channel, routing config, Tor status, the ROS browser, and the classic-exit toggle. Deliberately NO fs:*, shell:*, dialog:*, or core:default: the page is served from app.ros.rip, so a compromised CDN / MITM must never reach the filesystem or a shell. Keep this list in sync with native.ts.",
   "local": false,
   "remote": {
-    "urls": ["https://app.ros.rip"]
+    "urls": [
+      "https://app.ros.rip"
+    ]
   },
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-
     "allow-ros-native-fetch",
     "allow-resolve-openalias",
     "allow-get-config",
@@ -28,7 +31,6 @@
     "allow-browser-embed-visible",
     "allow-browser-embed-close",
     "allow-browser-embed-deliver-xmr402",
-
     "allow-create-wallet",
     "allow-open-wallet",
     "allow-close-wallet",
@@ -79,7 +81,8 @@
     "allow-local-ai-complete",
     "allow-local-ai-remove",
     "allow-local-ai-clear-all",
-
-    "allow-set-ui-mode"
+    "allow-set-ui-mode",
+    "allow-capture-window-png",
+    "allow-clipboard-write-image"
   ]
 }

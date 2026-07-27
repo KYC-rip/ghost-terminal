@@ -70,6 +70,10 @@ const APP_COMMANDS: &[&str] = &[
     "check_for_updates",
     "proxied_get",
     "agent_web_read",
+    // Window screenshot (RipleyOS ⌘-leader + I): snapshot the webview region, and put the PNG on
+    // the clipboard — the webview itself has no image clipboard.
+    "capture_window_png",
+    "clipboard_write_image",
     "resolve_openalias",
     "ros_native_fetch",
     "open_native_browser",

@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Full permissions for the LOCAL classic renderer only. Local-context (no `remote`), so a remote page loaded into the main window inherits none of this — remote RipleyOS gets the narrow ros_remote capability instead.",
-  "windows": ["main"],
+  "description": "Full permissions for the LOCAL classic renderer only. Local-context (no `remote`), so a remote page loaded into the main window inherits none of this \u2014 remote RipleyOS gets the narrow ros_remote capability instead.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -20,7 +22,6 @@
     "fs:default",
     "dialog:default",
     "deep-link:default",
-
     "allow-create-wallet",
     "allow-open-wallet",
     "allow-close-wallet",
@@ -114,6 +115,8 @@
     "allow-local-ai-load",
     "allow-local-ai-complete",
     "allow-local-ai-remove",
-    "allow-local-ai-clear-all"
+    "allow-local-ai-clear-all",
+    "allow-capture-window-png",
+    "allow-clipboard-write-image"
   ]
 }

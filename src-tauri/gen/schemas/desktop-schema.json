@@ -2259,6 +2259,12 @@
           "markdownDescription": "Enables the browser_embed_zoom command without any pre-configured scope."
         },
         {
+          "description": "Enables the capture_window_png command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-window-png",
+          "markdownDescription": "Enables the capture_window_png command without any pre-configured scope."
+        },
+        {
           "description": "Enables the change_wallet_password command without any pre-configured scope.",
           "type": "string",
           "const": "allow-change-wallet-password",
@@ -2287,6 +2293,12 @@
           "type": "string",
           "const": "allow-check-tx-proof",
           "markdownDescription": "Enables the check_tx_proof command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clipboard_write_image command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clipboard-write-image",
+          "markdownDescription": "Enables the clipboard_write_image command without any pre-configured scope."
         },
         {
           "description": "Enables the close_wallet command without any pre-configured scope.",
@@ -2823,6 +2835,12 @@
           "markdownDescription": "Denies the browser_embed_zoom command without any pre-configured scope."
         },
         {
+          "description": "Denies the capture_window_png command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-window-png",
+          "markdownDescription": "Denies the capture_window_png command without any pre-configured scope."
+        },
+        {
           "description": "Denies the change_wallet_password command without any pre-configured scope.",
           "type": "string",
           "const": "deny-change-wallet-password",
@@ -2851,6 +2869,12 @@
           "type": "string",
           "const": "deny-check-tx-proof",
           "markdownDescription": "Denies the check_tx_proof command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clipboard_write_image command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clipboard-write-image",
+          "markdownDescription": "Denies the clipboard_write_image command without any pre-configured scope."
         },
         {
           "description": "Denies the close_wallet command without any pre-configured scope.",
