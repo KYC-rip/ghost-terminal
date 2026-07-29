@@ -98,6 +98,7 @@
     "allow-vpn-disconnect",
     "allow-vpn-set-killswitch",
     "allow-vpn-recover",
+    "allow-vpn-emergency-restore",
     "allow-vpn-open-window",
     "allow-vigil-save-strike-key",
     "allow-vigil-get-strike-key",

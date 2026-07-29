@@ -67,6 +67,10 @@ pub fn default_config() -> serde_json::Value {
     serde_json::json!({
         "ui_mode": "classic",
         "routingMode": "clearnet",
+        "transportPolicy": {
+            "v": 2,
+            "vpn": "ignore"
+        },
         "useSystemProxy": true,
         "systemProxyAddress": "",
         "network": "mainnet",
@@ -269,6 +273,17 @@ pub async fn reveal_path(app: AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn save_config(app: AppHandle, mut config: serde_json::Value) -> Result<(), String> {
+    // routingMode is consumed independently by scanner/browser/fetch paths.
+    // Unknown values historically fell through to direct clearnet, so reject
+    // them at the shared write boundary.
+    if let Some(mode) = config.get("routingMode").and_then(|v| v.as_str()) {
+        if !crate::wallet::scanner::known_routing_mode(mode) {
+            return Err(format!("Unknown routingMode {mode:?}; refusing to persist a fail-open network mode"));
+        }
+    } else if config.get("routingMode").is_some() {
+        return Err("routingMode must be a string".into());
+    }
+
     let path = config_path(&app);
     std::fs::create_dir_all(path.parent().unwrap())
         .map_err(|e| format!("Failed to create config dir: {}", e))?;
@@ -423,6 +438,8 @@ mod ui_mode_tests {
     #[test]
     fn default_config_boots_classic() {
         assert_eq!(default_config()["ui_mode"], "classic");
+        assert_eq!(default_config()["transportPolicy"]["v"], 2);
+        assert_eq!(default_config()["transportPolicy"]["vpn"], "ignore");
     }
 
     #[test]

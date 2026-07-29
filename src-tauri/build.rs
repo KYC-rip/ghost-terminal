@@ -103,6 +103,7 @@ const APP_COMMANDS: &[&str] = &[
     "vpn_disconnect",
     "vpn_set_killswitch",
     "vpn_recover",
+    "vpn_emergency_restore",
     "vpn_open_window",
     // Vigil (limit-order persistence)
     "vigil_save_strike_key",

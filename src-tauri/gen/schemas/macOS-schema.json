@@ -2769,6 +2769,12 @@
           "markdownDescription": "Enables the vpn_disconnect command without any pre-configured scope."
         },
         {
+          "description": "Enables the vpn_emergency_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-emergency-restore",
+          "markdownDescription": "Enables the vpn_emergency_restore command without any pre-configured scope."
+        },
+        {
           "description": "Enables the vpn_open_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-vpn-open-window",
@@ -3379,6 +3385,12 @@
           "type": "string",
           "const": "deny-vpn-disconnect",
           "markdownDescription": "Denies the vpn_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_emergency_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-emergency-restore",
+          "markdownDescription": "Denies the vpn_emergency_restore command without any pre-configured scope."
         },
         {
           "description": "Denies the vpn_open_window command without any pre-configured scope.",

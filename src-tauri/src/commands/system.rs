@@ -674,7 +674,7 @@ fn resolve_browser_proxy(
             // than erroring, so validate host+port here and refuse cleanly if it's off.
             let raw = crate::wallet::scanner::fold_fullwidth(proxy.as_deref().unwrap_or("").trim());
             if raw.is_empty() {
-                return Ok(None);
+                return Err("Custom routing is selected but no SOCKS proxy is configured.".into());
             }
             let with_scheme = if raw.contains("://") { raw.clone() } else { format!("socks5://{raw}") };
             let parsed: tauri::Url = with_scheme
@@ -685,7 +685,10 @@ fn resolve_browser_proxy(
             }
             Ok(Some(parsed))
         }
-        _ => Ok(None),
+        Some("clearnet") | None => Ok(None),
+        Some(other) => Err(format!(
+            "Unknown routing mode {other:?}; refusing to open a direct browser connection."
+        )),
     }
 }
 
@@ -974,7 +977,7 @@ fn version_gt(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_onion, validate_agent_web_url, version_gt};
+    use super::{is_onion, resolve_browser_proxy, validate_agent_web_url, version_gt};
 
     #[test]
     fn detects_onion_case_insensitively() {
@@ -1024,6 +1027,22 @@ mod tests {
                 validate_agent_web_url(blocked).is_err(),
                 "{blocked} should be blocked"
             );
+        }
+    }
+
+    #[test]
+    fn browser_proxy_refuses_unknown_modes_and_empty_custom_proxy() {
+        let url: tauri::Url = "https://example.com/".parse().unwrap();
+        assert!(resolve_browser_proxy(&url, &Some("torOverVpn".into()), &None).is_err());
+        assert!(resolve_browser_proxy(&url, &Some("custom".into()), &Some(" ".into())).is_err());
+        assert_eq!(resolve_browser_proxy(&url, &Some("clearnet".into()), &None).unwrap(), None);
+    }
+
+    #[test]
+    fn onion_targets_are_refused_outside_tor_for_every_non_tor_mode() {
+        let onion: tauri::Url = "http://exampleexample.onion/".parse().unwrap();
+        for mode in [None, Some("clearnet".into()), Some("custom".into()), Some("future".into())] {
+            assert!(resolve_browser_proxy(&onion, &mode, &Some("127.0.0.1:9050".into())).is_err());
         }
     }
 

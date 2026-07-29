@@ -147,6 +147,7 @@ function createTauriApi() {
     vpnDisconnect: (restore: boolean) => invoke('vpn_disconnect', { restore }) as Promise<Record<string, unknown>>,
     vpnSetKillswitch: (on: boolean) => invoke('vpn_set_killswitch', { on }) as Promise<Record<string, unknown>>,
     vpnRecover: () => invoke('vpn_recover') as Promise<Record<string, unknown>>,
+    vpnEmergencyRestore: () => invoke('vpn_emergency_restore') as Promise<Record<string, unknown>>,
 
     // ── Event Listeners ──
     onEngineStatus: (callback: any) => {

@@ -1,7 +1,7 @@
 # RipleyOS VPN / network-privacy panel — implementation spec
 
-Status: **implemented through the native auth/control increment; Linux packaging and live broker
-integration tests remain release work.**
+Status: **implemented through native auth/control and the additive ROS transport-policy increment;
+Linux packaging and live broker integration tests remain release work.**
 Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: RipleyOS (Vite/React PWA) served into the webview.
 
 ## Non-negotiables (from the two Codex reviews)
@@ -11,7 +11,7 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
 3. **Never run the Tauri/WebView process as root.** The app + `VpnManager` stay unprivileged. Kernel/network mutations go to a **separate root-owned broker** (own binary/crate) over a Unix socket / D-Bus, with peer-credential/Polkit checks and only `CAP_NET_ADMIN`. The broker accepts **structured operations only** — never shell strings, config paths, or nft snippets. A WebView exploit must not become arbitrary root.
 4. **Remote renderer is untrusted.** `ros_remote` (including the localhost dev override) and `ros_local` may read status and *open* a host-owned VPN window, but neither receives mutation commands. The repo's threat model treats even the OTA bundle as untrusted (see the capability files — no fs/shell). Therefore **all VPN mutations (import, connect, disable-kill-switch) require a native, host-owned confirmation window** (mirror the existing wallet-op confirm pattern), not renderer trust.
 5. **v1 = Linux only.** macOS (NetworkExtension) and Windows (WFP) are later.
-6. **Over-Tor is OUT of v1.** Plain WireGuard is UDP; Tor carries TCP streams only. Tor→VPN needs a UDP-over-TCP/obfuscation transport = separate project. VPN→Tor (ROS's Arti traffic inside an established VPN) is the doable variant, documented separately.
+6. **VPN-over-Tor is OUT of v1.** Plain WireGuard and the supplied OpenVPN profiles use UDP; Tor carries TCP streams only. VPN-over-Tor needs a UDP-over-TCP/obfuscation transport = separate project. **Tor-over-VPN** (ROS's Arti traffic inside an established host VPN) is the supported variant.
 
 ## Components
 
@@ -25,18 +25,45 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
 - Owns: wg interface (via `wireguard` netlink or `wg`/`ip` with fixed args), the dedicated nftables table, per-link DNS, IPv6 policy, crash-recovery journal.
 
 ### `src-tauri/src/commands/vpn.rs` (unprivileged) — talks to broker
-- Commands: `vpn_import_config`, `vpn_connect`, `vpn_disconnect`, `vpn_status`, `vpn_set_killswitch`, `vpn_recover`.
+- Commands: `vpn_connect`, `vpn_disconnect`, `vpn_status`, `vpn_set_killswitch`, `vpn_recover`, `vpn_emergency_restore`, `vpn_open_window`.
 - Register in `commands/mod.rs` (`pub mod vpn;`), `lib.rs` `generate_handler!`, `build.rs` `APP_COMMANDS`.
-- Mutations open a host-owned native confirmation modal before forwarding to the broker; the ROS
-  renderer can only request that the host surface be shown via `vpn:open`.
+- `vpn_open_window` creates/focuses a dedicated local `vpn-control` webview. That window has its
+  own narrow capability and never loads ROS/remote content. Mutations require confirmation there;
+  the ROS renderer can only request that this host surface be shown.
 
 ### Capabilities
 - `ros_remote.json`: read status + open the host window only; no mutation perms.
 - `ros_local.json`: `allow-vpn-status` + `allow-vpn-open-window` only (read + open host UI). Mutations are host-driven, not granted to the renderer.
 - New permissions declared in `build.rs` manifest, kept in sync with `native.ts`.
+- `vpn_control.json`: local `vpn-control` window only; structured VPN commands and no wallet,
+  filesystem, shell, keychain, or generic network permissions.
 
 ### RipleyOS renderer
 - A VPN app under `src/os/apps/Vpn/` + a status chip; drives via the `platform.network` seam in `src/os/platform/`. Full control only in the host-owned window; the embedded ROS view shows status + an "Open VPN" button.
+
+## Additive transport policy (requested vs observed)
+
+`routingMode` remains exactly `tor | clearnet | custom`. It is the legacy app-level transport
+contract and MUST NOT be widened: older scanner/browser readers historically treated unknown
+strings as clearnet. Those readers now refuse unknown values.
+
+The independent VPN expectation is persisted additively:
+
+```json
+{
+  "routingMode": "tor",
+  "transportPolicy": { "v": 2, "vpn": "require" }
+}
+```
+
+Supported combinations are clearnet, Tor, custom SOCKS5, VPN (`clearnet + require`), and
+Tor-over-VPN (`tor + require`). An older shell ignores `transportPolicy` and safely retains the
+app leg. The ROS Settings status card is computed from requested policy plus live Tor and broker
+observations; it never calls a requested path “verified” merely because a button was pressed.
+Requiring VPN in ROS is an assertion, not a kill-switch: only the broker can enforce host egress.
+
+VPN-over-Tor is deliberately not representable. The UI names the UDP/Tor limitation rather than
+silently delivering the opposite chain.
 
 ## Config parser (Rust, in broker) — parse as DATA
 - Size cap; exactly one `[Interface]` + one `[Peer]`; reject duplicate/unknown fields.
@@ -68,4 +95,6 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
 Trusted local renderer only · unprivileged Tauri + minimal broker · Tauri 2.11.1 · defined resolver/distro matrix · crash/reboot/uninstall recovery · integration tests: forced interface-drop, endpoint-change, DNS, IPv6, suspend/resume, concurrent-command.
 
 ## Build note
-No Rust toolchain is present on the current build box (`cargo`/`rustc` absent), so the privileged Rust cannot be compiled/verified here. Build the broker + `vpn.rs` on a machine with `rustup`, or install it here first. This is security-critical privileged code — do not merge unverified.
+The unprivileged Tauri client compiles on macOS, and the Linux broker is checked against its Linux
+target. Live nftables/WireGuard/Polkit integration still requires a disposable Linux VM and remains
+a release gate; unit checks alone do not prove kernel-route behaviour.

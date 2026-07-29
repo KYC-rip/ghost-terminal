@@ -34,6 +34,10 @@ pub(crate) fn read_routing_mode(app: &AppHandle) -> String {
     read_config_str(app, "routingMode").unwrap_or_else(|| "clearnet".to_string())
 }
 
+pub(crate) fn known_routing_mode(mode: &str) -> bool {
+    matches!(mode, "tor" | "clearnet" | "custom")
+}
+
 /// Read the external SOCKS proxy address (custom routing mode) from config.json,
 /// Fold fullwidth ASCII variants (U+FF01..U+FF5E, e.g. `：` `．` fullwidth digits)
 /// and the ideographic space back to their ASCII equivalents. A CJK IME commonly
@@ -424,9 +428,15 @@ impl BlockScanner {
                         run_outer(app_clone, generation, CustomProxyConnector { proxy }).await;
                     }
                 }
-                _ => {
+                "clearnet" => {
                     run_outer(app_clone, generation, ClearnetConnector).await;
                 }
+                other => emit_log(
+                    &app_clone,
+                    "Network",
+                    "error",
+                    &format!("❌ Unknown routing mode {other:?}. Sync paused rather than falling back to clearnet."),
+                ),
             }
         });
 
@@ -1159,7 +1169,13 @@ pub(crate) async fn run_pool_scan(
                 pool_loop(app, identity_id, view_pair, from_height, cancel, CustomProxyConnector { proxy }).await;
             }
         }
-        _ => pool_loop(app, identity_id, view_pair, from_height, cancel, ClearnetConnector).await,
+        "clearnet" => pool_loop(app, identity_id, view_pair, from_height, cancel, ClearnetConnector).await,
+        other => emit_log(
+            &app,
+            "Network",
+            "error",
+            &format!("❌ Unknown routing mode {other:?}. Background sync paused rather than falling back to clearnet."),
+        ),
     }
 }
 
@@ -1293,7 +1309,7 @@ async fn pool_loop<C: DaemonConnector>(
 
 #[cfg(test)]
 mod fold_tests {
-    use super::fold_fullwidth;
+    use super::{fold_fullwidth, known_routing_mode};
 
     #[test]
     fn folds_fullwidth_colon_and_digits() {
@@ -1309,6 +1325,15 @@ mod fold_tests {
     #[test]
     fn folds_ideographic_space() {
         assert_eq!(fold_fullwidth("a\u{3000}b"), "a b");
+    }
+    #[test]
+    fn only_legacy_routing_values_are_network_capable() {
+        for mode in ["tor", "clearnet", "custom"] {
+            assert!(known_routing_mode(mode));
+        }
+        for mode in ["torOverVpn", "vpn", "", "TOR"] {
+            assert!(!known_routing_mode(mode));
+        }
     }
 }
 

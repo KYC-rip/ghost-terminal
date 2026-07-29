@@ -510,6 +510,7 @@ pub fn run() {
             commands::vpn::vpn_disconnect,
             commands::vpn::vpn_set_killswitch,
             commands::vpn::vpn_recover,
+            commands::vpn::vpn_emergency_restore,
             commands::vpn::vpn_open_window,
             // Vigil (limit-order persistence)
             commands::vigil::vigil_save_strike_key,

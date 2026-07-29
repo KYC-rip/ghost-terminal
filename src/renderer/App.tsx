@@ -716,6 +716,17 @@ function MainApp() {
 }
 
 export default function App() {
+  // A dedicated host-owned window created by `vpn_open_window`. Keeping this
+  // branch outside VaultProvider/MainApp ensures it mounts no wallet, updater,
+  // browser or identity UI. Its Tauri capability is independently restricted
+  // to the structured VPN broker commands.
+  if (new URLSearchParams(window.location.search).get('vpn-control') === '1') {
+    return (
+      <div className="min-h-screen bg-xmr-base p-6 text-xmr-text">
+        <VpnView />
+      </div>
+    );
+  }
   return (
     <VaultProvider>
       <MainApp />
