@@ -11,6 +11,7 @@ import { AuthView } from './components/AuthView';
 import { AddressDisplay } from './components/common/AddressDisplay';
 import { AgentTab } from './components/vault/AgentTab';
 import { ExchangeView } from './components/ExchangeView';
+import { VpnView } from './components/VpnView';
 import { XMR402Modal } from './components/common/XMR402Modal';
 import { VaultProvider } from './contexts/VaultContext';
 
@@ -31,7 +32,7 @@ const SkinOverlay = ({ config }: { config: any }) => {
 };
 
 function MainApp() {
-  const [view, setView] = useState<'home' | 'vault' | 'settings' | 'agent' | 'exchange'>('home');
+  const [view, setView] = useState<'home' | 'vault' | 'settings' | 'agent' | 'exchange' | 'vpn'>('home');
   const [showConsole, setShowConsole] = useState(false);
   const [consoleMaximized, setConsoleMaximized] = useState(false);
   const [consoleCopied, setConsoleCopied] = useState(false);
@@ -100,6 +101,14 @@ function MainApp() {
   const [torStatus, setTorStatus] = useState<{ status: string; percent: number } | null>(null);
   useEffect(() => {
     const off = window.api.onTorStatus?.((s) => setTorStatus({ status: s.status, percent: s.percent }));
+    return () => { off?.(); };
+  }, []);
+
+  // The embedded ROS VPN app is read-only. Its "Open VPN controls" action is
+  // delivered here by the native host, which routes the trusted shell to this
+  // host-owned view rather than granting ROS mutation commands.
+  useEffect(() => {
+    const off = window.api.onVpnOpen?.(() => setView('vpn'));
     return () => { off?.(); };
   }, []);
 
@@ -433,6 +442,7 @@ function MainApp() {
           <NavGroup label="Tools" groupKey="tools">
             <NavButton id="agent" label="Agent" icon={Bot} />
             <NavButton id="settings" label="Settings" icon={Settings} />
+            <NavButton id="vpn" label="VPN" icon={Shield} />
           </NavGroup>
           <button
             onClick={() => { setShowFeedbackModal(true); setFeedbackText(''); }}
@@ -557,6 +567,7 @@ function MainApp() {
               <div className={view === 'home' ? 'block' : 'hidden'}><HomeView setView={setView} stats={stats} loading={statsLoading} /></div>
                 <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView setView={setView} vault={vault} handleBurn={() => purgeIdentity(activeId)} appConfig={appConfig} /></div>
                 <div className={view === 'exchange' ? 'block' : 'hidden'}><ExchangeView localXmrAddress={address} /></div>
+                <div className={view === 'vpn' ? 'block' : 'hidden'}><VpnView /></div>
 
               <div className={view === 'settings' ? 'block' : 'hidden'}><SettingsView /></div>
                 <div className={view === 'agent' ? 'block' : 'hidden'}><AgentTab /></div>

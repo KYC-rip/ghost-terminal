@@ -141,6 +141,13 @@ function createTauriApi() {
     }),
     retryEngine: () => Promise.resolve(),
 
+    // ── VPN (host-owned control surface) ──
+    vpnStatus: () => invoke('vpn_status') as Promise<Record<string, unknown>>,
+    vpnConnect: (configText: string) => invoke('vpn_connect', { configText }) as Promise<Record<string, unknown>>,
+    vpnDisconnect: (restore: boolean) => invoke('vpn_disconnect', { restore }) as Promise<Record<string, unknown>>,
+    vpnSetKillswitch: (on: boolean) => invoke('vpn_set_killswitch', { on }) as Promise<Record<string, unknown>>,
+    vpnRecover: () => invoke('vpn_recover') as Promise<Record<string, unknown>>,
+
     // ── Event Listeners ──
     onEngineStatus: (callback: any) => {
       let unlisten: UnlistenFn | null = null;
@@ -162,6 +169,11 @@ function createTauriApi() {
           callback({ status, percent: parseInt(percent) || 0, message: message || '' });
         }
       }).then(fn => unlisten = fn);
+      return () => { unlisten?.(); };
+    },
+    onVpnOpen: (callback: () => void) => {
+      let unlisten: UnlistenFn | null = null;
+      listen('vpn:open', () => callback()).then(fn => unlisten = fn);
       return () => { unlisten?.(); };
     },
     onWalletEvent: (callback: any) => {

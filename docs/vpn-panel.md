@@ -1,6 +1,7 @@
 # RipleyOS VPN / network-privacy panel — implementation spec
 
-Status: **approved plan (Codex 8.1/10, conditional)**, not yet implemented.
+Status: **implemented through the native auth/control increment; Linux packaging and live broker
+integration tests remain release work.**
 Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: RipleyOS (Vite/React PWA) served into the webview.
 
 ## Non-negotiables (from the two Codex reviews)
@@ -16,14 +17,18 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
 
 ### `broker` (new root-owned crate) — the only privileged code
 - Runs as a minimal systemd service with `CAP_NET_ADMIN` (+ `CAP_NET_RAW` if needed), no shell.
-- Unix socket `/run/ripley-vpn.sock`, root:group perms; verify peer creds (SO_PEERCRED)/Polkit.
+- Unix socket `/run/ripley-vpn.sock`, root:`ripley` group perms; verify peer creds (SO_PEERCRED).
+  Strong operations invoke Polkit with the connecting uid/pid/start-time, so PID reuse cannot
+  transfer an interactive authorization to another process. Install `polkit/org.ripley.vpn.policy`
+  and ensure the desktop user is in the `ripley` group.
 - Structured request enum: `Up{iface_cfg}`, `Down`, `Status`, `KillSwitchOn/Off`, `Recover`.
 - Owns: wg interface (via `wireguard` netlink or `wg`/`ip` with fixed args), the dedicated nftables table, per-link DNS, IPv6 policy, crash-recovery journal.
 
 ### `src-tauri/src/commands/vpn.rs` (unprivileged) — talks to broker
 - Commands: `vpn_import_config`, `vpn_connect`, `vpn_disconnect`, `vpn_status`, `vpn_set_killswitch`, `vpn_recover`.
 - Register in `commands/mod.rs` (`pub mod vpn;`), `lib.rs` `generate_handler!`, `build.rs` `APP_COMMANDS`.
-- Mutations open a native confirm window before forwarding to the broker.
+- Mutations open a host-owned native confirmation modal before forwarding to the broker; the ROS
+  renderer can only request that the host surface be shown via `vpn:open`.
 
 ### Capabilities
 - `ros_remote.json`: **no** vpn perms.

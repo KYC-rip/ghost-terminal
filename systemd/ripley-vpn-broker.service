@@ -1,0 +1,26 @@
+[Unit]
+Description=RipleyOS WireGuard VPN broker
+After=network-pre.target
+Before=network.target
+Wants=network-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/ripley-terminal/ripley-vpn-broker
+User=root
+Group=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run /var/lib/ripley-vpn
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

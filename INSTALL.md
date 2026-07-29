@@ -47,6 +47,23 @@ On **Qubes/Whonix**, run it inside the workstation qube and set routing to your
 gateway's SOCKS proxy in Settings (e.g. `10.152.152.10:9050`) — no bundled Tor is
 started in that mode.
 
+#### Optional Linux VPN panel
+
+The WireGuard panel is Linux-only and uses the separate root-owned
+`ripley-vpn-broker`. Install the broker as a systemd service, install
+`polkit/org.ripley.vpn.policy` under `/usr/share/polkit-1/actions/`, create the
+`ripley` group, and add the desktop user to it before starting the service:
+
+```sh
+sudo groupadd --system ripley 2>/dev/null || true
+sudo usermod -aG ripley "$USER"
+sudo install -m 0644 polkit/org.ripley.vpn.policy /usr/share/polkit-1/actions/
+```
+
+Log in again after the group change. The broker socket is `root:ripley` with
+mode `0660`; connect, clearnet restoration, and kill-switch disable each trigger
+an interactive Polkit authorization. Do not run the desktop app as root.
+
 ### macOS — `.dmg`
 Because the app is unsigned, macOS will say it "can't be opened" / "is from an
 unidentified developer." To open it the first time:

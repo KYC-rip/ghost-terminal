@@ -21,6 +21,7 @@
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -28,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use nix::sys::stat::{fchmodat, lstat, umask, FchmodatFlags, Mode, SFlag};
-use nix::unistd::{Gid, Uid};
+use nix::unistd::{chown, Gid, Group, Pid, Uid};
 use serde::{Deserialize, Deserializer, Serialize};
 use zeroize::Zeroizing;
 
@@ -59,6 +60,7 @@ impl<'de> Deserialize<'de> for SecretText {
 
 /// Default socket path. Overridable via argv[1] for tests.
 const DEFAULT_SOCK: &str = "/run/ripley-vpn.sock";
+const BROKER_GROUP: &str = "ripley";
 /// Wire protocol version. Bumped on any breaking contract change.
 const PROTOCOL: u32 = 1;
 /// Max bytes accepted for a single request frame (one JSON line).
@@ -296,9 +298,12 @@ fn bind_socket(sock_path: &str) -> Result<UnixListener, String> {
     umask(prev);
     let listener = listener.map_err(|e| format!("bind {sock_path}: {e}"))?;
 
-    // Reachable only by root + the ripley group (0660). Group membership is the
-    // coarse gate; per-connection peer creds are the real check. Abort on failure
-    // — a world-accessible root socket is unacceptable.
+    // Reachable only by root + the ripley group (0660). Set the group explicitly;
+    // inheriting root's primary group would leave the desktop client locked out.
+    let group = Group::from_name(BROKER_GROUP)
+        .map_err(|e| format!("lookup group {BROKER_GROUP}: {e}"))?
+        .ok_or_else(|| format!("required group {BROKER_GROUP} does not exist"))?;
+    chown(path, None, Some(group.gid)).map_err(|e| format!("chgrp {sock_path}: {e}"))?;
     fchmodat(None, path, Mode::from_bits_truncate(0o660), FchmodatFlags::FollowSymlink)
         .map_err(|e| format!("chmod {sock_path}: {e}"))?;
 
@@ -313,9 +318,9 @@ fn handle(stream: UnixStream) {
     }
     let deadline = Instant::now() + FRAME_DEADLINE;
 
-    // Peer-credential gate: only accept from an authorized local peer. TODO(next
-    // increment): Polkit for interactive authorization of the strong-auth ops
-    // below, keyed on subject uid/pid/start-time to survive PID reuse.
+    // Peer-credential gate: the socket mode is the coarse group gate, and this
+    // second check makes the group requirement explicit. Strong mutations are
+    // separately authorized by Polkit below.
     let peer = match getsockopt(&stream, PeerCredentials) {
         Ok(cred) => cred,
         Err(e) => {
@@ -327,7 +332,9 @@ fn handle(stream: UnixStream) {
             return;
         }
     };
-    if !authorized_connect(Uid::from_raw(peer.uid()), Gid::from_raw(peer.gid())) {
+    let group = Group::from_name(BROKER_GROUP).ok().flatten().map(|g| g.gid);
+    let peer_pid = Some(Pid::from_raw(peer.pid()));
+    if !authorized_connect(Uid::from_raw(peer.uid()), Gid::from_raw(peer.gid()), peer_pid, group) {
         let _ = reply(&stream, Response::Denied {
             id: String::new(),
             code: ErrCode::NotAuthorized,
@@ -357,7 +364,7 @@ fn handle(stream: UnixStream) {
             code: ErrCode::BadRequest,
             reason: "request id too long or non-ASCII".into(),
         },
-        Ok(env) => dispatch(env, Uid::from_raw(peer.uid())),
+        Ok(env) => dispatch(env, Uid::from_raw(peer.uid()), peer_pid),
         Err(e) => Response::Error {
             id: String::new(),
             code: ErrCode::BadRequest,
@@ -416,24 +423,43 @@ fn safe_id(id: &str) -> String {
     }
 }
 
-/// Coarse connect-time authorization. Placeholder policy: accept root (the
-/// broker client runs as the logged-in desktop user in the ripley group — wired
-/// with the socket group + Polkit in the next increment).
-fn authorized_connect(uid: Uid, _gid: Gid) -> bool {
-    uid.is_root()
+/// The kernel already enforces the socket's root:ripley 0660 gate. This extra
+/// check covers primary and supplementary group membership and avoids trusting
+/// a non-group peer if the socket is misconfigured.
+fn authorized_connect(uid: Uid, gid: Gid, pid: Option<Pid>, broker_gid: Option<Gid>) -> bool {
+    if uid.is_root() { return true; }
+    let Some(target) = broker_gid else { return false; };
+    if gid == target { return true; }
+    let Some(pid) = pid else { return false; };
+    let Ok(status) = std::fs::read_to_string(format!("/proc/{}/status", pid.as_raw())) else { return false; };
+    status.lines()
+        .find(|line| line.starts_with("Groups:"))
+        .map(|line| line.split_whitespace().skip(1).any(|g| g.parse::<u32>().ok() == Some(target.as_raw())))
+        .unwrap_or(false)
 }
 
-/// Ops that re-open egress or de-escalate protection require the strongest
-/// authorization. Stubbed until Polkit lands; today only root passes and these
-/// ops are unimplemented anyway.
-fn authorized_strong(uid: Uid) -> bool {
-    uid.is_root()
+/// Ask Polkit to authorize the exact peer process. Supplying the process start
+/// time prevents a PID-reuse race between the socket connection and the prompt.
+/// No shell is involved; the broker invokes pkcheck directly.
+fn authorized_strong(uid: Uid, pid: Option<Pid>, action: &str) -> bool {
+    if uid.is_root() { return true; }
+    let Some(pid) = pid else { return false; };
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw())) else { return false; };
+    // After the closing ')' the first token is field 3; field 22 is token 19.
+    let Some(start) = stat.rsplit_once(')').and_then(|(_, suffix)| suffix.split_whitespace().nth(19)) else { return false; };
+    let process = format!("{},{}", pid.as_raw(), start);
+    let checker = if Path::new("/usr/bin/pkcheck").exists() { "/usr/bin/pkcheck" } else { "pkcheck" };
+    Command::new(checker)
+        .args(["--action-id", action, "--process", &process, "--allow-user-interaction"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
-fn dispatch(env: Envelope, uid: Uid) -> Response {
+fn dispatch(env: Envelope, uid: Uid, pid: Option<Pid>) -> Response {
     let id = env.id;
-    let strong = |uid: Uid, id: &str| -> Option<Response> {
-        if authorized_strong(uid) {
+    let strong = |uid: Uid, id: &str, action: &str| -> Option<Response> {
+        if authorized_strong(uid, pid, action) {
             None
         } else {
             Some(Response::Denied {
@@ -452,7 +478,10 @@ fn dispatch(env: Envelope, uid: Uid) -> Response {
         // config is bad". `up()` seals the fail-closed nftables block BEFORE any
         // route/wg change and tears down partial state on any failure.
         Request::Up { config_text } => match parser::parse_wg_config(config_text.as_str()) {
-            Ok(cfg) => run_op(id, |m| m.up(&cfg)),
+            Ok(cfg) => match strong(uid, &id, "org.ripley.vpn.connect") {
+                Some(deny) => deny,
+                None => run_op(id, |m| m.up(&cfg)),
+            },
             Err(e) => Response::InvalidConfig {
                 id,
                 code: ErrCode::InvalidConfig,
@@ -462,16 +491,16 @@ fn dispatch(env: Envelope, uid: Uid) -> Response {
 
         Request::DisconnectBlocked => run_op(id, |m| m.disconnect_blocked()),
 
-        Request::DisconnectAndRestoreClearnet => match strong(uid, &id) {
+        Request::DisconnectAndRestoreClearnet => match strong(uid, &id, "org.ripley.vpn.restore") {
             Some(deny) => deny,
             None => run_op(id, |m| m.disconnect_restore()),
         },
         Request::EnableKillSwitch => run_op(id, |m| m.enable_killswitch()),
-        Request::DisableKillSwitch => match strong(uid, &id) {
+        Request::DisableKillSwitch => match strong(uid, &id, "org.ripley.vpn.disable-killswitch") {
             Some(deny) => deny,
             None => run_op(id, |m| m.disable_killswitch()),
         },
-        Request::EmergencyRestoreClearnet => match strong(uid, &id) {
+        Request::EmergencyRestoreClearnet => match strong(uid, &id, "org.ripley.vpn.restore") {
             Some(deny) => deny,
             None => run_op(id, |m| m.emergency_restore()),
         },

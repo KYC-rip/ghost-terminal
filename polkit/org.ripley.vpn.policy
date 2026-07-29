@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>RipleyOS</vendor>
+  <vendor_url>https://ripley.os</vendor_url>
+  <icon_name>network-vpn</icon_name>
+
+  <action id="org.ripley.vpn.connect">
+    <description>Connect the RipleyOS VPN</description>
+    <message>Authentication is required to connect the RipleyOS VPN.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.ripley.vpn.restore">
+    <description>Restore clearnet networking after VPN use</description>
+    <message>Authentication is required to restore clearnet networking.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.ripley.vpn.disable-killswitch">
+    <description>Disable the RipleyOS VPN kill-switch</description>
+    <message>Authentication is required to disable the VPN kill-switch.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
