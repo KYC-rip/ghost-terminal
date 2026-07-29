@@ -17,6 +17,8 @@
     "allow-get-tor-status",
     "allow-tor-circuit",
     "allow-restart-tor",
+    "allow-vpn-status",
+    "allow-vpn-open-window",
     "allow-open-native-browser",
     "allow-browser-embed-open",
     "allow-browser-embed-bounds",

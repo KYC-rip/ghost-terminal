@@ -97,6 +97,13 @@ const APP_COMMANDS: &[&str] = &[
     "get_tor_status",
     "tor_circuit",
     "restart_tor",
+    // VPN (unprivileged client of the root-owned broker)
+    "vpn_status",
+    "vpn_connect",
+    "vpn_disconnect",
+    "vpn_set_killswitch",
+    "vpn_recover",
+    "vpn_open_window",
     // Vigil (limit-order persistence)
     "vigil_save_strike_key",
     "vigil_get_strike_key",

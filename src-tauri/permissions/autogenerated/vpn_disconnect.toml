@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-disconnect"
+description = "Enables the vpn_disconnect command without any pre-configured scope."
+commands.allow = ["vpn_disconnect"]
+
+[[permission]]
+identifier = "deny-vpn-disconnect"
+description = "Denies the vpn_disconnect command without any pre-configured scope."
+commands.deny = ["vpn_disconnect"]

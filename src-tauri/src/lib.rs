@@ -504,6 +504,13 @@ pub fn run() {
             commands::tor::get_tor_status,
             commands::tor::tor_circuit,
             commands::tor::restart_tor,
+            // VPN (unprivileged client of the root-owned broker)
+            commands::vpn::vpn_status,
+            commands::vpn::vpn_connect,
+            commands::vpn::vpn_disconnect,
+            commands::vpn::vpn_set_killswitch,
+            commands::vpn::vpn_recover,
+            commands::vpn::vpn_open_window,
             // Vigil (limit-order persistence)
             commands::vigil::vigil_save_strike_key,
             commands::vigil::vigil_get_strike_key,

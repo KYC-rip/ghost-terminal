@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-open-window"
+description = "Enables the vpn_open_window command without any pre-configured scope."
+commands.allow = ["vpn_open_window"]
+
+[[permission]]
+identifier = "deny-vpn-open-window"
+description = "Denies the vpn_open_window command without any pre-configured scope."
+commands.deny = ["vpn_open_window"]
