@@ -9,7 +9,7 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
 1. **Tauri IPC is the trust boundary** — `#[tauri::command]` + capabilities replace any localhost helper. Each new command must be added to all three enforcement points: `build.rs` `APP_COMMANDS`, `tauri::generate_handler!` in `lib.rs`, and a capability grant.
 2. **Bump Tauri 2.10.3 → 2.11.1** (remote-origin custom-command ACL fix) before shipping. Requires `cargo update -p tauri --precise 2.11.1` on a machine with the Rust toolchain.
 3. **Never run the Tauri/WebView process as root.** The app + `VpnManager` stay unprivileged. Kernel/network mutations go to a **separate root-owned broker** (own binary/crate) over a Unix socket / D-Bus, with peer-credential/Polkit checks and only `CAP_NET_ADMIN`. The broker accepts **structured operations only** — never shell strings, config paths, or nft snippets. A WebView exploit must not become arbitrary root.
-4. **Remote renderer is untrusted.** `ros_remote` (Cloudflare `app.ros.rip`) gets **zero** VPN permissions — not even status. `ros_local` (the signed `ros://` OTA window) may read status and *open* a host-owned VPN window, but this repo's own threat model treats even the OTA bundle as untrusted (see `capabilities/ros_local.json` — no fs/shell). Therefore **all VPN mutations (import, connect, disable-kill-switch) require a native, host-owned confirmation window** (mirror the existing wallet-op confirm pattern), not renderer trust.
+4. **Remote renderer is untrusted.** `ros_remote` (including the localhost dev override) and `ros_local` may read status and *open* a host-owned VPN window, but neither receives mutation commands. The repo's threat model treats even the OTA bundle as untrusted (see the capability files — no fs/shell). Therefore **all VPN mutations (import, connect, disable-kill-switch) require a native, host-owned confirmation window** (mirror the existing wallet-op confirm pattern), not renderer trust.
 5. **v1 = Linux only.** macOS (NetworkExtension) and Windows (WFP) are later.
 6. **Over-Tor is OUT of v1.** Plain WireGuard is UDP; Tor carries TCP streams only. Tor→VPN needs a UDP-over-TCP/obfuscation transport = separate project. VPN→Tor (ROS's Arti traffic inside an established VPN) is the doable variant, documented separately.
 
@@ -31,7 +31,7 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
   renderer can only request that the host surface be shown via `vpn:open`.
 
 ### Capabilities
-- `ros_remote.json`: **no** vpn perms.
+- `ros_remote.json`: read status + open the host window only; no mutation perms.
 - `ros_local.json`: `allow-vpn-status` + `allow-vpn-open-window` only (read + open host UI). Mutations are host-driven, not granted to the renderer.
 - New permissions declared in `build.rs` manifest, kept in sync with `native.ts`.
 

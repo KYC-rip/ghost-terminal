@@ -109,6 +109,13 @@ export function VpnView() {
         </div>
       </div>
 
+      <div className="border border-xmr-accent/40 bg-xmr-accent/5 p-4 text-[10px] leading-relaxed text-xmr-dim">
+        <strong className="text-xmr-accent">HOST-WIDE NETWORK CONTROL.</strong>{' '}
+        WireGuard routes and the kill-switch apply to the whole computer, not just RipleyOS.
+        Other apps and users on this machine may be routed through the VPN or blocked until the
+        tunnel is restored or clearnet is explicitly reopened.
+      </div>
+
       <div className="border border-xmr-border/50 bg-xmr-surface/20 p-5">
         <label className="text-[10px] font-black uppercase tracking-widest text-xmr-dim">WireGuard configuration</label>
         <textarea value={configText} onChange={e => setConfigText(e.target.value)} rows={8} spellCheck={false} placeholder="[Interface]\nPrivateKey = …\n[Peer]\nPublicKey = …" className="mt-2 w-full resize-y border border-xmr-border bg-xmr-base p-3 font-mono text-[10px] text-xmr-text outline-none focus:border-xmr-green" />
@@ -132,10 +139,10 @@ export function VpnView() {
 
 function Confirm({ action, onCancel, onConfirm }: { action: Exclude<ConfirmAction, null>; onCancel: () => void; onConfirm: () => void }) {
   const copy: Record<Exclude<ConfirmAction, null>, [string, string]> = {
-    connect: ['Connect VPN?', 'The broker will install the fail-closed block before bringing up WireGuard.'],
-    restore: ['Restore clearnet?', 'This re-opens non-VPN networking after disconnecting the tunnel.'],
-    'disable-killswitch': ['Disable kill-switch?', 'Traffic may leave over clearnet if the VPN is not connected.'],
-    recover: ['Recover blocked state?', 'The broker will reconcile toward an offline, blocked state.'],
+    connect: ['Connect VPN?', 'This changes routing for the whole computer. The broker installs a host-wide fail-closed block before bringing up WireGuard.'],
+    restore: ['Restore clearnet?', 'This re-opens non-VPN networking for the whole computer after disconnecting the tunnel.'],
+    'disable-killswitch': ['Disable kill-switch?', 'This removes the host-wide block. Traffic from any app may leave over clearnet if the VPN is not connected.'],
+    recover: ['Recover blocked state?', 'The broker will reconcile the whole computer toward an offline, blocked state.'],
   };
   const [title, body] = copy[action];
   return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-6" role="dialog" aria-modal="true">
