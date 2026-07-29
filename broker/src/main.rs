@@ -32,7 +32,10 @@ use nix::unistd::{Gid, Uid};
 use serde::{Deserialize, Deserializer, Serialize};
 use zeroize::Zeroizing;
 
+mod killswitch;
+mod netops;
 mod parser;
+mod state;
 mod types;
 
 use types::Ipv6Policy;
@@ -124,6 +127,9 @@ struct StatusSnapshot {
     interface: Option<String>,
     /// Seconds since the last successful handshake (age), not a wall-clock stamp.
     handshake_age_secs: Option<u64>,
+    /// A prior teardown left possibly-stale state; a normal restore stays blocked
+    /// until it verifies a clean teardown (emergency forces).
+    cleanup_required: bool,
     error_code: Option<ErrCode>,
 }
 
@@ -139,6 +145,7 @@ impl StatusSnapshot {
             ipv6_policy: None,
             interface: None,
             handshake_age_secs: None,
+            cleanup_required: false,
             error_code: None,
         }
     }
@@ -212,6 +219,10 @@ fn main() {
         eprintln!("ripley-vpn-broker: must run as root (CAP_NET_ADMIN); refusing");
         std::process::exit(2);
     }
+
+    // Recover to a safe (fail-closed) state BEFORE we accept any request — the
+    // journal replay must not race an incoming op.
+    state::init();
 
     let listener = match bind_socket(&sock_path) {
         Ok(l) => l,
@@ -434,54 +445,91 @@ fn dispatch(env: Envelope, uid: Uid) -> Response {
     };
 
     match env.request {
-        Request::Status => Response::Ok { id, status: StatusSnapshot::stub() },
+        Request::Status => status_response(id),
 
-        // Parse+validate now (real). A validation failure is InvalidConfig, NOT
-        // Denied (permission) — the caller can distinguish "you may not" from
-        // "this config is bad". The config text is zeroized after parsing. Bring-up
-        // itself lands next (Codex-reviewed) and must install the fail-closed
-        // nftables block BEFORE any route/wg change.
-        Request::Up { config_text } => {
-            match parser::parse_wg_config(config_text.as_str()) {
-                Ok(_cfg) => Response::Error {
-                    id,
-                    code: ErrCode::NotImplemented,
-                    reason: "config valid; bring-up not yet implemented".into(),
-                },
-                Err(e) => Response::InvalidConfig {
-                    id,
-                    code: ErrCode::InvalidConfig,
-                    reason: format!("invalid config: {e}"),
-                },
-            }
-        }
+        // Parse+validate first. A validation failure is InvalidConfig, NOT Denied
+        // (permission) — the caller can distinguish "you may not" from "this
+        // config is bad". `up()` seals the fail-closed nftables block BEFORE any
+        // route/wg change and tears down partial state on any failure.
+        Request::Up { config_text } => match parser::parse_wg_config(config_text.as_str()) {
+            Ok(cfg) => run_op(id, |m| m.up(&cfg)),
+            Err(e) => Response::InvalidConfig {
+                id,
+                code: ErrCode::InvalidConfig,
+                reason: format!("invalid config: {e}"),
+            },
+        },
 
-        Request::DisconnectBlocked => not_implemented(id, "disconnect_blocked"),
+        Request::DisconnectBlocked => run_op(id, |m| m.disconnect_blocked()),
 
         Request::DisconnectAndRestoreClearnet => match strong(uid, &id) {
             Some(deny) => deny,
-            None => not_implemented(id, "disconnect_and_restore_clearnet"),
+            None => run_op(id, |m| m.disconnect_restore()),
         },
-        Request::EnableKillSwitch => not_implemented(id, "enable_kill_switch"),
+        Request::EnableKillSwitch => run_op(id, |m| m.enable_killswitch()),
         Request::DisableKillSwitch => match strong(uid, &id) {
             Some(deny) => deny,
-            None => not_implemented(id, "disable_kill_switch"),
+            None => run_op(id, |m| m.disable_killswitch()),
         },
         Request::EmergencyRestoreClearnet => match strong(uid, &id) {
             Some(deny) => deny,
-            None => not_implemented(id, "emergency_restore_clearnet"),
+            None => run_op(id, |m| m.emergency_restore()),
         },
         // Fail-closed by construction → no strong-auth gate.
-        Request::ReconcileBlockedState => not_implemented(id, "reconcile_blocked_state"),
+        Request::ReconcileBlockedState => run_op(id, |m| m.reconcile_blocked()),
     }
 }
 
-fn not_implemented(id: String, op: &str) -> Response {
-    Response::Error {
-        id,
-        code: ErrCode::NotImplemented,
-        reason: format!("{op}: not yet implemented"),
+/// Build a wire snapshot from the manager's view.
+fn snapshot_from(view: state::View) -> StatusSnapshot {
+    StatusSnapshot {
+        protocol: PROTOCOL,
+        phase: view.phase,
+        egress: view.egress,
+        killswitch_pref: view.ks_pref,
+        killswitch_active: view.ks_active,
+        ipv6_policy: view.ipv6,
+        interface: view.iface,
+        handshake_age_secs: view.handshake_age_secs,
+        cleanup_required: view.cleanup_required,
+        error_code: None,
     }
+}
+
+/// Lock the manager. A POISONED lock means a prior op panicked mid-mutation, so
+/// our in-memory view of the kernel is untrustworthy. We do NOT continue with a
+/// possibly-inconsistent state: we force the fail-closed blackhole block and exit
+/// (systemd restarts us, and boot recovery re-reconciles from the durable
+/// journal). Better to be offline-but-blocked than online-and-uncertain.
+fn lock_manager() -> std::sync::MutexGuard<'static, state::Manager> {
+    match state::manager().lock() {
+        Ok(g) => g,
+        Err(_) => {
+            eprintln!("ripley-vpn-broker: state mutex poisoned — forcing fail-closed and exiting");
+            let _ = killswitch::block_all();
+            std::process::exit(1);
+        }
+    }
+}
+
+fn status_response(id: String) -> Response {
+    // Capture state under the lock, release it, THEN probe the handshake.
+    let base = lock_manager().base();
+    Response::Ok { id, status: snapshot_from(state::finalize(base)) }
+}
+
+/// Run a state-mutating op under the single lock and reply with the resulting
+/// snapshot, or a stable Internal error carrying the op's message. The lock is
+/// released before the (IO-bearing) snapshot is finalized.
+fn run_op(id: String, f: impl FnOnce(&mut state::Manager) -> Result<(), String>) -> Response {
+    let base = {
+        let mut mgr = lock_manager();
+        match f(&mut mgr) {
+            Ok(()) => mgr.base(),
+            Err(reason) => return Response::Error { id, code: ErrCode::Internal, reason },
+        }
+    };
+    Response::Ok { id, status: snapshot_from(state::finalize(base)) }
 }
 
 fn reply(mut stream: &UnixStream, resp: Response) -> std::io::Result<()> {
@@ -494,7 +542,6 @@ fn reply(mut stream: &UnixStream, resp: Response) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::os::unix::net::UnixStream;
 
     #[test]
