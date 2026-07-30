@@ -69,7 +69,8 @@ impl fmt::Display for KeyError {
 /// check are held in zeroizing buffers so no plaintext copy outlives this fn.
 fn decode_key32(s: &str) -> Result<[u8; 32], KeyError> {
     let s = s.trim();
-    let bytes: Zeroizing<Vec<u8>> = Zeroizing::new(STANDARD.decode(s).map_err(|_| KeyError::Base64)?);
+    let bytes: Zeroizing<Vec<u8>> =
+        Zeroizing::new(STANDARD.decode(s).map_err(|_| KeyError::Base64)?);
     if bytes.len() != 32 {
         return Err(KeyError::Len(bytes.len()));
     }
@@ -132,7 +133,9 @@ impl fmt::Display for EndpointError {
             EndpointError::BadPort => write!(f, "invalid port (1..=65535)"),
             EndpointError::EmptyHost => write!(f, "empty host"),
             EndpointError::BadHost => write!(f, "invalid host"),
-            EndpointError::UnbracketedIpv6 => write!(f, "IPv6 endpoint must be bracketed [addr]:port"),
+            EndpointError::UnbracketedIpv6 => {
+                write!(f, "IPv6 endpoint must be bracketed [addr]:port")
+            }
         }
     }
 }
@@ -147,7 +150,10 @@ pub fn parse_endpoint(s: &str) -> Result<Endpoint, EndpointError> {
             return Err(EndpointError::BadHost);
         }
         let port = tail.strip_prefix(':').ok_or(EndpointError::NoPort)?;
-        return Ok(Endpoint { host: EndpointHost::Ip(ip), port: parse_port(port)? });
+        return Ok(Endpoint {
+            host: EndpointHost::Ip(ip),
+            port: parse_port(port)?,
+        });
     }
     let (host, port) = s.rsplit_once(':').ok_or(EndpointError::NoPort)?;
     // An unbracketed colon in the host means someone passed a bare IPv6 literal;
@@ -157,10 +163,16 @@ pub fn parse_endpoint(s: &str) -> Result<Endpoint, EndpointError> {
     }
     let port = parse_port(port)?;
     if let Ok(ip) = IpAddr::from_str(host) {
-        return Ok(Endpoint { host: EndpointHost::Ip(ip), port });
+        return Ok(Endpoint {
+            host: EndpointHost::Ip(ip),
+            port,
+        });
     }
     validate_dns(host)?;
-    Ok(Endpoint { host: EndpointHost::Dns(host.to_ascii_lowercase()), port })
+    Ok(Endpoint {
+        host: EndpointHost::Dns(host.to_ascii_lowercase()),
+        port,
+    })
 }
 
 fn parse_port(p: &str) -> Result<u16, EndpointError> {
@@ -188,7 +200,10 @@ fn validate_dns(host: &str) -> Result<(), EndpointError> {
         if b[0] == b'-' || b[label.len() - 1] == b'-' {
             return Err(EndpointError::BadHost);
         }
-        if !label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
+        if !label
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        {
             return Err(EndpointError::BadHost);
         }
     }
@@ -223,13 +238,20 @@ impl fmt::Display for CidrError {
     }
 }
 
-/// Parse `addr/prefix`. Rejects unspecified (0.0.0.0/::) and multicast — neither
-/// is a valid interface or resolver address.
+/// Parse an interface address. wg-quick explicitly permits the CIDR mask to be
+/// omitted; in that case it is a host address (/32 for IPv4, /128 for IPv6).
+/// Rejects unspecified (0.0.0.0/::) and multicast — neither is valid here.
 pub fn parse_interface_cidr(s: &str) -> Result<Cidr, CidrError> {
-    let (ip, prefix) = s.split_once('/').ok_or(CidrError::Shape)?;
+    let (ip, explicit_prefix) = match s.split_once('/') {
+        Some((ip, prefix)) => (ip, Some(prefix)),
+        None => (s, None),
+    };
     let addr = IpAddr::from_str(ip.trim()).map_err(|_| CidrError::BadIp)?;
-    let p: u16 = prefix.trim().parse().map_err(|_| CidrError::BadPrefix)?;
     let max = if addr.is_ipv4() { 32 } else { 128 };
+    let p: u16 = match explicit_prefix {
+        Some(prefix) => prefix.trim().parse().map_err(|_| CidrError::BadPrefix)?,
+        None => max,
+    };
     // A /0 "interface address" is nonsensical and dangerous once it becomes a
     // route — reject it outright.
     if p == 0 || p > max {
@@ -243,7 +265,10 @@ pub fn parse_interface_cidr(s: &str) -> Result<Cidr, CidrError> {
             return Err(CidrError::Unusable);
         }
     }
-    Ok(Cidr { addr, prefix: p as u8 })
+    Ok(Cidr {
+        addr,
+        prefix: p as u8,
+    })
 }
 
 /// Reject an IP that is unusable as a DNS resolver (unspecified/multicast).
@@ -371,22 +396,60 @@ mod tests {
     }
     #[test]
     fn endpoint_rejects_junk() {
-        for bad in ["http://evil:51820", "bad host:123", "vpn.example:0", "vpn.example:99999", "noport"] {
+        for bad in [
+            "http://evil:51820",
+            "bad host:123",
+            "vpn.example:0",
+            "vpn.example:99999",
+            "noport",
+        ] {
             assert!(parse_endpoint(bad).is_err(), "{bad} should be rejected");
         }
     }
     #[test]
     fn endpoint_rejects_unbracketed_ipv6() {
-        assert_eq!(parse_endpoint("2001:db8::1:51820"), Err(EndpointError::UnbracketedIpv6));
+        assert_eq!(
+            parse_endpoint("2001:db8::1:51820"),
+            Err(EndpointError::UnbracketedIpv6)
+        );
     }
     #[test]
     fn cidr_rejects_unusable() {
         assert_eq!(parse_interface_cidr("0.0.0.0/32"), Err(CidrError::Unusable));
-        assert_eq!(parse_interface_cidr("224.0.0.1/32"), Err(CidrError::Unusable));
-        assert_eq!(parse_interface_cidr("127.0.0.1/32"), Err(CidrError::Unusable));
-        assert_eq!(parse_interface_cidr("255.255.255.255/32"), Err(CidrError::Unusable));
-        assert_eq!(parse_interface_cidr("10.0.0.0/0"), Err(CidrError::BadPrefix));
+        assert_eq!(
+            parse_interface_cidr("224.0.0.1/32"),
+            Err(CidrError::Unusable)
+        );
+        assert_eq!(
+            parse_interface_cidr("127.0.0.1/32"),
+            Err(CidrError::Unusable)
+        );
+        assert_eq!(
+            parse_interface_cidr("255.255.255.255/32"),
+            Err(CidrError::Unusable)
+        );
+        assert_eq!(
+            parse_interface_cidr("10.0.0.0/0"),
+            Err(CidrError::BadPrefix)
+        );
         assert!(parse_interface_cidr("10.0.0.2/32").is_ok());
+    }
+    #[test]
+    fn cidr_accepts_wg_quick_host_addresses_without_masks() {
+        assert_eq!(
+            parse_interface_cidr("10.143.216.101").unwrap(),
+            Cidr {
+                addr: "10.143.216.101".parse().unwrap(),
+                prefix: 32,
+            }
+        );
+        assert_eq!(
+            parse_interface_cidr("fd64:e20:68a3::f:d865").unwrap(),
+            Cidr {
+                addr: "fd64:e20:68a3::f:d865".parse().unwrap(),
+                prefix: 128,
+            }
+        );
     }
     #[test]
     fn secret_debug_redacted() {

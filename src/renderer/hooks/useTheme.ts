@@ -11,7 +11,7 @@ const SKIN_LABELS: Record<Skin, string> = {
   monero: 'Monero',
 };
 
-export function useTheme() {
+export function useTheme(forcedMode?: ThemeMode) {
   const [mode, setModeState] = useState<ThemeMode>(() => {
     const saved = localStorage.getItem('theme-mode');
     return (saved === 'dark' || saved === 'light' || saved === 'system')
@@ -33,6 +33,24 @@ export function useTheme() {
 
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>('dark');
 
+  // Theme state is shared by every local Tauri webview. Dedicated trusted
+  // windows (VPN controls, confirmations) must follow changes made in the main
+  // window instead of freezing whatever was current when they opened.
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.storageArea !== localStorage) return;
+      if (!forcedMode && event.key === 'theme-mode' && (event.newValue === 'dark' || event.newValue === 'light' || event.newValue === 'system')) {
+        setModeState(event.newValue);
+      } else if (event.key === 'contrast' && (event.newValue === 'high' || event.newValue === 'default')) {
+        setContrast(event.newValue);
+      } else if (event.key === 'theme-skin' && (event.newValue === 'terminal' || event.newValue === 'clean' || event.newValue === 'monero')) {
+        setSkinState(event.newValue);
+      }
+    };
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, [forcedMode]);
+
   useEffect(() => {
     const root = window.document.documentElement;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -43,22 +61,23 @@ export function useTheme() {
       root.classList.add(targetTheme);
     };
 
+    const appliedMode = forcedMode ?? mode;
     const handleSystemChange = () => {
-      if (mode === 'system') {
+      if (appliedMode === 'system') {
         applyTheme(mediaQuery.matches ? 'dark' : 'light');
       }
     };
 
-    if (mode === 'system') {
+    if (appliedMode === 'system') {
       applyTheme(mediaQuery.matches ? 'dark' : 'light');
       mediaQuery.addEventListener('change', handleSystemChange);
     } else {
-      applyTheme(mode);
+      applyTheme(appliedMode);
     }
 
-    localStorage.setItem('theme-mode', mode);
+    if (!forcedMode) localStorage.setItem('theme-mode', mode);
     return () => mediaQuery.removeEventListener('change', handleSystemChange);
-  }, [mode]);
+  }, [mode, forcedMode]);
 
   // Apply contrast
   useEffect(() => {

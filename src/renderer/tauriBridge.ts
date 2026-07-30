@@ -143,11 +143,14 @@ function createTauriApi() {
 
     // ── VPN (host-owned control surface) ──
     vpnStatus: () => invoke('vpn_status') as Promise<Record<string, unknown>>,
-    vpnConnect: (configText: string) => invoke('vpn_connect', { configText }) as Promise<Record<string, unknown>>,
+    vpnConnect: (configText: string, profileName?: string) => invoke('vpn_connect', { configText, profileName }) as Promise<Record<string, unknown>>,
     vpnDisconnect: (restore: boolean) => invoke('vpn_disconnect', { restore }) as Promise<Record<string, unknown>>,
     vpnSetKillswitch: (on: boolean) => invoke('vpn_set_killswitch', { on }) as Promise<Record<string, unknown>>,
     vpnRecover: () => invoke('vpn_recover') as Promise<Record<string, unknown>>,
     vpnEmergencyRestore: () => invoke('vpn_emergency_restore') as Promise<Record<string, unknown>>,
+    vpnProfilesLoad: () => invoke('vpn_profiles_load'),
+    vpnProfilesSave: (store: unknown) => invoke('vpn_profiles_save', { store }),
+    vpnProfilesClear: () => invoke('vpn_profiles_clear'),
 
     // ── Event Listeners ──
     onEngineStatus: (callback: any) => {

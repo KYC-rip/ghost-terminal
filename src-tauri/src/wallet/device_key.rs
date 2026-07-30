@@ -287,3 +287,12 @@ pub fn watch_key() -> Option<Zeroizing<[u8; 32]>> {
     let root = g.as_ref()?;
     subkey(root, b"ripley/watch-v1")
 }
+
+/// Key for persisted VPN profile bundles. Profiles contain WireGuard private
+/// keys, so they use the consent-gated keychain root and a separate AEAD domain
+/// from wallet watch data. None means "refuse to persist", never plaintext.
+pub fn vpn_profiles_key() -> Option<Zeroizing<[u8; 32]>> {
+    let g = WATCH_ROOT.lock().ok()?;
+    let root = g.as_ref()?;
+    subkey(root, b"ripley/vpn-profiles-v1")
+}

@@ -10,6 +10,9 @@
     "allow-vpn-disconnect",
     "allow-vpn-set-killswitch",
     "allow-vpn-recover",
-    "allow-vpn-emergency-restore"
+    "allow-vpn-emergency-restore",
+    "allow-vpn-profiles-load",
+    "allow-vpn-profiles-save",
+    "allow-vpn-profiles-clear"
   ]
 }

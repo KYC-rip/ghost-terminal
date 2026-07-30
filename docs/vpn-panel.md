@@ -1,16 +1,24 @@
 # RipleyOS VPN / network-privacy panel — implementation spec
 
 Status: **implemented through native auth/control and the additive ROS transport-policy increment;
-Linux packaging and live broker integration tests remain release work.**
+Linux packaging/integration tests and packaged macOS signing remain release work.**
 Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: RipleyOS (Vite/React PWA) served into the webview.
 
 ## Non-negotiables (from the two Codex reviews)
 
 1. **Tauri IPC is the trust boundary** — `#[tauri::command]` + capabilities replace any localhost helper. Each new command must be added to all three enforcement points: `build.rs` `APP_COMMANDS`, `tauri::generate_handler!` in `lib.rs`, and a capability grant.
 2. **Bump Tauri 2.10.3 → 2.11.1** (remote-origin custom-command ACL fix) before shipping. Requires `cargo update -p tauri --precise 2.11.1` on a machine with the Rust toolchain.
-3. **Never run the Tauri/WebView process as root.** The app + `VpnManager` stay unprivileged. Kernel/network mutations go to a **separate root-owned broker** (own binary/crate) over a Unix socket / D-Bus, with peer-credential/Polkit checks and only `CAP_NET_ADMIN`. The broker accepts **structured operations only** — never shell strings, config paths, or nft snippets. A WebView exploit must not become arbitrary root.
+3. **Never run the Tauri/WebView process as root.** The app stays unprivileged. On Linux,
+   kernel/network mutations go to a separate root-owned broker with peer-credential/Polkit checks
+   and only `CAP_NET_ADMIN`. On macOS, where no Apple signing identity is available for a
+   NetworkExtension during development, each mutation launches a one-shot, administrator-authorized
+   native helper. Both accept structured operations only; imported profile text is parsed into a
+   canonical configuration and is never executed as shell.
 4. **Remote renderer is untrusted.** `ros_remote` (including the localhost dev override) and `ros_local` may read status and *open* a host-owned VPN window, but neither receives mutation commands. The repo's threat model treats even the OTA bundle as untrusted (see the capability files — no fs/shell). Therefore **all VPN mutations (import, connect, disable-kill-switch) require a native, host-owned confirmation window** (mirror the existing wallet-op confirm pattern), not renderer trust.
-5. **v1 = Linux only.** macOS (NetworkExtension) and Windows (WFP) are later.
+5. **Host support:** Linux uses the persistent broker. macOS uses upstream Homebrew
+   `wireguard-tools` plus a per-action authorization prompt and a dedicated PF anchor. A signed
+   NetworkExtension remains the preferred packaged macOS architecture once Apple entitlements are
+   available. Windows (WFP) is later.
 6. **VPN-over-Tor is OUT of v1.** Plain WireGuard and the supplied OpenVPN profiles use UDP; Tor carries TCP streams only. VPN-over-Tor needs a UDP-over-TCP/obfuscation transport = separate project. **Tor-over-VPN** (ROS's Arti traffic inside an established host VPN) is the supported variant.
 
 ## Components
@@ -30,6 +38,23 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
 - `vpn_open_window` creates/focuses a dedicated local `vpn-control` webview. That window has its
   own narrow capability and never loads ROS/remote content. Mutations require confirmation there;
   the ROS renderer can only request that this host surface be shown.
+
+### macOS one-shot backend
+- Requires `brew install wireguard-tools`; resolves only fixed Homebrew tool paths.
+- The same signed native executable enters `--vpn-macos-helper` before Tauri starts, after an
+  administrator prompt. It accepts one request on a random mode-0600 Unix socket, verifies the
+  connecting uid with `getpeereid`, replies, and exits.
+- The shared strict WireGuard parser renders a canonical root-only config. No profile/private key
+  appears in argv; the transient file is replaced with a key-free stub immediately after bring-up.
+- PF anchor `com.apple/ripley-vpn` is enabled and loaded before `wg-quick up`, allowing only
+  loopback, DHCP/NDP, and the pinned endpoint. The live `utun` is allowed only after it is observed.
+  A first-connect failure (including no handshake within 15 seconds) automatically tears down the
+  attempted interface and flushes the anchor back to clearnet. Only a failed cleanup is retained as
+  `ERROR_BLOCKED`/cleanup-required, with an Emergency restore path.
+- Public status is readable without prompting. Connect, disconnect, kill-switch, and recovery
+  mutations require a fresh macOS administrator authorization. Every mutation start, terminal
+  phase, and exact error/restoration result is emitted through `core-log` into RipleyOS's integrated
+  system console as well as stdout.
 
 ### Capabilities
 - `ros_remote.json`: read status + open the host window only; no mutation perms.
@@ -81,7 +106,7 @@ silently delivering the opposite chain.
 - Disconnect with kill-switch on = stays offline; restoring clearnet needs the host-owned confirm.
 - `vpn_recover` clears stale rules (also an uninstall step).
 
-## DNS / IPv6 (Linux v1)
+## DNS / IPv6 (Linux)
 - Target `systemd-resolved` per-link DNS with route-only `~.`; do **not** overwrite `/etc/resolv.conf`.
 - Allow configured DNS only through the tunnel; block phys-iface DNS on TCP/UDP 53 + 853.
 - Resolve the endpoint before sealing egress, then pin the resolved address.
@@ -91,10 +116,12 @@ silently delivering the opposite chain.
 ## Status state machine
 `DISCONNECTED_OPEN · DISCONNECTED_BLOCKED · CONNECTING_BLOCKED · CONNECTED · DEGRADED_BLOCKED · ERROR_BLOCKED`
 
-## Linux-v1 release blockers
+## Linux release blockers
 Trusted local renderer only · unprivileged Tauri + minimal broker · Tauri 2.11.1 · defined resolver/distro matrix · crash/reboot/uninstall recovery · integration tests: forced interface-drop, endpoint-change, DNS, IPv6, suspend/resume, concurrent-command.
 
 ## Build note
-The unprivileged Tauri client compiles on macOS, and the Linux broker is checked against its Linux
-target. Live nftables/WireGuard/Polkit integration still requires a disposable Linux VM and remains
-a release gate; unit checks alone do not prove kernel-route behaviour.
+The macOS backend compiles and its canonicalization/PF syntax tests run against the host `pfctl`.
+An end-to-end connect still needs an operator-approved live profile test, and a packaged release
+needs an Apple signing identity. The Linux broker is checked against its Linux target; live
+nftables/WireGuard/Polkit integration still requires a disposable Linux VM and remains a release
+gate. Unit checks alone do not prove kernel-route behaviour on either platform.

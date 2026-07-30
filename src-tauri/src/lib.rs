@@ -6,9 +6,11 @@
 
 mod agent;
 mod commands;
-mod wallet;
 mod tor;
 mod updater;
+#[cfg(target_os = "macos")]
+pub mod vpn_macos;
+mod wallet;
 
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -30,27 +32,41 @@ pub fn emit_log(app: &AppHandle, source: &str, level: &str, message: &str) {
     if source != "SYNC_DATA" && source != "TOR_STATUS" && source != "BALANCE_DATA" {
         println!("[{}/{}] {}", source, level, message);
     }
-    let _ = app.emit("core-log", serde_json::json!({
-        "source": source,
-        "level": level,
-        "message": message,
-    }));
+    let _ = app.emit(
+        "core-log",
+        serde_json::json!({
+            "source": source,
+            "level": level,
+            "message": message,
+        }),
+    );
 }
 
 /// Push a balance update to the frontend (piconero). Piggybacked on core-log with
 /// source "BALANCE_DATA" (same workaround as sync status), message "total|unlocked".
 /// The renderer maps this to a BALANCE_CHANGED event.
 pub fn emit_balance(app: &AppHandle, total: u64, unlocked: u64) {
-    let _ = app.emit("core-log", serde_json::json!({
-        "source": "BALANCE_DATA",
-        "level": "info",
-        "message": format!("{}|{}", total, unlocked),
-    }));
+    let _ = app.emit(
+        "core-log",
+        serde_json::json!({
+            "source": "BALANCE_DATA",
+            "level": "info",
+            "message": format!("{}|{}", total, unlocked),
+        }),
+    );
 }
 
 /// Emit sync status through the core-log channel (workaround for custom events
 /// not reaching JS listeners from background tokio tasks in Tauri v2).
-pub fn emit_sync_status(app: &AppHandle, status: &str, height: u64, daemon_height: u64, percent: f64, node_label: &str, scan_start: u64) {
+pub fn emit_sync_status(
+    app: &AppHandle,
+    status: &str,
+    height: u64,
+    daemon_height: u64,
+    percent: f64,
+    node_label: &str,
+    scan_start: u64,
+) {
     // Fields: status|height|daemon_height|percent|node|scan_start. scan_start is the
     // height this sync began from (restore baseline) so the UI can show progress
     // RELATIVE to the restore range, not to the whole chain.
@@ -512,6 +528,9 @@ pub fn run() {
             commands::vpn::vpn_recover,
             commands::vpn::vpn_emergency_restore,
             commands::vpn::vpn_open_window,
+            commands::vpn::vpn_profiles_load,
+            commands::vpn::vpn_profiles_save,
+            commands::vpn::vpn_profiles_clear,
             // Vigil (limit-order persistence)
             commands::vigil::vigil_save_strike_key,
             commands::vigil::vigil_get_strike_key,

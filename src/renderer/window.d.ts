@@ -60,11 +60,22 @@ export interface WalletActionResponse {
 export interface IApi {
   // --- VPN (native host only; absent in the legacy Electron shell) ---
   vpnStatus?: () => Promise<Record<string, unknown>>;
-  vpnConnect?: (configText: string) => Promise<Record<string, unknown>>;
+  vpnConnect?: (configText: string, profileName?: string) => Promise<Record<string, unknown>>;
   vpnDisconnect?: (restore: boolean) => Promise<Record<string, unknown>>;
   vpnSetKillswitch?: (on: boolean) => Promise<Record<string, unknown>>;
   vpnRecover?: () => Promise<Record<string, unknown>>;
   vpnEmergencyRestore?: () => Promise<Record<string, unknown>>;
+  vpnProfilesLoad?: () => Promise<{
+    v: 1;
+    selectedProfileId: string | null;
+    profiles: import('./vpnProfiles').VpnProfile[];
+  } | null>;
+  vpnProfilesSave?: (store: {
+    v: 1;
+    selectedProfileId: string | null;
+    profiles: import('./vpnProfiles').VpnProfile[];
+  }) => Promise<void>;
+  vpnProfilesClear?: () => Promise<void>;
   onVpnOpen?: (callback: () => void) => () => void;
 
   // --- Config & Settings ---

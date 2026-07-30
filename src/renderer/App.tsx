@@ -721,15 +721,25 @@ export default function App() {
   // browser or identity UI. Its Tauri capability is independently restricted
   // to the structured VPN broker commands.
   if (new URLSearchParams(window.location.search).get('vpn-control') === '1') {
-    return (
-      <div className="min-h-screen bg-xmr-base p-6 text-xmr-text">
-        <VpnView />
-      </div>
-    );
+    return <VpnControlApp />;
   }
   return (
     <VaultProvider>
       <MainApp />
     </VaultProvider>
+  );
+}
+
+function VpnControlApp() {
+  // Apply the exact same mode, skin and contrast tokens as the main native
+  // window. A trusted, allow-listed hint supplied by the ROS opener takes
+  // precedence without overwriting the native renderer's own preference.
+  const rawTheme = new URLSearchParams(window.location.search).get('theme');
+  const theme = rawTheme === 'light' || rawTheme === 'dark' || rawTheme === 'system' ? rawTheme : undefined;
+  useTheme(theme);
+  return (
+    <div className="min-h-screen bg-xmr-base p-6 text-xmr-text transition-colors duration-300">
+      <VpnView />
+    </div>
   );
 }

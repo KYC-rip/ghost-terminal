@@ -105,6 +105,9 @@ const APP_COMMANDS: &[&str] = &[
     "vpn_recover",
     "vpn_emergency_restore",
     "vpn_open_window",
+    "vpn_profiles_load",
+    "vpn_profiles_save",
+    "vpn_profiles_clear",
     // Vigil (limit-order persistence)
     "vigil_save_strike_key",
     "vigil_get_strike_key",

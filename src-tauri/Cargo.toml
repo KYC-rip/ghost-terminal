@@ -28,6 +28,8 @@ block2 = "0.6"
 # Native Local AI: llama.cpp with Metal keeps inference out of the WKWebView
 # (where WebGPU is unavailable) and offloads the full quantized model to Apple GPU.
 llama-cpp-2 = { version = "0.1.152", default-features = false, features = ["metal", "sampler"] }
+ripley-vpn-broker = { path = "../broker" }
+libc = "0.2"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # CPU fallback for the native shells on platforms where we have not enabled a

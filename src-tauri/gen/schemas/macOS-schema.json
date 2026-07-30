@@ -2781,6 +2781,24 @@
           "markdownDescription": "Enables the vpn_open_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the vpn_profiles_clear command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-profiles-clear",
+          "markdownDescription": "Enables the vpn_profiles_clear command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vpn_profiles_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-profiles-load",
+          "markdownDescription": "Enables the vpn_profiles_load command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vpn_profiles_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-profiles-save",
+          "markdownDescription": "Enables the vpn_profiles_save command without any pre-configured scope."
+        },
+        {
           "description": "Enables the vpn_recover command without any pre-configured scope.",
           "type": "string",
           "const": "allow-vpn-recover",
@@ -3397,6 +3415,24 @@
           "type": "string",
           "const": "deny-vpn-open-window",
           "markdownDescription": "Denies the vpn_open_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_profiles_clear command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-profiles-clear",
+          "markdownDescription": "Denies the vpn_profiles_clear command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_profiles_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-profiles-load",
+          "markdownDescription": "Denies the vpn_profiles_load command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_profiles_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-profiles-save",
+          "markdownDescription": "Denies the vpn_profiles_save command without any pre-configured scope."
         },
         {
           "description": "Denies the vpn_recover command without any pre-configured scope.",

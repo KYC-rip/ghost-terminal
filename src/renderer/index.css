@@ -3,6 +3,7 @@
 @theme {
   --color-xmr-base: var(--bg-primary);
   --color-xmr-surface: var(--bg-panel);
+  --color-xmr-text: var(--text-primary);
   --color-xmr-green: var(--brand-color);
   --color-xmr-dim: var(--text-dim);
   --color-xmr-accent: var(--text-accent);

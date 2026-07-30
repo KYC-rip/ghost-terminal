@@ -85,6 +85,7 @@
     "@tauri-apps/plugin-shell": "2.3.5",
     "electron-store": "11.0.2",
     "ethers": "6.16.0",
+    "fflate": "^0.8.3",
     "framer-motion": "12.34.0",
     "js-yaml": "4.1.1",
     "lightweight-charts": "5.1.0",
