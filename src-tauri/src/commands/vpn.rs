@@ -16,12 +16,17 @@
 //!     are NOT granted to the renderer; they are invokable only from the native
 //!     host window (the trusted, host-owned confirmation surface).
 
-use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
     time::Duration,
+};
+use std::{
+    net::IpAddr,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Instant,
 };
 
 use chacha20poly1305::{
@@ -206,7 +211,7 @@ fn valid_computed_radius(value: &str) -> bool {
         .is_ok_and(|n| n.is_finite() && (0.0..=48.0).contains(&n))
 }
 
-fn theme_script(theme: Option<&str>, tokens: Option<&VpnThemeTokens>) -> String {
+fn theme_script(theme: Option<&str>, tokens: Option<&VpnThemeTokens>, locale: Option<&str>) -> String {
     let mut vars = Map::new();
     if let Some(t) = tokens {
         let colors = [
@@ -245,6 +250,7 @@ fn theme_script(theme: Option<&str>, tokens: Option<&VpnThemeTokens>) -> String 
     let vars = serde_json::to_string(&vars).unwrap_or_else(|_| "{}".into());
     let theme =
         serde_json::to_string(theme.unwrap_or("system")).unwrap_or_else(|_| "\"system\"".into());
+    let locale = serde_json::to_string(locale.unwrap_or("en")).unwrap_or_else(|_| "\"en\"".into());
     format!(
         r#"(()=>{{
 const apply=()=>{{
@@ -258,6 +264,8 @@ const apply=()=>{{
   const vars={vars};
   for(const [name,value] of Object.entries(vars)) root.style.setProperty(name,value);
   root.dataset.rosThemeBridge='1';
+  window.__ripleyVpnLocale={locale};
+  window.dispatchEvent(new CustomEvent('ripley-vpn-locale-changed',{{detail:{locale}}}));
 }};
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',apply,{{once:true}});
 else apply();
@@ -367,6 +375,96 @@ pub async fn vpn_status() -> Result<Value, String> {
     call(json!({ "op": "status" })).await
 }
 
+fn probe_host(endpoint: &str) -> Result<String, String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() || endpoint.len() > 320 || endpoint.bytes().any(|b| b.is_ascii_control())
+    {
+        return Err("invalid VPN endpoint".into());
+    }
+    let (host, port) = if let Some(rest) = endpoint.strip_prefix('[') {
+        let (host, tail) = rest
+            .split_once(']')
+            .ok_or_else(|| "invalid IPv6 VPN endpoint".to_string())?;
+        let port = tail
+            .strip_prefix(':')
+            .ok_or_else(|| "VPN endpoint has no port".to_string())?;
+        (host, port)
+    } else {
+        endpoint
+            .rsplit_once(':')
+            .ok_or_else(|| "VPN endpoint has no port".to_string())?
+    };
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| "invalid VPN endpoint port".to_string())?;
+    if port == 0 || host.is_empty() {
+        return Err("invalid VPN endpoint".into());
+    }
+    if host.parse::<IpAddr>().is_err()
+        && (host.len() > 253
+            || host.starts_with('-')
+            || host.ends_with('-')
+            || !host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')))
+    {
+        return Err("invalid VPN endpoint host".into());
+    }
+    Ok(host.to_string())
+}
+
+fn ping_millis(host: &str) -> Option<u64> {
+    let started = Instant::now();
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("/sbin/ping");
+    #[cfg(target_os = "macos")]
+    command.args(["-n", "-c", "1", "-W", "1000", host]);
+    #[cfg(target_os = "linux")]
+    let mut command = Command::new("/usr/bin/ping");
+    #[cfg(target_os = "linux")]
+    command.args(["-n", "-c", "1", "-W", "1", host]);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return None;
+    let result = command.env_clear().output().ok()?;
+    if !result.status.success() {
+        return None;
+    }
+    let output = String::from_utf8_lossy(&result.stdout);
+    output
+        .split("time=")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| value.round().max(1.0) as u64)
+        .or_else(|| Some(started.elapsed().as_millis().max(1).min(u64::MAX as u128) as u64))
+}
+
+/// Latency probe for the trusted native VPN picker. Inputs are reduced to validated
+/// endpoint hosts before spawning `ping`; no renderer text is ever interpreted by a shell.
+#[tauri::command]
+pub async fn vpn_probe_endpoints(endpoints: Vec<String>) -> Result<Vec<Option<u64>>, String> {
+    if endpoints.len() > MAX_PROFILE_COUNT {
+        return Err(format!("speed test exceeds {MAX_PROFILE_COUNT} endpoints"));
+    }
+    let hosts = endpoints
+        .iter()
+        .map(|endpoint| probe_host(endpoint))
+        .collect::<Result<Vec<_>, _>>()?;
+    let probes = hosts
+        .into_iter()
+        .map(|host| tauri::async_runtime::spawn_blocking(move || ping_millis(&host)))
+        .collect::<Vec<_>>();
+    let mut results = Vec::with_capacity(probes.len());
+    for probe in probes {
+        results.push(
+            probe
+                .await
+                .map_err(|e| format!("VPN speed probe failed: {e}"))?,
+        );
+    }
+    Ok(results)
+}
+
 /// Bring the tunnel up from raw `.conf` text. The broker parses+validates it
 /// (parse-as-data) and seals the fail-closed egress block before any wg/route
 /// change. Host-window only.
@@ -386,12 +484,7 @@ pub async fn vpn_connect(
     // receives only its strict protocol fields.
     #[cfg(not(target_os = "macos"))]
     let request = json!({ "op": "up", "config_text": config_text });
-    logged_mutation(
-        &app,
-        "Connect",
-        request,
-    )
-    .await
+    logged_mutation(&app, "Connect", request).await
 }
 
 /// Tear down the tunnel. `restore = false` keeps the egress block (fail-closed);
@@ -530,6 +623,7 @@ pub async fn vpn_open_window(
     theme: Option<String>,
     tokens: Option<VpnThemeTokens>,
     reveal: Option<bool>,
+    locale: Option<String>,
 ) -> Result<(), String> {
     // Appearance is the only renderer-provided data accepted here. Theme is
     // allow-listed; tokens are validated computed colors/radii and mapped onto
@@ -540,8 +634,12 @@ pub async fn vpn_open_window(
         Some("system") => Some("system"),
         _ => None,
     };
+    let locale = locale
+        .as_deref()
+        .filter(|value| matches!(*value, "en" | "es" | "ru" | "zh" | "ja" | "fa"))
+        .unwrap_or("en");
     let reveal = reveal.unwrap_or(true);
-    let script = theme_script(theme, tokens.as_ref());
+    let script = theme_script(theme, tokens.as_ref(), Some(locale));
     if let Some(win) = app.get_webview_window("vpn-control") {
         let _ = win.eval(script);
         if reveal {
@@ -556,15 +654,29 @@ pub async fn vpn_open_window(
         return Ok(());
     }
 
-    let url = match theme {
+    let query = match theme {
         Some(theme) => format!("index.html?vpn-control=1&theme={theme}"),
         None => "index.html?vpn-control=1".to_string(),
     };
-    tauri::WebviewWindowBuilder::new(&app, "vpn-control", tauri::WebviewUrl::App(url.into()))
+    // In a ROS-mode dev session the app's default dev URL points at the ROS
+    // renderer (:5174), which intentionally does not contain the trusted
+    // classic VPN control surface. Keep production on the bundled App URL;
+    // only debug builds use the classic renderer's fixed dev server (:5173).
+    #[cfg(debug_assertions)]
+    let url = std::env::var("VPN_CONTROL_DEV_URL")
+        .ok()
+        .filter(|value| value.starts_with("http://localhost:5173/"))
+        .map(|base| format!("{base}{query}"))
+        .and_then(|raw| raw.parse::<tauri::Url>().ok())
+        .map(tauri::WebviewUrl::External)
+        .unwrap_or_else(|| tauri::WebviewUrl::App(query.clone().into()));
+    #[cfg(not(debug_assertions))]
+    let url = tauri::WebviewUrl::App(query.into());
+    tauri::WebviewWindowBuilder::new(&app, "vpn-control", url)
         .initialization_script(script)
         .title("Ripley VPN · host-wide controls")
-        .inner_size(680.0, 820.0)
-        .min_inner_size(560.0, 640.0)
+        .inner_size(900.0, 760.0)
+        .min_inner_size(420.0, 560.0)
         .build()
         .map_err(|e| format!("open VPN controls: {e}"))?;
     Ok(())
@@ -590,6 +702,7 @@ mod capability_tests {
     #[test]
     fn ros_capabilities_cannot_mutate_the_host_vpn() {
         let forbidden = [
+            "allow-vpn-probe-endpoints",
             "allow-vpn-connect",
             "allow-vpn-disconnect",
             "allow-vpn-set-killswitch",
@@ -619,6 +732,7 @@ mod capability_tests {
     fn dedicated_local_control_window_has_only_structured_vpn_commands() {
         let p = permissions(include_str!("../../capabilities/vpn_control.json"));
         assert!(p.iter().all(|v| v.starts_with("allow-vpn-")));
+        assert!(p.contains(&"allow-vpn-probe-endpoints".to_string()));
         assert!(p.contains(&"allow-vpn-emergency-restore".to_string()));
         assert!(!p.contains(&"allow-vpn-open-window".to_string()));
     }
@@ -666,7 +780,7 @@ mod capability_tests {
             radius_md: "12px".into(),
             radius_lg: "18px".into(),
         };
-        let script = theme_script(Some("light"), Some(&t));
+        let script = theme_script(Some("light"), Some(&t), Some("en"));
         assert!(script.contains("\"--brand-color\":\"rgb(255, 100, 160)\""));
         assert!(script.contains("\"--skin-radius-md\":\"12px\""));
         assert!(!script.contains("url("));

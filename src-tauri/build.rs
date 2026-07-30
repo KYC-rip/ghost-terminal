@@ -99,6 +99,7 @@ const APP_COMMANDS: &[&str] = &[
     "restart_tor",
     // VPN (unprivileged client of the root-owned broker)
     "vpn_status",
+    "vpn_probe_endpoints",
     "vpn_connect",
     "vpn_disconnect",
     "vpn_set_killswitch",

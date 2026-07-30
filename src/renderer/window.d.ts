@@ -60,6 +60,7 @@ export interface WalletActionResponse {
 export interface IApi {
   // --- VPN (native host only; absent in the legacy Electron shell) ---
   vpnStatus?: () => Promise<Record<string, unknown>>;
+  vpnProbeEndpoints?: (endpoints: string[]) => Promise<Array<number | null>>;
   vpnConnect?: (configText: string, profileName?: string) => Promise<Record<string, unknown>>;
   vpnDisconnect?: (restore: boolean) => Promise<Record<string, unknown>>;
   vpnSetKillswitch?: (on: boolean) => Promise<Record<string, unknown>>;

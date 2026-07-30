@@ -122,6 +122,8 @@ impl MacState {
             "killswitch_active": self.killswitch_active,
             "interface": self.interface,
             "handshake_age_secs": self.handshake_age_secs,
+            "received_bytes": Value::Null,
+            "sent_bytes": Value::Null,
             "cleanup_required": self.cleanup_required,
             "backend": self.backend,
             "profile_name": self.profile_name,
@@ -136,9 +138,9 @@ fn clean_profile_name(value: Option<String>) -> Option<String> {
     let value = value?.trim().to_string();
     if value.is_empty()
         || value.len() > 80
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'.' | b'_' | b'-' | b'(' | b')'))
+        || !value.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b' ' | b'.' | b'_' | b'-' | b'(' | b')')
+        })
     {
         return None;
     }
@@ -564,6 +566,28 @@ fn handshake_age(interface: &str) -> Option<u64> {
         .filter(|stamp| *stamp > 0)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     Some(now.saturating_sub(latest))
+}
+
+fn transfer_counters(interface: &str) -> Option<(u64, u64)> {
+    let wg = tool("wg").ok()?;
+    let output = run_capture(&wg, &["show", interface, "transfer"], None).ok()?;
+    let counters = output.lines().fold((0_u64, 0_u64), |totals, line| {
+        let mut fields = line.split_whitespace();
+        let _public_key = fields.next();
+        let received = fields
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let sent = fields
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        (
+            totals.0.saturating_add(received),
+            totals.1.saturating_add(sent),
+        )
+    });
+    Some(counters)
 }
 
 fn await_handshake(interface: &str) -> Option<u64> {
@@ -1083,6 +1107,8 @@ pub fn status() -> Value {
             "killswitch_active": true,
             "interface": interface,
             "handshake_age_secs": null,
+            "received_bytes": null,
+            "sent_bytes": null,
             "cleanup_required": false,
             "backend": "wireguard-go · macOS",
             "profile_name": null,
@@ -1095,9 +1121,13 @@ pub fn status() -> Value {
         value.get("phase").and_then(Value::as_str),
         Some("connected" | "degraded_blocked")
     ) {
-        if let Some(interface) = value.get("interface").and_then(Value::as_str) {
+        if let Some(interface) = value
+            .get("interface")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        {
             let live = Command::new("/sbin/ifconfig")
-                .arg(interface)
+                .arg(&interface)
                 .env_clear()
                 .output()
                 .map(|output| output.status.success())
@@ -1105,9 +1135,15 @@ pub fn status() -> Value {
             if !live {
                 value["phase"] = Value::String("error_blocked".into());
                 value["cleanup_required"] = Value::Bool(true);
-            } else if let Some(age) = handshake_age(interface) {
-                value["phase"] = Value::String("connected".into());
-                value["handshake_age_secs"] = Value::Number(age.into());
+            } else {
+                if let Some(age) = handshake_age(&interface) {
+                    value["phase"] = Value::String("connected".into());
+                    value["handshake_age_secs"] = Value::Number(age.into());
+                }
+                if let Some((received, sent)) = transfer_counters(&interface) {
+                    value["received_bytes"] = Value::Number(received.into());
+                    value["sent_bytes"] = Value::Number(sent.into());
+                }
             }
         }
     }
