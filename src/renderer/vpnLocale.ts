@@ -61,6 +61,18 @@ Object.assign(translations.zh, {
   clearnetEgress: '明網出口', clearnetBlocked: '已封鎖', clearnetOpen: '開啟', killSwitch: '終止開關', activeStatus: '啟用', inactiveStatus: '關閉',
   handshake: '握手', egress: '出口', hostWideTitle: '整台主機的網路控制', endSession: '結束此工作階段', profilePreview: '設定檔預覽', copyConfig: '複製已遮蔽的設定',
   openvpnLoaded: '已載入 OpenVPN 設定檔', removeProfile: '移除設定檔', cancel: '取消', confirm: '確認',
+  hostNote: '這裡僅顯示唯讀狀態；VPN 變更需要受信任的原生主機視窗。',
+  openvpnUnsupported: '設定檔已加密但可檢視，目前 broker 只能連線 WireGuard。OpenVPN 需要獨立的故障安全 broker 狀態機。',
+  hostWideBody: 'WireGuard 路由與終止開關會套用到整台電腦，而不只是 RipleyOS。在通道恢復或明確重新開啟明網前，其他應用程式與使用者的流量會經由 VPN，或遭到封鎖。',
+  reconnectOrRestore: '故障安全機制正在封鎖出口。請重新連線，或明確恢復明網。',
+  clearnetConnecting: '目前使用明網。連線時會先安裝整台主機的封鎖，再啟動通道。',
+  stayBlockedHint: '保持封鎖', stayBlockedBody: '會拆除通道，但維持故障安全的出口封鎖。', restoreHint: '恢復明網', restoreClearnetBody: '會重新開啟直接流量，並暴露這台機器的真實 IP。',
+  connectQ: '連線 VPN？', connectBody: '這會改變整台電腦的路由。broker 會先安裝整台主機的故障安全封鎖，再啟動 WireGuard。',
+  disconnectQ: '斷線並保持封鎖？', disconnectBody: '這會拆除 WireGuard，但保留整台主機的出口封鎖。重新恢復明網或重新連線前，其他應用程式都會保持離線。',
+  restoreQ: '恢復明網？', restoreBody: '斷開通道後，重新開啟整台電腦的非 VPN 網路。',
+  disableQ: '停用終止開關？', disableBody: '這會移除整台主機的封鎖。若 VPN 未連線，任何應用程式的流量都可能經由明網離開。',
+  recoverQ: '復原封鎖狀態？', recoverBody: 'broker 會讓整台電腦回到離線且封鎖的狀態。',
+  emergencyQ: '緊急恢復明網？', emergencyBody: 'BREAK GLASS：即使清理狀態不完整，也強制拆除通道並移除整台主機的封鎖。其他應用程式可能立即恢復明網流量。',
 });
 
 export function createVpnTranslator(locale: string | null | undefined): (key: string, vars?: Record<string, string | number>) => string {
