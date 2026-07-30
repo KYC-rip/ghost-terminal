@@ -1,11 +1,14 @@
-use tauri::{AppHandle, Manager, State};
 use crate::emit_log;
-use crate::wallet::{WalletState, BlockScanner, MoneroAccount, SubaddressInfo, Transaction, WalletOutput, PreparedTx, SyncStatus, TxDestination};
 use crate::wallet::transact;
+use crate::wallet::{
+    BlockScanner, MoneroAccount, PreparedTx, SubaddressInfo, SyncStatus, Transaction,
+    TxDestination, WalletOutput, WalletState,
+};
+use monero_address::MoneroAddress;
 use monero_daemon_rpc::prelude::*;
 use monero_daemon_rpc::{HttpTransport, MoneroDaemon};
-use monero_address::MoneroAddress;
 use monero_oxide::transaction::Timelock;
+use tauri::{AppHandle, Manager, State};
 
 // ── Wallet Lifecycle ──
 
@@ -17,7 +20,9 @@ pub async fn create_wallet(
     seed: Option<String>,
     restore_height: Option<u64>,
 ) -> Result<serde_json::Value, String> {
-    let mnemonic = state.create_wallet(&name, &password, seed.as_deref(), restore_height).await?;
+    let mnemonic = state
+        .create_wallet(&name, &password, seed.as_deref(), restore_height)
+        .await?;
     Ok(serde_json::json!({ "success": true, "seed": mnemonic }))
 }
 
@@ -29,7 +34,12 @@ pub async fn open_wallet(
     name: String,
     password: String,
 ) -> Result<serde_json::Value, String> {
-    emit_log(&app, "Wallet", "info", &format!("🔓 Unlocking vault: {}...", name));
+    emit_log(
+        &app,
+        "Wallet",
+        "info",
+        &format!("🔓 Unlocking vault: {}...", name),
+    );
 
     // Light re-unlock: if this same wallet is already resident with a live
     // background scanner (soft-locked), just restore the spend key and keep the
@@ -38,24 +48,49 @@ pub async fn open_wallet(
     if state.is_active_identity(&name).await && state.has_scanner().await {
         state.restore_spend_key(&name, &password).await?;
         refresh_pool(&app, &state, &pool, &name, &password).await;
-        emit_log(&app, "Wallet", "success", "✅ Vault re-unlocked — background sync continued.");
+        emit_log(
+            &app,
+            "Wallet",
+            "success",
+            "✅ Vault re-unlocked — background sync continued.",
+        );
         return Ok(serde_json::json!({ "success": true }));
     }
 
     state.unlock(&name, &password).await?;
-    emit_log(&app, "Wallet", "success", "✅ Vault unlocked. Deriving keys...");
+    emit_log(
+        &app,
+        "Wallet",
+        "success",
+        "✅ Vault unlocked. Deriving keys...",
+    );
 
     // Spend-detection sanity: log whether the spend key derives the (already cached)
     // outputs' keys. Fires immediately on unlock — no rescan needed. Filter "KIDIAG".
     if let Some(diag) = state.first_output_kidiag().await {
-        emit_log(&app, "Wallet", "warn", &format!("🔧 KIDIAG-sanity (on unlock) {}", diag));
+        emit_log(
+            &app,
+            "Wallet",
+            "warn",
+            &format!("🔧 KIDIAG-sanity (on unlock) {}", diag),
+        );
     }
 
     let scan_height = state.get_scan_height().await;
     if scan_height == u64::MAX {
-        emit_log(&app, "Sync", "info", "📦 New wallet — starting scanner near daemon tip...");
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            "📦 New wallet — starting scanner near daemon tip...",
+        );
     } else {
-        emit_log(&app, "Sync", "info", &format!("📦 Resuming scan from height {}...", scan_height));
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            &format!("📦 Resuming scan from height {}...", scan_height),
+        );
     }
 
     let app_clone = app.clone();
@@ -68,8 +103,13 @@ pub async fn open_wallet(
     if crate::wallet::scanner::read_config_bool(&app, "watchSync") {
         match state.derive_view_pair_and_parts_for(&name, &password).await {
             Ok((_vp, spend_pub, view_sec)) => {
-                let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                if let Err(e) = crate::wallet::storage::save_watch(&data_dir, &name, &spend_pub, &view_sec) {
+                let data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if let Err(e) =
+                    crate::wallet::storage::save_watch(&data_dir, &name, &spend_pub, &view_sec)
+                {
                     log::warn!("watch store write for {name} failed: {e}");
                 }
             }
@@ -102,17 +142,24 @@ pub(crate) async fn refresh_pool(
     pool.stop(active_id).await;
 
     let watch_on = crate::wallet::scanner::read_config_bool(app, "watchSync");
-    let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
     for id in crate::commands::identity::identity_ids(app) {
         if id == active_id {
             continue;
         }
         // Same-password wallets decrypt; others are skipped (start when opened).
-        if let Ok((view_pair, spend_pub, view_sec)) = state.derive_view_pair_and_parts_for(&id, password).await {
+        if let Ok((view_pair, spend_pub, view_sec)) =
+            state.derive_view_pair_and_parts_for(&id, password).await
+        {
             // Watch tier: pooled identities persist their view pair too, so the
             // next launch boot-syncs them all (encrypt-or-don't-write inside).
             if watch_on {
-                if let Err(e) = crate::wallet::storage::save_watch(&data_dir, &id, &spend_pub, &view_sec) {
+                if let Err(e) =
+                    crate::wallet::storage::save_watch(&data_dir, &id, &spend_pub, &view_sec)
+                {
                     log::warn!("watch store write for {id} failed: {e}");
                 }
             }
@@ -214,7 +261,12 @@ pub async fn get_height(state: State<'_, WalletState>) -> Result<u64, String> {
 #[tauri::command]
 pub async fn reselect_node(app: AppHandle, state: State<'_, WalletState>) -> Result<(), String> {
     let height = state.get_sync_status().await.height;
-    emit_log(&app, "Network", "info", "🔄 Re-selecting node — racing for a fresh connection…");
+    emit_log(
+        &app,
+        "Network",
+        "info",
+        "🔄 Re-selecting node — racing for a fresh connection…",
+    );
     crate::wallet::scanner::BlockScanner::start(app.clone(), "", "", height).await
 }
 
@@ -236,7 +288,10 @@ pub async fn create_subaddress(
     account_index: Option<u32>,
 ) -> Result<String, String> {
     let info = state
-        .create_subaddress(account_index.unwrap_or(0), label.as_deref().unwrap_or("Payment"))
+        .create_subaddress(
+            account_index.unwrap_or(0),
+            label.as_deref().unwrap_or("Payment"),
+        )
         .await?;
     Ok(info.address)
 }
@@ -248,7 +303,9 @@ pub async fn set_subaddress_label(
     label: String,
     account_index: u32,
 ) -> Result<(), String> {
-    state.set_subaddress_label(account_index, index, &label).await;
+    state
+        .set_subaddress_label(account_index, index, &label)
+        .await;
     Ok(())
 }
 
@@ -289,7 +346,11 @@ async fn prepare_with_failover(
     let mode = crate::wallet::scanner::read_routing_mode(app);
     // ClearnetConnector reads the "clearnet" node section; Tor and custom-proxy
     // both dial the .onion ("tor") section.
-    let section = if mode == "clearnet" { "clearnet" } else { "tor" };
+    let section = if mode == "clearnet" {
+        "clearnet"
+    } else {
+        "tor"
+    };
 
     // Candidate URLs: the connected node first, then the rest of the pool.
     let mut candidates: Vec<String> = vec![primary_url.clone()];
@@ -315,7 +376,12 @@ async fn prepare_with_failover(
     let total = candidates.len().min(max_nodes);
     let mut last_err = String::from("no candidate nodes available");
     for (i, url) in candidates.into_iter().take(max_nodes).enumerate() {
-        emit_log(app, "Tx", "info", &format!("🔗 Decoy selection — node {}/{}: {}", i + 1, total, url));
+        emit_log(
+            app,
+            "Tx",
+            "info",
+            &format!("🔗 Decoy selection — node {}/{}: {}", i + 1, total, url),
+        );
         let outs = outputs.to_vec();
         let pays = payments.to_vec();
         let build_url = url.clone();
@@ -328,51 +394,88 @@ async fn prepare_with_failover(
             use crate::wallet::decoy_cache::CachingDecoys;
             match mode.as_str() {
                 "tor" => {
-                    let tor = crate::wallet::scanner::ensure_tor(app).await
-                        .ok_or("Tor is not available — cannot select decoys without leaking your IP")?;
-                    let daemon = crate::tor::ArtiTransport::connect(tor, build_url).await
+                    let tor = crate::wallet::scanner::ensure_tor(app).await.ok_or(
+                        "Tor is not available — cannot select decoys without leaking your IP",
+                    )?;
+                    let daemon = crate::tor::ArtiTransport::connect(tor, build_url)
+                        .await
                         .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
                     let daemon = CachingDecoys::new(daemon, cache_path);
-                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
+                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority)
+                        .await
                 }
                 "custom" => {
                     let proxy = crate::wallet::scanner::read_proxy_address(app);
                     if proxy.trim().is_empty() {
-                        return Err("Custom routing selected but no proxy address is set".to_string());
+                        return Err(
+                            "Custom routing selected but no proxy address is set".to_string()
+                        );
                     }
-                    let daemon = crate::tor::SocksTransport::connect(proxy, build_url).await
+                    let daemon = crate::tor::SocksTransport::connect(proxy, build_url)
+                        .await
                         .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
                     let daemon = CachingDecoys::new(daemon, cache_path);
-                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
+                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority)
+                        .await
                 }
                 _ => {
                     // Clearnet: reqwest transport (reads the large distribution body
                     // reliably, unlike simple-request). Timeout bounds the whole call.
-                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(per_node_secs)).await?;
+                    let daemon = ReqwestTransport::connect(
+                        build_url,
+                        std::time::Duration::from_secs(per_node_secs),
+                    )
+                    .await?;
                     let daemon = CachingDecoys::new(daemon, cache_path);
-                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority).await
+                    transact::prepare_transaction(&daemon, view_pair, outs, pays, fee_priority)
+                        .await
                 }
             }
-        }).await;
+        })
+        .await;
 
         match attempt {
             Ok(Ok(prepared)) => {
-                emit_log(app, "Tx", "success", &format!("✅ Decoys selected via {}", url));
+                emit_log(
+                    app,
+                    "Tx",
+                    "success",
+                    &format!("✅ Decoys selected via {}", url),
+                );
                 // Bias future sends/sync toward this proven-good node.
                 app.state::<WalletState>().set_daemon_url(&url).await;
                 return Ok(prepared);
             }
             Ok(Err(e)) => {
                 last_err = e;
-                emit_log(app, "Tx", "warn", &format!("⚠️ {} couldn't serve decoy selection ({}). Trying next node…", url, last_err));
+                emit_log(
+                    app,
+                    "Tx",
+                    "warn",
+                    &format!(
+                        "⚠️ {} couldn't serve decoy selection ({}). Trying next node…",
+                        url, last_err
+                    ),
+                );
             }
             Err(_) => {
-                last_err = format!("{} stalled >{}s on get_output_distribution.bin", url, per_node_secs);
-                emit_log(app, "Tx", "warn", &format!("⚠️ {} — failing over to next node…", last_err));
+                last_err = format!(
+                    "{} stalled >{}s on get_output_distribution.bin",
+                    url, per_node_secs
+                );
+                emit_log(
+                    app,
+                    "Tx",
+                    "warn",
+                    &format!("⚠️ {} — failing over to next node…", last_err),
+                );
             }
         }
     }
-    Err(format!("Decoy selection failed on every node tried ({} attempted). Last error: {}", total, last_err))
+    Err(format!(
+        "Decoy selection failed on every node tried ({} attempted). Last error: {}",
+        total, last_err
+    ))
 }
 
 /// Step 1: Prepare transaction — select inputs, fetch decoys, compute fee.
@@ -389,54 +492,92 @@ pub async fn prepare_transfer(
     emit_log(&app, "Tx", "info", "🔧 Preparing transaction...");
 
     // Get daemon connection
-    let daemon_url = state.get_daemon_url().await
+    let daemon_url = state
+        .get_daemon_url()
+        .await
         .ok_or("No daemon connected. Wait for sync to complete.")?;
 
-    let view_pair = state.get_view_pair().await
-        .ok_or("Wallet is locked")?;
+    let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
 
     let tip = state.tip_height().await;
     let mut outputs = state.get_spendable_outputs(tip).await;
     if outputs.is_empty() {
-        return Err("No spendable (unlocked) outputs yet — recent change may still be maturing.".into());
+        return Err(
+            "No spendable (unlocked) outputs yet — recent change may still be maturing.".into(),
+        );
     }
 
     // Coin control: if the caller pinned specific outputs, restrict the input set to
     // exactly those (matched by the synthetic output_id the UI exposes for coins).
-    let coin_control = selected_output_ids.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+    let coin_control = selected_output_ids
+        .as_ref()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
     if coin_control {
         let want: std::collections::HashSet<&str> = selected_output_ids
-            .as_ref().unwrap().iter().map(|s| s.as_str()).collect();
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         outputs.retain(|o| want.contains(crate::wallet::state::output_id(o).as_str()));
         if outputs.is_empty() {
             return Err("None of the selected coins are spendable.".into());
         }
         // Surface any pinned coins that silently dropped out (spent/frozen/immature since
         // the UI listed them) so the user isn't left guessing why the input set shrank.
-        let matched: std::collections::HashSet<String> =
-            outputs.iter().map(crate::wallet::state::output_id).collect();
+        let matched: std::collections::HashSet<String> = outputs
+            .iter()
+            .map(crate::wallet::state::output_id)
+            .collect();
         let dropped = want.iter().filter(|id| !matched.contains(**id)).count();
         if dropped > 0 {
-            emit_log(&app, "Tx", "warn", &format!(
-                "⚠ Coin control: {} pinned coin(s) no longer spendable — using {} input(s)",
-                dropped, outputs.len()));
+            emit_log(
+                &app,
+                "Tx",
+                "warn",
+                &format!(
+                    "⚠ Coin control: {} pinned coin(s) no longer spendable — using {} input(s)",
+                    dropped,
+                    outputs.len()
+                ),
+            );
         } else {
-            emit_log(&app, "Tx", "info", &format!("🎯 Coin control: {} pinned input(s)", outputs.len()));
+            emit_log(
+                &app,
+                "Tx",
+                "info",
+                &format!("🎯 Coin control: {} pinned input(s)", outputs.len()),
+            );
         }
     }
 
     // Parse destination addresses
     let network = state.get_network().await;
-    let payments: Vec<(MoneroAddress, u64)> = destinations.iter().map(|d| {
-        let addr = MoneroAddress::from_str(network, &d.address)
-            .map_err(|e| format!("Invalid address {}: {:?}", d.address, e))?;
-        let amount: u64 = d.amount.parse()
-            .map_err(|_| format!("Invalid amount: {}", d.amount))?;
-        Ok((addr, amount))
-    }).collect::<Result<Vec<_>, String>>()?;
+    let payments: Vec<(MoneroAddress, u64)> = destinations
+        .iter()
+        .map(|d| {
+            let addr = MoneroAddress::from_str(network, &d.address)
+                .map_err(|e| format!("Invalid address {}: {:?}", d.address, e))?;
+            let amount: u64 = d
+                .amount
+                .parse()
+                .map_err(|_| format!("Invalid amount: {}", d.amount))?;
+            Ok((addr, amount))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
     let total_amount: u64 = payments.iter().map(|(_, a)| a).sum();
-    emit_log(&app, "Tx", "info", &format!("💰 Sending {} piconero to {} destination(s)", total_amount, payments.len()));
+    emit_log(
+        &app,
+        "Tx",
+        "info",
+        &format!(
+            "💰 Sending {} piconero to {} destination(s)",
+            total_amount,
+            payments.len()
+        ),
+    );
 
     // Coin selection: spend a MINIMAL set of outputs (largest-first) covering the
     // amount + a fee headroom. Previously ALL spendable outputs were passed as
@@ -446,7 +587,10 @@ pub async fn prepare_transfer(
     // With coin control the user pinned the exact inputs — use ALL of them; otherwise
     // auto-select a minimal largest-first set covering the amount + a fee headroom.
     let (selected, selected_sum) = if coin_control {
-        let sum = outputs.iter().map(|o| o.commitment().amount).fold(0u64, u64::saturating_add);
+        let sum = outputs
+            .iter()
+            .map(|o| o.commitment().amount)
+            .fold(0u64, u64::saturating_add);
         (outputs, sum)
     } else {
         outputs.sort_by(|a, b| b.commitment().amount.cmp(&a.commitment().amount));
@@ -470,7 +614,16 @@ pub async fn prepare_transfer(
         ));
     }
     let outputs = selected;
-    emit_log(&app, "Tx", "info", &format!("🪙 Selected {} input(s) totaling {} piconero", outputs.len(), selected_sum));
+    emit_log(
+        &app,
+        "Tx",
+        "info",
+        &format!(
+            "🪙 Selected {} input(s) totaling {} piconero",
+            outputs.len(),
+            selected_sum
+        ),
+    );
 
     let fee_priority = match priority.unwrap_or(0) {
         0 => FeePriority::Normal,
@@ -488,12 +641,33 @@ pub async fn prepare_transfer(
     // 30s then fail ("timeout reached: Elapsed"). We now try the connected node,
     // then rotate through the pool, abandoning any node that stalls, until one
     // actually serves it. prepare_transaction is generic over the transport.
-    emit_log(&app, "Tx", "info", "🎲 Selecting decoys and computing fee...");
-    let prepared = prepare_with_failover(&app, &view_pair, &outputs, &payments, fee_priority, daemon_url).await?;
+    emit_log(
+        &app,
+        "Tx",
+        "info",
+        "🎲 Selecting decoys and computing fee...",
+    );
+    let prepared = prepare_with_failover(
+        &app,
+        &view_pair,
+        &outputs,
+        &payments,
+        fee_priority,
+        daemon_url,
+    )
+    .await?;
 
     let fee_formatted = WalletState::format_xmr(prepared.fee);
     let amount_formatted = WalletState::format_xmr(prepared.amount);
-    emit_log(&app, "Tx", "success", &format!("✅ Transaction prepared: {} XMR + {} XMR fee", amount_formatted, fee_formatted));
+    emit_log(
+        &app,
+        "Tx",
+        "success",
+        &format!(
+            "✅ Transaction prepared: {} XMR + {} XMR fee",
+            amount_formatted, fee_formatted
+        ),
+    );
 
     // Serialize the SignableTransaction for the relay step
     let tx_metadata = prepared.signable.serialize();
@@ -513,17 +687,23 @@ pub async fn prepare_transfer(
         // spends from the pooled/primary balance — record it under account 0.
         account: 0,
     };
-    state.stage_pending_spend(meta_key, prepared.spent_ids.clone(), staged_sent).await;
+    state
+        .stage_pending_spend(meta_key, prepared.spent_ids.clone(), staged_sent)
+        .await;
 
     Ok(PreparedTx {
         fee: fee_formatted,
         amount: amount_formatted,
         tx_hash: String::new(), // Hash not known until signed
         tx_metadata,
-        destinations: prepared.destinations.iter().map(|(addr, amt)| TxDestination {
-            address: addr.clone(),
-            amount: amt.to_string(),
-        }).collect(),
+        destinations: prepared
+            .destinations
+            .iter()
+            .map(|(addr, amt)| TxDestination {
+                address: addr.clone(),
+                amount: amt.to_string(),
+            })
+            .collect(),
     })
 }
 
@@ -536,9 +716,15 @@ fn format_spend_confirm(staged: Option<(&[(String, u64)], u64)>) -> String {
         Some((dests, fee_atomic)) => {
             let lines: Vec<String> = dests
                 .iter()
-                .map(|(addr, amt)| format!("Send {} XMR\nto {}", WalletState::format_xmr(*amt), addr))
+                .map(|(addr, amt)| {
+                    format!("Send {} XMR\nto {}", WalletState::format_xmr(*amt), addr)
+                })
                 .collect();
-            format!("{}\n\nNetwork fee {} XMR", lines.join("\n\n"), WalletState::format_xmr(fee_atomic))
+            format!(
+                "{}\n\nNetwork fee {} XMR",
+                lines.join("\n\n"),
+                WalletState::format_xmr(fee_atomic)
+            )
         }
         // No staged record (e.g. the wallet locked/restarted between prepare and relay — in
         // which case signing fails downstream anyway). NEVER fall back to renderer text.
@@ -588,7 +774,10 @@ pub async fn relay_transfer(
             .dialog()
             .message(body)
             .title("Confirm transaction")
-            .buttons(MessageDialogButtons::OkCancelCustom("Send".into(), "Cancel".into()))
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Send".into(),
+                "Cancel".into(),
+            ))
             .blocking_show();
         if !ok {
             // Un-stage the spend prepare() staged so the (never-broadcast) inputs
@@ -601,7 +790,6 @@ pub async fn relay_transfer(
 
     sign_and_broadcast(&app, &state, tx_metadata).await
 }
-
 
 /// Sign + broadcast a prepared transaction's metadata over the configured routing
 /// mode, then commit the staged spend. This is the body of `relay_transfer` AFTER
@@ -616,11 +804,9 @@ pub(crate) async fn sign_and_broadcast(
 ) -> Result<String, String> {
     emit_log(app, "Tx", "info", "🔐 Signing transaction...");
 
-    let spend_key = state.get_spend_key().await
-        .ok_or("Wallet is locked")?;
+    let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
 
-    let daemon_url = state.get_daemon_url().await
-        .ok_or("No daemon connected")?;
+    let daemon_url = state.get_daemon_url().await.ok_or("No daemon connected")?;
 
     // Deserialize the prepared transaction
     let signable = monero_wallet::send::SignableTransaction::read(&mut tx_metadata.as_slice())
@@ -644,9 +830,11 @@ pub(crate) async fn sign_and_broadcast(
     tx_deadline(app, "Broadcast", async {
         match crate::wallet::scanner::read_routing_mode(app).as_str() {
             "tor" => {
-                let tor = crate::wallet::scanner::ensure_tor(app).await
+                let tor = crate::wallet::scanner::ensure_tor(app)
+                    .await
                     .ok_or("Tor is not available — refusing to broadcast over clearnet")?;
-                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
+                let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url)
+                    .await
                     .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
                 transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
@@ -655,17 +843,21 @@ pub(crate) async fn sign_and_broadcast(
                 if proxy.trim().is_empty() {
                     return Err("Custom routing selected but no proxy address is set".to_string());
                 }
-                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
+                let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url)
+                    .await
                     .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
                 transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
             _ => {
-                let daemon = ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
+                let daemon =
+                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60))
+                        .await?;
                 transact::broadcast_transaction(&daemon, &signed_tx).await?;
             }
         }
         Ok::<(), String>(())
-    }).await?;
+    })
+    .await?;
 
     let tx_hash = hex::encode(signed_tx.hash());
 
@@ -674,9 +866,16 @@ pub(crate) async fn sign_and_broadcast(
     let meta_key = crate::wallet::state::tx_meta_key(&tx_metadata);
     let tip = state.tip_height().await;
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    state.commit_spend(&meta_key, tx_hash.clone(), tip, now).await;
+    state
+        .commit_spend(&meta_key, tx_hash.clone(), tip, now)
+        .await;
 
-    emit_log(app, "Tx", "success", &format!("✅ Transaction broadcast! Hash: {}", tx_hash));
+    emit_log(
+        app,
+        "Tx",
+        "success",
+        &format!("✅ Transaction broadcast! Hash: {}", tx_hash),
+    );
 
     Ok(tx_hash)
 }
@@ -694,7 +893,8 @@ async fn tx_deadline<T, F>(app: &AppHandle, label: &str, fut: F) -> Result<T, St
 where
     F: std::future::Future<Output = Result<T, String>>,
 {
-    let r = match tokio::time::timeout(std::time::Duration::from_secs(TX_DEADLINE_SECS), fut).await {
+    let r = match tokio::time::timeout(std::time::Duration::from_secs(TX_DEADLINE_SECS), fut).await
+    {
         Ok(r) => r,
         Err(_) => Err(format!(
             "{} timed out after {}s — node/Tor circuit stalled, please try again",
@@ -728,7 +928,14 @@ where
     let tx_key = prepared.tx_key_hex.clone();
     let signed = transact::sign_transaction(prepared, spend_key)?;
     transact::broadcast_transaction(daemon, &signed).await?;
-    Ok((hex::encode(signed.hash()), fee, amount, spent_ids, destinations, tx_key))
+    Ok((
+        hex::encode(signed.hash()),
+        fee,
+        amount,
+        spent_ids,
+        destinations,
+        tx_key,
+    ))
 }
 
 /// Sweep one batch with NODE FAILOVER — the sweep analogue of `prepare_with_failover`.
@@ -746,7 +953,11 @@ async fn sweep_with_failover(
     primary_url: String,
 ) -> Result<(String, u64, u64, Vec<String>, Vec<(String, u64)>, String), String> {
     let mode = crate::wallet::scanner::read_routing_mode(app);
-    let section = if mode == "clearnet" { "clearnet" } else { "tor" };
+    let section = if mode == "clearnet" {
+        "clearnet"
+    } else {
+        "tor"
+    };
     let mut candidates: Vec<String> = vec![primary_url.clone()];
     for (_label, url) in crate::wallet::scanner::load_nodes(app, section).await {
         if !candidates.contains(&url) {
@@ -765,7 +976,12 @@ async fn sweep_with_failover(
     let total = candidates.len().min(max_nodes);
     let mut last_err = String::from("no candidate nodes available");
     for (i, url) in candidates.into_iter().take(max_nodes).enumerate() {
-        emit_log(app, "Tx", "info", &format!("🔗 Sweep — node {}/{}: {}", i + 1, total, url));
+        emit_log(
+            app,
+            "Tx",
+            "info",
+            &format!("🔗 Sweep — node {}/{}: {}", i + 1, total, url),
+        );
         let batch_c = batch.clone();
         let dest_c = dest.clone();
         let build_url = url.clone();
@@ -774,30 +990,43 @@ async fn sweep_with_failover(
             use crate::wallet::decoy_cache::CachingDecoys;
             match mode.as_str() {
                 "tor" => {
-                    let tor = crate::wallet::scanner::ensure_tor(app).await
+                    let tor = crate::wallet::scanner::ensure_tor(app)
+                        .await
                         .ok_or("Tor is not available — refusing to sweep over clearnet")?;
-                    let daemon = crate::tor::ArtiTransport::connect(tor, build_url).await
+                    let daemon = crate::tor::ArtiTransport::connect(tor, build_url)
+                        .await
                         .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
                     let daemon = CachingDecoys::new(daemon, cache_path);
-                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
+                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key)
+                        .await
                 }
                 "custom" => {
                     let proxy = crate::wallet::scanner::read_proxy_address(app);
                     if proxy.trim().is_empty() {
-                        return Err("Custom routing selected but no proxy address is set".to_string());
+                        return Err(
+                            "Custom routing selected but no proxy address is set".to_string()
+                        );
                     }
-                    let daemon = crate::tor::SocksTransport::connect(proxy, build_url).await
+                    let daemon = crate::tor::SocksTransport::connect(proxy, build_url)
+                        .await
                         .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
                     let daemon = CachingDecoys::new(daemon, cache_path);
-                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
+                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key)
+                        .await
                 }
                 _ => {
-                    let daemon = ReqwestTransport::connect(build_url, std::time::Duration::from_secs(per_node_secs)).await?;
+                    let daemon = ReqwestTransport::connect(
+                        build_url,
+                        std::time::Duration::from_secs(per_node_secs),
+                    )
+                    .await?;
                     let daemon = CachingDecoys::new(daemon, cache_path);
-                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key).await
+                    sweep_via_daemon(&daemon, view_pair, batch_c, dest_c, fee_priority, spend_key)
+                        .await
                 }
             }
-        }).await;
+        })
+        .await;
 
         match attempt {
             Ok(Ok(res)) => {
@@ -806,15 +1035,31 @@ async fn sweep_with_failover(
             }
             Ok(Err(e)) => {
                 last_err = e;
-                emit_log(app, "Tx", "warn", &format!("⚠️ {} couldn't sweep ({}). Trying next node…", url, last_err));
+                emit_log(
+                    app,
+                    "Tx",
+                    "warn",
+                    &format!(
+                        "⚠️ {} couldn't sweep ({}). Trying next node…",
+                        url, last_err
+                    ),
+                );
             }
             Err(_) => {
                 last_err = format!("{} stalled >{}s", url, per_node_secs);
-                emit_log(app, "Tx", "warn", &format!("⚠️ {} — failing over to next node…", last_err));
+                emit_log(
+                    app,
+                    "Tx",
+                    "warn",
+                    &format!("⚠️ {} — failing over to next node…", last_err),
+                );
             }
         }
     }
-    Err(format!("Sweep failed on every node tried ({} attempted). Last error: {}", total, last_err))
+    Err(format!(
+        "Sweep failed on every node tried ({} attempted). Last error: {}",
+        total, last_err
+    ))
 }
 
 /// Sweep ALL spendable outputs to a single address (no change). One command:
@@ -842,7 +1087,10 @@ pub async fn sweep_all(
             .dialog()
             .message(format!("Sweep {scope}\nto {address}?"))
             .title("Confirm sweep")
-            .buttons(MessageDialogButtons::OkCancelCustom("Sweep".into(), "Cancel".into()))
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Sweep".into(),
+                "Cancel".into(),
+            ))
             .blocking_show();
         if !ok {
             return Err("Sweep cancelled".into());
@@ -861,7 +1109,9 @@ pub async fn sweep_all(
     if let Some(idxs) = &subaddr_indices {
         inputs.retain(|o| {
             o.subaddress()
-                .map(|s| s.account() as u32 == account_index && idxs.contains(&(s.address() as u32)))
+                .map(|s| {
+                    s.account() as u32 == account_index && idxs.contains(&(s.address() as u32))
+                })
                 .unwrap_or(false)
         });
     }
@@ -869,7 +1119,10 @@ pub async fn sweep_all(
         return Err("No spendable outputs to sweep".into());
     }
 
-    run_sweep(&app, &*state, view_pair, spend_key, daemon_url, dest, inputs, priority).await
+    run_sweep(
+        &app, &*state, view_pair, spend_key, daemon_url, dest, inputs, priority,
+    )
+    .await
 }
 
 /// Sweep exactly ONE spendable output to `address` ("vanish coin"). The output is
@@ -890,7 +1143,10 @@ pub async fn sweep_single(
             .dialog()
             .message(format!("Sweep this single output\nto {address}?"))
             .title("Confirm sweep")
-            .buttons(MessageDialogButtons::OkCancelCustom("Sweep".into(), "Cancel".into()))
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Sweep".into(),
+                "Cancel".into(),
+            ))
             .blocking_show();
         if !ok {
             return Err("Sweep cancelled".into());
@@ -908,10 +1164,15 @@ pub async fn sweep_single(
     let mut inputs = state.get_spendable_outputs(sweep_tip).await;
     inputs.retain(|o| crate::wallet::state::output_id(o) == key_image);
     if inputs.is_empty() {
-        return Err("Output not found among spendable outputs (already spent or still immature)".into());
+        return Err(
+            "Output not found among spendable outputs (already spent or still immature)".into(),
+        );
     }
 
-    run_sweep(&app, &*state, view_pair, spend_key, daemon_url, dest, inputs, priority).await
+    run_sweep(
+        &app, &*state, view_pair, spend_key, daemon_url, dest, inputs, priority,
+    )
+    .await
 }
 
 /// Shared sweep core for `sweep_all` / `sweep_single`: pick fee priority, build +
@@ -936,8 +1197,10 @@ async fn run_sweep(
     // Batches run sequentially; a mid-way failure leaves earlier batches broadcast
     // (funds already at the destination) and the rest unswept — safe to re-run.
     const MAX_SWEEP_INPUTS: usize = 24;
-    let batches: Vec<Vec<monero_wallet::WalletOutput>> =
-        inputs.chunks(MAX_SWEEP_INPUTS).map(|c| c.to_vec()).collect();
+    let batches: Vec<Vec<monero_wallet::WalletOutput>> = inputs
+        .chunks(MAX_SWEEP_INPUTS)
+        .map(|c| c.to_vec())
+        .collect();
     let total_batches = batches.len();
     // A sweep to our OWN address (churn / vanish) returns the funds to us, so credit
     // the swept amount optimistically — otherwise the balance reads ~0 between
@@ -955,9 +1218,24 @@ async fn run_sweep(
         };
 
         if total_batches > 1 {
-            emit_log(app, "Tx", "info", &format!("🧹 Sweep batch {}/{} ({} output(s))…", bi + 1, total_batches, batch.len()));
+            emit_log(
+                app,
+                "Tx",
+                "info",
+                &format!(
+                    "🧹 Sweep batch {}/{} ({} output(s))…",
+                    bi + 1,
+                    total_batches,
+                    batch.len()
+                ),
+            );
         } else {
-            emit_log(app, "Tx", "info", &format!("🧹 Sweeping {} output(s)...", batch.len()));
+            emit_log(
+                app,
+                "Tx",
+                "info",
+                &format!("🧹 Sweeping {} output(s)...", batch.len()),
+            );
         }
 
         let daemon_url = daemon_url.clone();
@@ -966,24 +1244,43 @@ async fn run_sweep(
         // Node failover, same as the send path: a sweep decoy fetch that stalls or
         // hits a transient node error (e.g. 502) rotates to the next node instead of
         // failing the whole sweep/churn.
-        let (tx_hash, fee, amount, spent_ids, destinations, tx_key) =
-            sweep_with_failover(app, &view_pair, batch, dest, fee_priority, &spend_key, daemon_url).await?;
+        let (tx_hash, fee, amount, spent_ids, destinations, tx_key) = sweep_with_failover(
+            app,
+            &view_pair,
+            batch,
+            dest,
+            fee_priority,
+            &spend_key,
+            daemon_url,
+        )
+        .await?;
 
         // Mark this batch's outputs spent + log the broadcast.
         let tip = state.tip_height().await;
         let now = chrono::Utc::now().timestamp().max(0) as u64;
-        state.mark_spent(spent_ids, crate::wallet::storage::SentTx {
-            tx_hash: tx_hash.clone(),
-            amount,
-            fee,
-            destinations,
-            height: tip,
-            timestamp: now,
-            tx_key,
-            account: 0, // sweeps/churn aren't account-scoped either — record under account 0
-        }, dest_is_self).await;
+        state
+            .mark_spent(
+                spent_ids,
+                crate::wallet::storage::SentTx {
+                    tx_hash: tx_hash.clone(),
+                    amount,
+                    fee,
+                    destinations,
+                    height: tip,
+                    timestamp: now,
+                    tx_key,
+                    account: 0, // sweeps/churn aren't account-scoped either — record under account 0
+                },
+                dest_is_self,
+            )
+            .await;
 
-        emit_log(app, "Tx", "success", &format!("✅ Sweep broadcast! Hash: {}", tx_hash));
+        emit_log(
+            app,
+            "Tx",
+            "success",
+            &format!("✅ Sweep broadcast! Hash: {}", tx_hash),
+        );
         hashes.push(tx_hash);
     }
 
@@ -1016,8 +1313,8 @@ pub async fn get_transactions(
     state: State<'_, WalletState>,
     account_index: u32,
 ) -> Result<serde_json::Value, String> {
-    use std::collections::{HashMap, HashSet};
     use serde_json::json;
+    use std::collections::{HashMap, HashSet};
     let tip = state.tip_height().await;
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
@@ -1025,8 +1322,12 @@ pub async fn get_transactions(
     // these is CHANGE returning to us — not an incoming payment — so it must be
     // excluded from the incoming list (otherwise a send shows twice: once as
     // DISPATCHED, once as a bogus RECEIVED for the change).
-    let sent_txids: HashSet<String> =
-        state.get_sent().await.iter().map(|s| s.tx_hash.clone()).collect();
+    let sent_txids: HashSet<String> = state
+        .get_sent()
+        .await
+        .iter()
+        .map(|s| s.tx_hash.clone())
+        .collect();
 
     // Incoming: group owned outputs (incl. spent) by txid, skipping our own
     // change outputs.
@@ -1041,31 +1342,40 @@ pub async fn get_transactions(
         if acct != account_index {
             continue; // only this account's incoming outputs belong in its ledger
         }
-        let entry = incoming.entry(txid).or_insert((0, owned.height, acct, owned.timestamp));
+        let entry = incoming
+            .entry(txid)
+            .or_insert((0, owned.height, acct, owned.timestamp));
         entry.0 += amt;
         if owned.height < entry.1 {
             entry.1 = owned.height;
             entry.3 = owned.timestamp; // keep the timestamp aligned to the earliest output
         }
     }
-    let in_txs: Vec<serde_json::Value> = incoming.into_iter().map(|(txid, (amount, height, account, block_ts))| {
-        let confirmations = if tip >= height { tip - height + 1 } else { 0 };
-        // Prefer the real block header timestamp (stable, exact). Fall back to a
-        // tip-INDEPENDENT anchor estimate when it's missing (block_ts==0, e.g. an
-        // output not yet timestamp-populated during a restore). The old
-        // now−(tip−height)·120 form collapsed to "now" whenever the sync tip lagged
-        // the output height — dumping every such tx under "TODAY / 6s".
-        let timestamp = if block_ts > 0 { block_ts } else { estimate_block_time(height).min(now) };
-        json!({
-            "txid": txid,
-            "amount": amount,
-            "timestamp": timestamp,
-            "height": height,
-            "confirmations": confirmations,
-            "subaddr_index": { "major": account, "minor": 0 },
-            "payment_id": "0000000000000000",
+    let in_txs: Vec<serde_json::Value> = incoming
+        .into_iter()
+        .map(|(txid, (amount, height, account, block_ts))| {
+            let confirmations = if tip >= height { tip - height + 1 } else { 0 };
+            // Prefer the real block header timestamp (stable, exact). Fall back to a
+            // tip-INDEPENDENT anchor estimate when it's missing (block_ts==0, e.g. an
+            // output not yet timestamp-populated during a restore). The old
+            // now−(tip−height)·120 form collapsed to "now" whenever the sync tip lagged
+            // the output height — dumping every such tx under "TODAY / 6s".
+            let timestamp = if block_ts > 0 {
+                block_ts
+            } else {
+                estimate_block_time(height).min(now)
+            };
+            json!({
+                "txid": txid,
+                "amount": amount,
+                "timestamp": timestamp,
+                "height": height,
+                "confirmations": confirmations,
+                "subaddr_index": { "major": account, "minor": 0 },
+                "payment_id": "0000000000000000",
+            })
         })
-    }).collect();
+        .collect();
 
     // Outgoing: from the broadcast log.
     let mut out_txs = Vec::new();
@@ -1075,7 +1385,11 @@ pub async fn get_transactions(
             continue; // sends are recorded under account 0 (input selection isn't account-scoped)
         }
         let pending = sent.height == 0 || tip < sent.height;
-        let confirmations = if sent.height > 0 && tip >= sent.height { tip - sent.height } else { 0 };
+        let confirmations = if sent.height > 0 && tip >= sent.height {
+            tip - sent.height
+        } else {
+            0
+        };
         let entry = json!({
             "txid": sent.tx_hash,
             "amount": sent.amount,
@@ -1087,7 +1401,11 @@ pub async fn get_transactions(
             "subaddr_index": { "major": 0, "minor": 0 },
             "destinations": sent.destinations.iter().map(|(a, amt)| json!({ "address": a, "amount": amt })).collect::<Vec<_>>(),
         });
-        if pending { pending_txs.push(entry); } else { out_txs.push(entry); }
+        if pending {
+            pending_txs.push(entry);
+        } else {
+            out_txs.push(entry);
+        }
     }
 
     Ok(json!({ "in": in_txs, "out": out_txs, "pending": pending_txs }))
@@ -1145,10 +1463,7 @@ pub async fn get_outputs(
 /// for single standard-address sends and sweeps; see the deferred get_tx_proof
 /// for full recipient-bound OutProofV2 signatures.
 #[tauri::command]
-pub async fn get_tx_key(
-    state: State<'_, WalletState>,
-    txid: String,
-) -> Result<String, String> {
+pub async fn get_tx_key(state: State<'_, WalletState>, txid: String) -> Result<String, String> {
     state
         .get_tx_key(&txid)
         .await
@@ -1186,7 +1501,12 @@ pub async fn get_tx_proof(
     let addr = MoneroAddress::from_str(network, &address)
         .map_err(|e| format!("Invalid address: {:?}", e))?;
 
-    crate::wallet::tx_proof::generate_out_proof_v2(txid_bytes, message.as_deref().unwrap_or(""), r, &addr)
+    crate::wallet::tx_proof::generate_out_proof_v2(
+        txid_bytes,
+        message.as_deref().unwrap_or(""),
+        r,
+        &addr,
+    )
 }
 
 /// Result of signing an arbitrary message with a wallet address.
@@ -1214,7 +1534,10 @@ pub async fn sign_message(
 
     let (spend_sec, spend_pub) = state.message_signing_key_for_address(&target).await?;
     let signature = crate::wallet::msg_sign::sign_message_v1(&message, &spend_sec, &spend_pub);
-    Ok(SignedMessage { signature, signer_address: target.to_string() })
+    Ok(SignedMessage {
+        signature,
+        signer_address: target.to_string(),
+    })
 }
 
 /// Verify a transaction SECRET key against the on-chain transaction and report the
@@ -1267,7 +1590,8 @@ pub async fn check_tx_key(
             }
             _ => {
                 let daemon =
-                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
+                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60))
+                        .await?;
                 check_key_on_daemon(&daemon, txid_bytes, &txid_hex, &tx_key, &addr).await
             }
         }
@@ -1283,8 +1607,14 @@ async fn tx_confirmations<T: HttpTransport + Sync>(
     daemon: &MoneroDaemon<T>,
     txid_hex: &str,
 ) -> (u64, bool) {
-    let params = format!(r#"{{"txs_hashes":["{}"],"decode_as_json":false}}"#, txid_hex);
-    let raw = match daemon.rpc_call("get_transactions", Some(params), 1024 * 1024).await {
+    let params = format!(
+        r#"{{"txs_hashes":["{}"],"decode_as_json":false}}"#,
+        txid_hex
+    );
+    let raw = match daemon
+        .rpc_call("get_transactions", Some(params), 1024 * 1024)
+        .await
+    {
         Ok(r) => r,
         Err(_) => return (0, false),
     };
@@ -1293,10 +1623,17 @@ async fn tx_confirmations<T: HttpTransport + Sync>(
         Err(_) => return (0, false),
     };
     let tx0 = v.get("txs").and_then(|t| t.get(0));
-    if tx0.and_then(|t| t.get("in_pool")).and_then(|b| b.as_bool()).unwrap_or(false) {
+    if tx0
+        .and_then(|t| t.get("in_pool"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+    {
         return (0, true);
     }
-    let Some(block_height) = tx0.and_then(|t| t.get("block_height")).and_then(|h| h.as_u64()) else {
+    let Some(block_height) = tx0
+        .and_then(|t| t.get("block_height"))
+        .and_then(|h| h.as_u64())
+    else {
         return (0, false);
     };
     let tip = match daemon.latest_block_number().await {
@@ -1314,7 +1651,9 @@ const NOMINAL_TX_WEIGHT: usize = 1500;
 
 /// Per-priority ballpark fees (atomic piconero) for a nominal tx, indexed to the UI's
 /// priority levels: [0 auto, 1 slow, 2 normal, 3 fast, 4 fastest].
-async fn fees_on_daemon<T: HttpTransport + Sync>(daemon: &MoneroDaemon<T>) -> Result<Vec<u64>, String> {
+async fn fees_on_daemon<T: HttpTransport + Sync>(
+    daemon: &MoneroDaemon<T>,
+) -> Result<Vec<u64>, String> {
     // Generous per-weight cap: this is a DISPLAY estimate, so let even the fastest
     // priority through (its per-weight rate is well above the 500k cap used when
     // actually building a tx). Still bounded far below any overflow in fee×weight.
@@ -1331,27 +1670,52 @@ async fn fees_on_daemon<T: HttpTransport + Sync>(daemon: &MoneroDaemon<T>) -> Re
     // Resilient: a single priority the node won't quote shouldn't null the whole row.
     for p in priorities {
         match daemon.fee_rate(p, MAX_PER_WEIGHT).await {
-            Ok(rate) => { out.push(rate.calculate_fee_from_weight(NOMINAL_TX_WEIGHT)); any_ok = true; }
+            Ok(rate) => {
+                out.push(rate.calculate_fee_from_weight(NOMINAL_TX_WEIGHT));
+                any_ok = true;
+            }
             Err(_) => out.push(0),
         }
     }
-    if any_ok { Ok(out) } else { Err("daemon returned no usable fee rates".into()) }
+    if any_ok {
+        Ok(out)
+    } else {
+        Err("daemon returned no usable fee rates".into())
+    }
 }
 
 /// Per-priority fee estimate for the send UI (atomic piconero, indexed 0..=4). Routed
 /// through the configured uplink like every other daemon call.
 #[tauri::command]
-pub async fn estimate_fees(app: AppHandle, state: State<'_, WalletState>) -> Result<Vec<u64>, String> {
+pub async fn estimate_fees(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+) -> Result<Vec<u64>, String> {
     let daemon_url = match state.get_daemon_url().await {
         Some(u) => u,
-        None => { emit_log(&app, "Fee", "warn", "💸 estimate_fees: no daemon connected yet"); return Err("No daemon connected yet.".into()); }
+        None => {
+            emit_log(
+                &app,
+                "Fee",
+                "warn",
+                "💸 estimate_fees: no daemon connected yet",
+            );
+            return Err("No daemon connected yet.".into());
+        }
     };
-    emit_log(&app, "Fee", "info", &format!("💸 Estimating fees via {}", daemon_url));
+    emit_log(
+        &app,
+        "Fee",
+        "info",
+        &format!("💸 Estimating fees via {}", daemon_url),
+    );
     let res = match crate::wallet::scanner::read_routing_mode(&app).as_str() {
         "tor" => {
-            let tor = crate::wallet::scanner::ensure_tor(&app).await
+            let tor = crate::wallet::scanner::ensure_tor(&app)
+                .await
                 .ok_or("Tor is not available")?;
-            let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url).await
+            let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url)
+                .await
                 .map_err(|e| format!("connect over Tor failed: {:?}", e))?;
             fees_on_daemon(&daemon).await
         }
@@ -1360,18 +1724,30 @@ pub async fn estimate_fees(app: AppHandle, state: State<'_, WalletState>) -> Res
             if proxy.trim().is_empty() {
                 return Err("Custom routing selected but no proxy address is set".into());
             }
-            let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url).await
+            let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url)
+                .await
                 .map_err(|e| format!("connect via proxy failed: {:?}", e))?;
             fees_on_daemon(&daemon).await
         }
         _ => {
-            let daemon = ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(30)).await?;
+            let daemon =
+                ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(30)).await?;
             fees_on_daemon(&daemon).await
         }
     };
     match &res {
-        Ok(fees) => emit_log(&app, "Fee", "success", &format!("💸 Fee estimates (atomic): {:?}", fees)),
-        Err(e) => emit_log(&app, "Fee", "error", &format!("💸 estimate_fees failed: {}", e)),
+        Ok(fees) => emit_log(
+            &app,
+            "Fee",
+            "success",
+            &format!("💸 Fee estimates (atomic): {:?}", fees),
+        ),
+        Err(e) => emit_log(
+            &app,
+            "Fee",
+            "error",
+            &format!("💸 estimate_fees failed: {}", e),
+        ),
     }
     res
 }
@@ -1414,7 +1790,8 @@ async fn check_proof_on_daemon<T: HttpTransport + Sync>(
     address: &MoneroAddress,
 ) -> Result<serde_json::Value, String> {
     let (tx, confirmations, in_pool) = fetch_tx_verified(daemon, txid, txid_hex).await?;
-    let check = crate::wallet::tx_proof::check_out_proof_v2(txid, message, signature, &tx, address)?;
+    let check =
+        crate::wallet::tx_proof::check_out_proof_v2(txid, message, signature, &tx, address)?;
 
     Ok(serde_json::json!({
         "good": check.good,
@@ -1484,7 +1861,8 @@ pub async fn check_tx_proof(
                 let daemon = crate::tor::ArtiTransport::connect(tor, daemon_url)
                     .await
                     .map_err(|e| format!("Failed to connect to daemon over Tor: {:?}", e))?;
-                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr).await
+                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr)
+                    .await
             }
             "custom" => {
                 let proxy = crate::wallet::scanner::read_proxy_address(&app);
@@ -1494,12 +1872,15 @@ pub async fn check_tx_proof(
                 let daemon = crate::tor::SocksTransport::connect(proxy, daemon_url)
                     .await
                     .map_err(|e| format!("Failed to connect to daemon via proxy: {:?}", e))?;
-                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr).await
+                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr)
+                    .await
             }
             _ => {
                 let daemon =
-                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60)).await?;
-                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr).await
+                    ReqwestTransport::connect(daemon_url, std::time::Duration::from_secs(60))
+                        .await?;
+                check_proof_on_daemon(&daemon, txid_bytes, &txid_hex, &message, &signature, &addr)
+                    .await
             }
         }
     })
@@ -1525,13 +1906,19 @@ pub async fn refresh(_state: State<'_, WalletState>) -> Result<(), String> {
 /// Verify a vault password without unlocking (no scanner restart). Returns
 /// true if the password decrypts the wallet file, false otherwise.
 #[tauri::command]
-pub async fn verify_password(state: State<'_, WalletState>, identity_id: String, password: String) -> Result<bool, String> {
+pub async fn verify_password(
+    state: State<'_, WalletState>,
+    identity_id: String,
+    password: String,
+) -> Result<bool, String> {
     Ok(state.verify_password(&identity_id, &password).await.is_ok())
 }
 
 #[tauri::command]
 pub async fn set_vigil_hot(state: State<'_, WalletState>, hot: bool) -> Result<(), String> {
-    state.vigil_hot.store(hot, std::sync::atomic::Ordering::SeqCst);
+    state
+        .vigil_hot
+        .store(hot, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 
@@ -1555,7 +1942,11 @@ pub async fn change_wallet_password(
         return Err("New passphrase must differ from the current one".into());
     }
     // Distinguish a wrong current passphrase from other failures with a clean message.
-    if state.verify_password(&identity_id, &old_password).await.is_err() {
+    if state
+        .verify_password(&identity_id, &old_password)
+        .await
+        .is_err()
+    {
         return Err("Incorrect current passphrase".into());
     }
     state
@@ -1572,7 +1963,12 @@ pub async fn rescan(
     state: State<'_, WalletState>,
     height: u64,
 ) -> Result<(), String> {
-    emit_log(&app, "Sync", "info", &format!("🔄 Rescan requested from height {}...", height));
+    emit_log(
+        &app,
+        "Sync",
+        "info",
+        &format!("🔄 Rescan requested from height {}...", height),
+    );
 
     // Reset scan height and clear cached outputs
     state.reset_scan(height).await;
@@ -1581,7 +1977,12 @@ pub async fn rescan(
     let app_clone = app.clone();
     BlockScanner::start(app_clone, "", "", height).await?;
 
-    emit_log(&app, "Sync", "success", &format!("✅ Rescan started from height {}", height));
+    emit_log(
+        &app,
+        "Sync",
+        "success",
+        &format!("✅ Rescan started from height {}", height),
+    );
     Ok(())
 }
 
@@ -1597,9 +1998,15 @@ mod spend_confirm_tests {
     fn body_renders_the_backend_destination_and_fee() {
         let dests = vec![("4RealDestAddr".to_string(), 1_500_000_000_000u64)]; // 1.5 XMR
         let body = format_spend_confirm(Some((&dests, 30_000_000u64))); // 0.00003 XMR fee
-        assert!(body.contains("4RealDestAddr"), "must show the actual destination");
+        assert!(
+            body.contains("4RealDestAddr"),
+            "must show the actual destination"
+        );
         assert!(body.contains("1.5 XMR"), "must show the actual amount");
-        assert!(body.contains("Network fee 0.00003 XMR"), "must show the fee");
+        assert!(
+            body.contains("Network fee 0.00003 XMR"),
+            "must show the fee"
+        );
     }
 
     #[test]
@@ -1618,7 +2025,10 @@ mod spend_confirm_tests {
             ("addrB".to_string(), 2_000_000_000_000u64),
         ];
         let body = format_spend_confirm(Some((&dests, 0)));
-        assert!(body.contains("addrA") && body.contains("addrB"), "must list all destinations");
+        assert!(
+            body.contains("addrA") && body.contains("addrB"),
+            "must list all destinations"
+        );
     }
 
     #[test]
@@ -1627,8 +2037,13 @@ mod spend_confirm_tests {
         // "Send … to …" destination format (which is the only place an address appears),
         // so no renderer-supplied text can leak through this path.
         let body = format_spend_confirm(None);
-        assert!(body.contains("could not be"), "fallback must warn it couldn't verify");
-        assert!(!body.contains("Send "), "fallback must not render a destination line");
+        assert!(
+            body.contains("could not be"),
+            "fallback must warn it couldn't verify"
+        );
+        assert!(
+            !body.contains("Send "),
+            "fallback must not render a destination line"
+        );
     }
 }
-

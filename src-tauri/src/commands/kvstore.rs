@@ -4,9 +4,9 @@
 //! secrets, already-on-chain or public metadata only. Single-user desktop app,
 //! so writes are last-writer-wins (no locking).
 
+use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
-use serde_json::{json, Map, Value};
 
 const GHOST_TRADES_FILE: &str = "ghost_trades.json";
 const XMR402_FILE: &str = "xmr402_payments.json";
@@ -44,9 +44,16 @@ fn now_secs() -> u64 {
 // ── Ghost trades (atomic-swap tags), keyed by tx hash ──
 
 #[tauri::command]
-pub async fn save_ghost_trade(app: AppHandle, tx_hash: String, trade_id: String) -> Result<(), String> {
+pub async fn save_ghost_trade(
+    app: AppHandle,
+    tx_hash: String,
+    trade_id: String,
+) -> Result<(), String> {
     let mut map = load_map(&app, GHOST_TRADES_FILE);
-    map.insert(tx_hash, json!({ "tradeId": trade_id, "timestamp": now_secs() }));
+    map.insert(
+        tx_hash,
+        json!({ "tradeId": trade_id, "timestamp": now_secs() }),
+    );
     save_map(&app, GHOST_TRADES_FILE, &map)
 }
 
@@ -77,13 +84,16 @@ pub async fn save_xmr402_payment(
     return_url: Option<String>,
 ) -> Result<(), String> {
     let mut map = load_map(&app, XMR402_FILE);
-    map.insert(txid, json!({
-        "nonce": nonce,
-        "amount": amount,
-        "proof": proof,
-        "returnUrl": return_url,
-        "timestamp": now_secs(),
-    }));
+    map.insert(
+        txid,
+        json!({
+            "nonce": nonce,
+            "amount": amount,
+            "proof": proof,
+            "returnUrl": return_url,
+            "timestamp": now_secs(),
+        }),
+    );
     save_map(&app, XMR402_FILE, &map)
 }
 

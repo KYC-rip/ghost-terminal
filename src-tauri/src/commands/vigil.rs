@@ -7,15 +7,18 @@
 //! Mirrors VigilHandler.ts validation: identity id charset, blob shape/size,
 //! session version/mode/phase, and a defense-in-depth key-material scan.
 
-use std::path::PathBuf;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 const MAX_SESSION_BYTES: usize = 16 * 1024;
 const VIGIL_SESSION_VERSION: u64 = 1;
 
 fn vigil_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("vigil.json")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("vigil.json")
 }
 
 fn load(app: &AppHandle) -> Value {
@@ -46,15 +49,28 @@ fn valid_id(id: &str) -> bool {
 fn is_b64(s: &str, max: usize) -> bool {
     !s.is_empty()
         && s.len() <= max
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
 }
 
 /// Strike-key blob shape: { v: 1, salt, iv, ct } (all base64).
 fn valid_key_blob(blob: &Value) -> bool {
     blob.get("v").and_then(|v| v.as_u64()) == Some(1)
-        && blob.get("salt").and_then(|v| v.as_str()).map(|s| is_b64(s, 64)).unwrap_or(false)
-        && blob.get("iv").and_then(|v| v.as_str()).map(|s| is_b64(s, 64)).unwrap_or(false)
-        && blob.get("ct").and_then(|v| v.as_str()).map(|s| is_b64(s, 4096)).unwrap_or(false)
+        && blob
+            .get("salt")
+            .and_then(|v| v.as_str())
+            .map(|s| is_b64(s, 64))
+            .unwrap_or(false)
+        && blob
+            .get("iv")
+            .and_then(|v| v.as_str())
+            .map(|s| is_b64(s, 64))
+            .unwrap_or(false)
+        && blob
+            .get("ct")
+            .and_then(|v| v.as_str())
+            .map(|s| is_b64(s, 4096))
+            .unwrap_or(false)
 }
 
 fn valid_session(session: &Value) -> Result<(), String> {
@@ -94,9 +110,17 @@ fn now_ms() -> u64 {
 // ── Strike key blobs (opaque ciphertext) ──
 
 #[tauri::command]
-pub async fn vigil_save_strike_key(app: AppHandle, identity_id: String, blob: Value) -> Result<(), String> {
-    if !valid_id(&identity_id) { return Err("Invalid identity id".into()); }
-    if !valid_key_blob(&blob) { return Err("Invalid key blob".into()); }
+pub async fn vigil_save_strike_key(
+    app: AppHandle,
+    identity_id: String,
+    blob: Value,
+) -> Result<(), String> {
+    if !valid_id(&identity_id) {
+        return Err("Invalid identity id".into());
+    }
+    if !valid_key_blob(&blob) {
+        return Err("Invalid key blob".into());
+    }
     let mut store = load(&app);
     store["strike_keys"][&identity_id] = blob;
     persist(&app, &store)
@@ -104,15 +128,24 @@ pub async fn vigil_save_strike_key(app: AppHandle, identity_id: String, blob: Va
 
 #[tauri::command]
 pub async fn vigil_get_strike_key(app: AppHandle, identity_id: String) -> Result<Value, String> {
-    if !valid_id(&identity_id) { return Ok(Value::Null); }
-    Ok(load(&app)["strike_keys"].get(&identity_id).cloned().unwrap_or(Value::Null))
+    if !valid_id(&identity_id) {
+        return Ok(Value::Null);
+    }
+    Ok(load(&app)["strike_keys"]
+        .get(&identity_id)
+        .cloned()
+        .unwrap_or(Value::Null))
 }
 
 #[tauri::command]
 pub async fn vigil_delete_strike_key(app: AppHandle, identity_id: String) -> Result<(), String> {
-    if !valid_id(&identity_id) { return Err("Invalid identity id".into()); }
+    if !valid_id(&identity_id) {
+        return Err("Invalid identity id".into());
+    }
     let mut store = load(&app);
-    if let Some(obj) = store["strike_keys"].as_object_mut() { obj.remove(&identity_id); }
+    if let Some(obj) = store["strike_keys"].as_object_mut() {
+        obj.remove(&identity_id);
+    }
     persist(&app, &store)
 }
 
@@ -120,18 +153,29 @@ pub async fn vigil_delete_strike_key(app: AppHandle, identity_id: String) -> Res
 /// a mistaken rotation can never permanently strand funds.
 #[tauri::command]
 pub async fn vigil_archive_strike_key(app: AppHandle, identity_id: String) -> Result<(), String> {
-    if !valid_id(&identity_id) { return Err("Invalid identity id".into()); }
+    if !valid_id(&identity_id) {
+        return Err("Invalid identity id".into());
+    }
     let mut store = load(&app);
     if let Some(blob) = store["strike_keys"].get(&identity_id).cloned() {
-        if !store["strike_keys_retired"].get(&identity_id).map(|v| v.is_array()).unwrap_or(false) {
+        if !store["strike_keys_retired"]
+            .get(&identity_id)
+            .map(|v| v.is_array())
+            .unwrap_or(false)
+        {
             store["strike_keys_retired"][&identity_id] = json!([]);
         }
         let mut retired_blob = blob;
         if let Some(obj) = retired_blob.as_object_mut() {
             obj.insert("retiredAt".into(), json!(now_ms()));
         }
-        store["strike_keys_retired"][&identity_id].as_array_mut().unwrap().push(retired_blob);
-        if let Some(obj) = store["strike_keys"].as_object_mut() { obj.remove(&identity_id); }
+        store["strike_keys_retired"][&identity_id]
+            .as_array_mut()
+            .unwrap()
+            .push(retired_blob);
+        if let Some(obj) = store["strike_keys"].as_object_mut() {
+            obj.remove(&identity_id);
+        }
     }
     persist(&app, &store)
 }
@@ -139,8 +183,14 @@ pub async fn vigil_archive_strike_key(app: AppHandle, identity_id: String) -> Re
 // ── Session snapshots (no key material) ──
 
 #[tauri::command]
-pub async fn vigil_save_session(app: AppHandle, identity_id: String, session: Value) -> Result<(), String> {
-    if !valid_id(&identity_id) { return Err("Invalid identity id".into()); }
+pub async fn vigil_save_session(
+    app: AppHandle,
+    identity_id: String,
+    session: Value,
+) -> Result<(), String> {
+    if !valid_id(&identity_id) {
+        return Err("Invalid identity id".into());
+    }
     valid_session(&session)?;
     let mut store = load(&app);
     store["sessions"][&identity_id] = session;
@@ -149,15 +199,24 @@ pub async fn vigil_save_session(app: AppHandle, identity_id: String, session: Va
 
 #[tauri::command]
 pub async fn vigil_get_session(app: AppHandle, identity_id: String) -> Result<Value, String> {
-    if !valid_id(&identity_id) { return Ok(Value::Null); }
-    Ok(load(&app)["sessions"].get(&identity_id).cloned().unwrap_or(Value::Null))
+    if !valid_id(&identity_id) {
+        return Ok(Value::Null);
+    }
+    Ok(load(&app)["sessions"]
+        .get(&identity_id)
+        .cloned()
+        .unwrap_or(Value::Null))
 }
 
 #[tauri::command]
 pub async fn vigil_clear_session(app: AppHandle, identity_id: String) -> Result<(), String> {
-    if !valid_id(&identity_id) { return Err("Invalid identity id".into()); }
+    if !valid_id(&identity_id) {
+        return Err("Invalid identity id".into());
+    }
     let mut store = load(&app);
-    if let Some(obj) = store["sessions"].as_object_mut() { obj.remove(&identity_id); }
+    if let Some(obj) = store["sessions"].as_object_mut() {
+        obj.remove(&identity_id);
+    }
     persist(&app, &store)
 }
 
@@ -167,7 +226,9 @@ fn valid_pair(pair: &str) -> bool {
     // e.g. "XMR/USD" — two 2-8 char alphanumeric legs
     match pair.split_once('/') {
         Some((a, b)) => {
-            let ok = |s: &str| (2..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
+            let ok = |s: &str| {
+                (2..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric())
+            };
             ok(a) && ok(b)
         }
         None => false,
@@ -186,7 +247,10 @@ pub async fn fetch_price_history(app: AppHandle, pair: String) -> Result<Value, 
         return Ok(json!({ "success": false, "error": "Invalid pair" }));
     }
     let rest_pair = pair.replace('/', "");
-    let url = format!("https://api.kraken.com/0/public/OHLC?pair={}&interval=1", rest_pair);
+    let url = format!(
+        "https://api.kraken.com/0/public/OHLC?pair={}&interval=1",
+        rest_pair
+    );
 
     // In Tor mode, fetch over Tor (with TLS) so the price probe doesn't leak the
     // user IP. Both paths degrade gracefully — a failure just returns
@@ -226,7 +290,10 @@ pub async fn fetch_price_history(app: AppHandle, pair: String) -> Result<Value, 
 
     if let Some(errs) = data.get("error").and_then(|e| e.as_array()) {
         if !errs.is_empty() {
-            let msg: Vec<String> = errs.iter().filter_map(|e| e.as_str().map(String::from)).collect();
+            let msg: Vec<String> = errs
+                .iter()
+                .filter_map(|e| e.as_str().map(String::from))
+                .collect();
             return Ok(json!({ "success": false, "error": msg.join(", ") }));
         }
     }
@@ -236,23 +303,29 @@ pub async fn fetch_price_history(app: AppHandle, pair: String) -> Result<Value, 
         Some(r) => r,
         None => return Ok(json!({ "success": false, "error": "No OHLC data" })),
     };
-    let candles = result.iter().find(|(k, _)| k.as_str() != "last").map(|(_, v)| v);
+    let candles = result
+        .iter()
+        .find(|(k, _)| k.as_str() != "last")
+        .map(|(_, v)| v);
     let candles = match candles.and_then(|c| c.as_array()) {
         Some(c) => c,
         None => return Ok(json!({ "success": false, "error": "No OHLC data" })),
     };
 
     // Candle: [time, open, high, low, close, vwap, volume, count] — keep closes
-    let points: Vec<Value> = candles.iter().filter_map(|c| {
-        let arr = c.as_array()?;
-        let time = arr.first()?.as_u64()?;
-        let close: f64 = arr.get(4)?.as_str()?.parse().ok()?;
-        if time > 0 && close > 0.0 {
-            Some(json!({ "time": time, "value": close }))
-        } else {
-            None
-        }
-    }).collect();
+    let points: Vec<Value> = candles
+        .iter()
+        .filter_map(|c| {
+            let arr = c.as_array()?;
+            let time = arr.first()?.as_u64()?;
+            let close: f64 = arr.get(4)?.as_str()?.parse().ok()?;
+            if time > 0 && close > 0.0 {
+                Some(json!({ "time": time, "value": close }))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     Ok(json!({ "success": true, "points": points }))
 }

@@ -96,7 +96,7 @@ pub struct Identity {
 pub struct AppConfig {
     #[serde(rename = "routingMode")]
     pub routing_mode: String, // "tor" | "clearnet"
-    pub network: String,      // "mainnet" | "stagenet"
+    pub network: String, // "mainnet" | "stagenet"
     #[serde(rename = "customNodeAddress")]
     pub custom_node_address: Option<String>,
     #[serde(rename = "autoLockMinutes")]

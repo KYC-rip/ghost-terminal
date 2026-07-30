@@ -15,7 +15,13 @@ use tauri::{AppHandle, Manager};
 /// [A-Za-z0-9_-] becomes '_' so a hostile key can never traverse out of the wallpapers dir.
 fn sanitize(key: &str) -> String {
     key.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -37,7 +43,10 @@ fn file_for(app: &AppHandle, key: &str, rev: u64) -> Result<PathBuf, String> {
 fn prune(app: &AppHandle, key: &str, keep: u64) -> Result<(), String> {
     let stem = sanitize(key);
     let keep_name = format!("{stem}.{keep}.img");
-    for entry in fs::read_dir(dir(app)?).map_err(|e| e.to_string())?.flatten() {
+    for entry in fs::read_dir(dir(app)?)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with(&format!("{stem}.")) && name.ends_with(".img") && name != keep_name {
             let _ = fs::remove_file(entry.path());
@@ -49,7 +58,10 @@ fn prune(app: &AppHandle, key: &str, keep: u64) -> Result<(), String> {
 /// Save raw image bytes for key@rev, pruning older revs. Body is the RAW request payload
 /// (`invoke(cmd, bytes, { headers })` on the JS side) — never base64, never a JSON array.
 #[tauri::command]
-pub async fn wallpaper_save(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+pub async fn wallpaper_save(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
     let headers = request.headers();
     let key = headers
         .get("x-wp-key")
@@ -86,9 +98,17 @@ pub async fn wallpaper_save(app: AppHandle, request: tauri::ipc::Request<'_>) ->
 
 /// Absolute path for key@rev if that exact rev exists on disk, else None (renderer then saves).
 #[tauri::command]
-pub async fn wallpaper_url(app: AppHandle, key: String, rev: u64) -> Result<Option<String>, String> {
+pub async fn wallpaper_url(
+    app: AppHandle,
+    key: String,
+    rev: u64,
+) -> Result<Option<String>, String> {
     let path = file_for(&app, &key, rev)?;
-    Ok(if path.is_file() { Some(path.to_string_lossy().to_string()) } else { None })
+    Ok(if path.is_file() {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    })
 }
 
 /// Delete every stored rev of `key`.

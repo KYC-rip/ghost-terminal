@@ -1,13 +1,19 @@
+use crate::wallet::Identity;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
-use crate::wallet::Identity;
 
 fn identities_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("identities.json")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("identities.json")
 }
 
 fn active_identity_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("active_identity")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("active_identity")
 }
 
 fn load_identities(app: &AppHandle) -> Vec<Identity> {
@@ -22,10 +28,8 @@ fn save_identities_to_disk(app: &AppHandle, ids: &[Identity]) -> Result<(), Stri
     let path = identities_path(app);
     std::fs::create_dir_all(path.parent().unwrap())
         .map_err(|e| format!("Failed to create dir: {}", e))?;
-    let data = serde_json::to_string_pretty(ids)
-        .map_err(|e| format!("Serialize error: {}", e))?;
-    std::fs::write(&path, data)
-        .map_err(|e| format!("Write error: {}", e))
+    let data = serde_json::to_string_pretty(ids).map_err(|e| format!("Serialize error: {}", e))?;
+    std::fs::write(&path, data).map_err(|e| format!("Write error: {}", e))
 }
 
 #[tauri::command]
@@ -105,16 +109,29 @@ pub async fn detect_legacy_wallets(
         let blocks_ago = (ms_ago / 1000 / 120) as u64;
         // ~2-day safety margin so the scan starts safely before any first tx,
         // clamped to the RingCT fork (nothing scannable before it).
-        ref_height.saturating_sub(blocks_ago).saturating_sub(1440).max(RINGCT_FORK)
+        ref_height
+            .saturating_sub(blocks_ago)
+            .saturating_sub(1440)
+            .max(RINGCT_FORK)
     };
 
     let mut out = Vec::new();
     for dir in legacy_dir_candidates(&app) {
-        let Ok(cfg) = std::fs::read_to_string(dir.join("config.json")) else { continue };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(&cfg) else { continue };
-        let Some(ids) = json.get("identities").and_then(|v| v.as_array()) else { continue };
+        let Ok(cfg) = std::fs::read_to_string(dir.join("config.json")) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&cfg) else {
+            continue;
+        };
+        let Some(ids) = json.get("identities").and_then(|v| v.as_array()) else {
+            continue;
+        };
         for it in ids {
-            let id = it.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let id = it
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
             if id.is_empty() || already.contains(&id) {
                 continue;
             }
@@ -122,9 +139,17 @@ pub async fn detect_legacy_wallets(
             if !dir.join("wallets").join(format!("{id}.keys")).is_file() {
                 continue;
             }
-            let name = it.get("name").and_then(|v| v.as_str()).unwrap_or("Wallet").to_string();
+            let name = it
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Wallet")
+                .to_string();
             let created_ms = it.get("created").and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
-            out.push(LegacyWallet { id, name, est_restore_height: est_height(created_ms) });
+            out.push(LegacyWallet {
+                id,
+                name,
+                est_restore_height: est_height(created_ms),
+            });
         }
         if !out.is_empty() {
             break;
@@ -135,15 +160,22 @@ pub async fn detect_legacy_wallets(
 
 #[tauri::command]
 pub async fn create_identity(app: AppHandle, name: String) -> Result<Identity, String> {
-    let id = format!("vault_{}_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
-        &name.chars().take(3).collect::<String>());
+    let id = format!(
+        "vault_{}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+        &name.chars().take(3).collect::<String>()
+    );
 
     let identity = Identity {
         id,
         name,
         created: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
     };
 
     let mut ids = load_identities(&app);
@@ -187,7 +219,10 @@ pub async fn delete_identity(app: AppHandle, id: String) -> Result<(), String> {
             .dialog()
             .message(body)
             .title("Delete wallet")
-            .buttons(MessageDialogButtons::OkCancelCustom("Delete".into(), "Cancel".into()))
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Delete".into(),
+                "Cancel".into(),
+            ))
             .blocking_show();
         if !ok {
             return Err("Deletion cancelled".into());
@@ -198,7 +233,10 @@ pub async fn delete_identity(app: AppHandle, id: String) -> Result<(), String> {
     save_identities_to_disk(&app, &ids)?;
 
     // Delete wallet files (vault + cache + persisted watch view-pair)
-    let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let wallet_file = data_dir.join("wallets").join(format!("{}.vault", id));
     let cache_file = data_dir.join("wallets").join(format!("{}.cache", id));
     std::fs::remove_file(wallet_file).ok();
@@ -222,7 +260,9 @@ pub async fn switch_identity(app: AppHandle, id: String) -> Result<(), String> {
 pub async fn get_active_identity(app: AppHandle) -> Result<String, String> {
     let ids = load_identities(&app);
     let stored = std::fs::read_to_string(active_identity_path(&app)).ok();
-    let stored = stored.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let stored = stored
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let active = stored
         .filter(|id| ids.iter().any(|i| &i.id == id))
@@ -241,4 +281,3 @@ pub async fn rename_identity(app: AppHandle, id: String, name: String) -> Result
     }
     save_identities_to_disk(&app, &ids)
 }
-

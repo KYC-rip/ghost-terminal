@@ -4,13 +4,19 @@ use tauri::{AppHandle, Manager};
 use crate::wallet::{BlockScanner, WalletState};
 
 fn config_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("config.json")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("config.json")
 }
 
 /// Side file for the skin background data URL — kept out of config.json so the
 /// (frequently-rewritten) config stays small even with a multi-MB image.
 fn skin_bg_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from(".")).join("skin_bg.b64")
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("skin_bg.b64")
 }
 
 #[tauri::command]
@@ -38,7 +44,10 @@ pub async fn get_config(app: AppHandle) -> Result<serde_json::Value, String> {
                 .map_or(true, |o| o.is_empty());
             if shortcuts_empty {
                 if let Some(m) = merged.as_object_mut() {
-                    m.insert("shortcuts".to_string(), default_config()["shortcuts"].clone());
+                    m.insert(
+                        "shortcuts".to_string(),
+                        default_config()["shortcuts"].clone(),
+                    );
                 }
             }
             merged
@@ -105,7 +114,11 @@ pub fn read_ui_mode(app: &AppHandle) -> String {
     let stored = std::fs::read_to_string(config_path(app))
         .ok()
         .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-        .and_then(|c| c.get("ui_mode").and_then(|v| v.as_str()).map(str::to_string));
+        .and_then(|c| {
+            c.get("ui_mode")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
     match stored.as_deref() {
         Some("ros") => "ros".to_string(),
         _ => "classic".to_string(),
@@ -123,7 +136,11 @@ pub fn read_ros_source(app: &AppHandle) -> String {
     let stored = std::fs::read_to_string(config_path(app))
         .ok()
         .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-        .and_then(|c| c.get("ros_source").and_then(|v| v.as_str()).map(str::to_string));
+        .and_then(|c| {
+            c.get("ros_source")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
     match stored.as_deref() {
         Some("ota") => "ota".to_string(),
         _ => "beta".to_string(),
@@ -134,7 +151,9 @@ pub fn read_ros_source(app: &AppHandle) -> String {
 /// `set_ui_mode` owns the persistence + relaunch around it.
 fn apply_ui_mode(config: &mut serde_json::Value, mode: &str) -> Result<(), String> {
     if mode != "classic" && mode != "ros" {
-        return Err(format!("invalid ui_mode \"{mode}\" — expected \"classic\" or \"ros\""));
+        return Err(format!(
+            "invalid ui_mode \"{mode}\" — expected \"classic\" or \"ros\""
+        ));
     }
     config
         .as_object_mut()
@@ -175,7 +194,12 @@ pub async fn set_ui_mode(app: AppHandle, mode: String) -> Result<(), String> {
     std::fs::write(&tmp, data).map_err(|e| format!("Failed to write config: {}", e))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("Failed to replace config: {}", e))?;
 
-    crate::emit_log(&app, "UI", "info", &format!("Switching interface to {mode} — relaunching..."));
+    crate::emit_log(
+        &app,
+        "UI",
+        "info",
+        &format!("Switching interface to {mode} — relaunching..."),
+    );
     // Diverges (never returns): the process relaunches into the new mode.
     app.restart()
 }
@@ -205,8 +229,19 @@ pub async fn get_app_info(app: AppHandle) -> Result<serde_json::Value, String> {
 /// Covers direct executables/scripts plus indirect launchers — `.desktop` executes its
 /// `Exec=` line under `xdg-open`, and `.lnk` follows a shortcut to an arbitrary target.
 const REVEAL_BLOCKED_EXT: &[&str] = &[
-    "app", "exe", "com", "cmd", "bat", "sh", "bash", "zsh", "command", "scpt",
-    "applescript", "desktop", "lnk",
+    "app",
+    "exe",
+    "com",
+    "cmd",
+    "bat",
+    "sh",
+    "bash",
+    "zsh",
+    "command",
+    "scpt",
+    "applescript",
+    "desktop",
+    "lnk",
 ];
 
 /// Confinement check for `reveal_path`, split out PURE (no filesystem / process I/O)
@@ -219,7 +254,10 @@ fn reveal_guard(requested: &Path, allowed: &[PathBuf]) -> Result<(), String> {
         return Err("Refusing to reveal a path outside the app's data directories".into());
     }
     if let Some(ext) = requested.extension().and_then(|e| e.to_str()) {
-        if REVEAL_BLOCKED_EXT.iter().any(|b| b.eq_ignore_ascii_case(ext)) {
+        if REVEAL_BLOCKED_EXT
+            .iter()
+            .any(|b| b.eq_ignore_ascii_case(ext))
+        {
             return Err("Refusing to open an executable path".into());
         }
     }
@@ -278,7 +316,9 @@ pub async fn save_config(app: AppHandle, mut config: serde_json::Value) -> Resul
     // them at the shared write boundary.
     if let Some(mode) = config.get("routingMode").and_then(|v| v.as_str()) {
         if !crate::wallet::scanner::known_routing_mode(mode) {
-            return Err(format!("Unknown routingMode {mode:?}; refusing to persist a fail-open network mode"));
+            return Err(format!(
+                "Unknown routingMode {mode:?}; refusing to persist a fail-open network mode"
+            ));
         }
     } else if config.get("routingMode").is_some() {
         return Err("routingMode must be a string".into());
@@ -309,8 +349,7 @@ pub async fn save_config(app: AppHandle, mut config: serde_json::Value) -> Resul
 
     let data = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    std::fs::write(&path, data)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+    std::fs::write(&path, data).map_err(|e| format!("Failed to write config: {}", e))?;
     Ok(())
 }
 
@@ -324,7 +363,9 @@ pub async fn save_config_only(app: AppHandle, config: serde_json::Value) -> Resu
 /// Read-modify-write a single boolean key in config.json (full get/save round-trip
 /// so the skin-background offload and defaults keep working).
 pub async fn set_config_bool(app: &AppHandle, key: &str, value: bool) -> Result<(), String> {
-    let mut cfg = get_config(app.clone()).await.unwrap_or_else(|_| default_config());
+    let mut cfg = get_config(app.clone())
+        .await
+        .unwrap_or_else(|_| default_config());
     if let Some(obj) = cfg.as_object_mut() {
         obj.insert(key.to_string(), serde_json::Value::Bool(value));
     }
@@ -371,22 +412,38 @@ pub async fn watch_sync_set(
         // persist its watch pair immediately from in-memory keys — the choice takes
         // effect from the very next launch, no extra unlock needed.
         if let Some((id, spend_pub, view_sec)) = state.watch_parts_from_memory().await {
-            let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-            if let Err(e) = crate::wallet::storage::save_watch(&data_dir, &id, &spend_pub, &view_sec) {
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
+            if let Err(e) =
+                crate::wallet::storage::save_watch(&data_dir, &id, &spend_pub, &view_sec)
+            {
                 log::warn!("watch store write for {id} failed: {e}");
             }
         }
-        crate::emit_log(&app, "Wallet", "info",
-            "👁 Sync at launch enabled — watch-only sync starts from the next launch.");
+        crate::emit_log(
+            &app,
+            "Wallet",
+            "info",
+            "👁 Sync at launch enabled — watch-only sync starts from the next launch.",
+        );
         log::info!("[watch-sync] enabled successfully");
     } else {
         pool.stop_all().await;
-        let data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."));
         for id in crate::wallet::storage::list_watch_ids(&data_dir) {
             crate::wallet::storage::delete_watch(&data_dir, &id);
         }
-        crate::emit_log(&app, "Wallet", "info",
-            "👁 Sync at launch disabled — persisted view keys removed.");
+        crate::emit_log(
+            &app,
+            "Wallet",
+            "info",
+            "👁 Sync at launch disabled — persisted view keys removed.",
+        );
         log::info!("[watch-sync] disabled successfully");
     }
     Ok(())
@@ -400,7 +457,10 @@ pub async fn watch_sync_set(
 /// bootstrap as needed). The scanner resumes from the current scan height, so
 /// no progress is lost.
 #[tauri::command]
-pub async fn save_config_and_reload(app: AppHandle, config: serde_json::Value) -> Result<(), String> {
+pub async fn save_config_and_reload(
+    app: AppHandle,
+    config: serde_json::Value,
+) -> Result<(), String> {
     save_config(app.clone(), config).await?;
 
     let state = app.state::<WalletState>();
@@ -419,7 +479,9 @@ pub async fn save_config_and_reload(app: AppHandle, config: serde_json::Value) -
     // pool with the (possibly just-changed) toggle.
     let pool = app.state::<crate::wallet::SyncPool>();
     match state.active_session().await {
-        Some((id, pw)) => crate::commands::wallet::refresh_pool(&app, &state, &pool, &id, &pw).await,
+        Some((id, pw)) => {
+            crate::commands::wallet::refresh_pool(&app, &state, &pool, &id, &pw).await
+        }
         // Locked: can't start background sync without a password; if the toggle
         // is off, make sure nothing is left running.
         None => {
@@ -465,7 +527,10 @@ mod ui_mode_tests {
         // The renderer is untrusted — an arbitrary mode string must not persist.
         let mut c = default_config();
         for bad in ["", "ROS", "classic ", "file:///x", "both"] {
-            assert!(apply_ui_mode(&mut c, bad).is_err(), "{bad:?} should be rejected");
+            assert!(
+                apply_ui_mode(&mut c, bad).is_err(),
+                "{bad:?} should be rejected"
+            );
             assert_eq!(c["ui_mode"], "classic", "{bad:?} must not change the mode");
         }
     }
@@ -477,7 +542,10 @@ mod reveal_guard_tests {
 
     // Two allowed bases, as reveal_path builds (already canonicalized in production).
     fn bases() -> Vec<PathBuf> {
-        vec![PathBuf::from("/home/u/.app/data"), PathBuf::from("/home/u/.app/logs")]
+        vec![
+            PathBuf::from("/home/u/.app/data"),
+            PathBuf::from("/home/u/.app/logs"),
+        ]
     }
 
     #[test]
@@ -505,9 +573,19 @@ mod reveal_guard_tests {
 
     #[test]
     fn rejects_launch_capable_extensions_case_insensitively() {
-        for name in ["payload.app", "run.sh", "x.EXE", "hook.desktop", "s.LNK", "a.scpt"] {
+        for name in [
+            "payload.app",
+            "run.sh",
+            "x.EXE",
+            "hook.desktop",
+            "s.LNK",
+            "a.scpt",
+        ] {
             let p = PathBuf::from("/home/u/.app/data").join(name);
-            assert!(reveal_guard(&p, &bases()).is_err(), "{name} should be refused");
+            assert!(
+                reveal_guard(&p, &bases()).is_err(),
+                "{name} should be refused"
+            );
         }
     }
 }

@@ -54,7 +54,10 @@ pub fn load_bundle_at_launch(app: &AppHandle) -> Option<protocol::RosBundle> {
                         log::info!("[ota] loaded verified cache bundle v{}", state.version);
                         return Some(b);
                     }
-                    Err(e) => log::warn!("[ota] cache archive v{} unreadable ({e}) — using fallback", state.version),
+                    Err(e) => log::warn!(
+                        "[ota] cache archive v{} unreadable ({e}) — using fallback",
+                        state.version
+                    ),
                 }
             }
             Ok(_) => log::warn!("[ota] cache archive hash mismatch — using fallback"),
@@ -138,7 +141,10 @@ fn manifest_url() -> String {
 /// the same trusted host as the manifest, and a (signed) manifest can't redirect the
 /// fetch to an arbitrary host. e.g. `…/ota/manifest.json` → `…/ota/ros-<version>.tar.zst`.
 fn archive_url_for(manifest_url: &str, version: &str) -> String {
-    let base = manifest_url.rsplit_once('/').map(|(b, _)| b).unwrap_or(manifest_url);
+    let base = manifest_url
+        .rsplit_once('/')
+        .map(|(b, _)| b)
+        .unwrap_or(manifest_url);
     format!("{base}/ros-{version}.tar.zst")
 }
 
@@ -164,13 +170,28 @@ pub struct CheckResult {
 
 impl CheckResult {
     fn updated(v: String) -> Self {
-        Self { updated: true, up_to_date: false, version: Some(v), error: None }
+        Self {
+            updated: true,
+            up_to_date: false,
+            version: Some(v),
+            error: None,
+        }
     }
     fn up_to_date(v: String) -> Self {
-        Self { updated: false, up_to_date: true, version: Some(v), error: None }
+        Self {
+            updated: false,
+            up_to_date: true,
+            version: Some(v),
+            error: None,
+        }
     }
     fn err(e: String) -> Self {
-        Self { updated: false, up_to_date: false, version: None, error: Some(e) }
+        Self {
+            updated: false,
+            up_to_date: false,
+            version: None,
+            error: Some(e),
+        }
     }
 }
 
@@ -184,12 +205,11 @@ pub async fn check_and_stage_update(app: &AppHandle) -> CheckResult {
 
     // 1. manifest + detached sig (routed; ros.rip → onion in Tor mode). Small, tight caps.
     let m_url = manifest_url();
-    let manifest_raw = match proxied_get_bytes(
-        app, &m_url, Duration::from_secs(30), Some(1 << 20),
-    ).await {
-        Ok(b) => b,
-        Err(e) => return CheckResult::err(format!("manifest fetch failed: {e}")),
-    };
+    let manifest_raw =
+        match proxied_get_bytes(app, &m_url, Duration::from_secs(30), Some(1 << 20)).await {
+            Ok(b) => b,
+            Err(e) => return CheckResult::err(format!("manifest fetch failed: {e}")),
+        };
     let sig_url = format!("{m_url}.sig");
     let sig = match proxied_get_bytes(app, &sig_url, Duration::from_secs(30), Some(4096)).await {
         Ok(b) => b,
@@ -216,8 +236,13 @@ pub async fn check_and_stage_update(app: &AppHandle) -> CheckResult {
     //    the manifest's own `url` field), bigger timeout + hard size cap; verify its hash.
     let archive_url = archive_url_for(&m_url, &manifest.version);
     let archive = match proxied_get_bytes(
-        app, &archive_url, Duration::from_secs(120), Some(ota::OTA_MAX_BYTES),
-    ).await {
+        app,
+        &archive_url,
+        Duration::from_secs(120),
+        Some(ota::OTA_MAX_BYTES),
+    )
+    .await
+    {
         Ok(b) => b,
         Err(e) => return CheckResult::err(format!("archive download failed: {e}")),
     };
@@ -226,10 +251,15 @@ pub async fn check_and_stage_update(app: &AppHandle) -> CheckResult {
     }
 
     // 4. Atomically stage; applies next launch.
-    if let Err(e) = ota::stage_verified_archive(&ota_dir(app), &manifest.version, &manifest.sha256, &archive) {
+    if let Err(e) =
+        ota::stage_verified_archive(&ota_dir(app), &manifest.version, &manifest.sha256, &archive)
+    {
         return CheckResult::err(format!("staging failed: {e}"));
     }
-    log::info!("[ota] staged verified bundle v{} (applies next launch)", manifest.version);
+    log::info!(
+        "[ota] staged verified bundle v{} (applies next launch)",
+        manifest.version
+    );
     CheckResult::updated(manifest.version)
 }
 

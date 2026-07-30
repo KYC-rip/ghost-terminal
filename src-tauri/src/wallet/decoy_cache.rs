@@ -17,11 +17,11 @@
 //!     restarting. This is what makes the first build survive Tor's flaky pool.
 //! Every other daemon operation delegates to the inner daemon unchanged.
 
+use core::ops::{Bound, RangeBounds};
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use core::ops::{Bound, RangeBounds};
 
 use tokio::sync::Mutex;
 
@@ -65,15 +65,19 @@ fn load_from_disk(path: &PathBuf) -> Option<CacheState> {
         return None;
     }
     let complete = bytes[0] != 0;
-    let tip = u64::from_le_bytes(bytes[1 .. 9].try_into().ok()?) as usize;
-    let dist: Vec<u64> = bytes[9 ..]
+    let tip = u64::from_le_bytes(bytes[1..9].try_into().ok()?) as usize;
+    let dist: Vec<u64> = bytes[9..]
         .chunks_exact(8)
         .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
         .collect();
     if dist.is_empty() {
         return None;
     }
-    Some(CacheState { complete, tip, dist })
+    Some(CacheState {
+        complete,
+        tip,
+        dist,
+    })
 }
 
 fn persist_to_disk(path: &PathBuf, state: &CacheState) {
@@ -98,7 +102,10 @@ pub struct CachingDecoys<D> {
 
 impl<D> CachingDecoys<D> {
     pub fn new(inner: D, cache_path: PathBuf) -> Self {
-        Self { inner, path: cache_path }
+        Self {
+            inner,
+            path: cache_path,
+        }
     }
 }
 
@@ -153,7 +160,8 @@ where
         indexes: &[u64],
         evaluate_unlocked: EvaluateUnlocked,
     ) -> impl Send + Future<Output = Result<Vec<Option<[Point; 2]>>, TransactionsError>> {
-        self.inner.unlocked_ringct_outputs(indexes, evaluate_unlocked)
+        self.inner
+            .unlocked_ringct_outputs(indexes, evaluate_unlocked)
     }
 
     fn ringct_output_distribution(
@@ -176,7 +184,9 @@ where
                     if let Some(state) = load_from_disk(&self.path) {
                         log::info!(
                             "[dist-cache] loaded {} entries (tip {}, complete={}) from disk",
-                            state.dist.len(), state.tip, state.complete
+                            state.dist.len(),
+                            state.tip,
+                            state.complete
                         );
                         map.insert(self.path.clone(), state);
                     }
@@ -184,7 +194,11 @@ where
                 if let Some(state) = map.get(&self.path) {
                     if state.complete && n <= state.tip {
                         let start = state.bottom();
-                        return Ok(if n < start { Vec::new() } else { state.dist[..= (n - start)].to_vec() });
+                        return Ok(if n < start {
+                            Vec::new()
+                        } else {
+                            state.dist[..=(n - start)].to_vec()
+                        });
                     }
                 }
             }
@@ -200,7 +214,11 @@ where
                 map.insert(self.path.clone(), state.clone());
             }
             let start = state.bottom();
-            Ok(if n < start { Vec::new() } else { state.dist[..= (n - start).min(state.dist.len() - 1)].to_vec() })
+            Ok(if n < start {
+                Vec::new()
+            } else {
+                state.dist[..=(n - start).min(state.dist.len() - 1)].to_vec()
+            })
         }
     }
 }
@@ -221,13 +239,20 @@ where
 
         // Downward build: keep prepending chunks until we reach the RingCT start.
         if !state.complete {
-            log::info!("[dist-cache] building/resuming distribution in {}-block chunks (one-time)", BUILD_CHUNK_BLOCKS);
+            log::info!(
+                "[dist-cache] building/resuming distribution in {}-block chunks (one-time)",
+                BUILD_CHUNK_BLOCKS
+            );
             while !state.complete {
-                let bottom = if state.dist.is_empty() { state.tip + 1 } else { state.bottom() };
+                let bottom = if state.dist.is_empty() {
+                    state.tip + 1
+                } else {
+                    state.bottom()
+                };
                 let to = bottom - 1;
                 let from = to.saturating_sub(BUILD_CHUNK_BLOCKS - 1);
                 let requested = to - from + 1;
-                let piece = self.inner.ringct_output_distribution(from ..= to).await?;
+                let piece = self.inner.ringct_output_distribution(from..=to).await?;
                 let got = piece.len();
                 // Prepend this lower slice.
                 let mut merged = piece;
@@ -239,12 +264,19 @@ where
                 }
                 persist_to_disk(&self.path, &state); // resumable checkpoint
             }
-            log::info!("[dist-cache] build complete: {} entries, start {}", state.dist.len(), state.bottom());
+            log::info!(
+                "[dist-cache] build complete: {} entries, start {}",
+                state.dist.len(),
+                state.bottom()
+            );
         }
 
         // Extend forward to the requested tip (tiny delta on every later send).
         if n > state.tip {
-            let delta = self.inner.ringct_output_distribution((state.tip + 1) ..= n).await?;
+            let delta = self
+                .inner
+                .ringct_output_distribution((state.tip + 1)..=n)
+                .await?;
             let added = delta.len();
             state.dist.extend_from_slice(&delta);
             state.tip = n;

@@ -69,7 +69,8 @@ pub fn encrypt_wallet(data: &WalletFileData, password: &str) -> Vec<u8> {
     let cipher = ChaCha20Poly1305::new(key.as_ref().into());
     let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
 
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_slice())
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_slice())
         .expect("encryption should not fail");
 
     // Output: salt || nonce || ciphertext
@@ -87,18 +88,20 @@ pub fn decrypt_wallet(encrypted: &[u8], password: &str) -> Result<WalletFileData
     }
 
     let salt: [u8; SALT_LEN] = encrypted[..SALT_LEN].try_into().unwrap();
-    let nonce_bytes: [u8; NONCE_LEN] = encrypted[SALT_LEN..SALT_LEN + NONCE_LEN].try_into().unwrap();
+    let nonce_bytes: [u8; NONCE_LEN] = encrypted[SALT_LEN..SALT_LEN + NONCE_LEN]
+        .try_into()
+        .unwrap();
     let ciphertext = &encrypted[SALT_LEN + NONCE_LEN..];
 
     let key = derive_key(password, &salt);
     let cipher = ChaCha20Poly1305::new(key.as_ref().into());
     let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
 
-    let plaintext = cipher.decrypt(nonce, ciphertext)
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
         .map_err(|_| "Invalid password or corrupted wallet file".to_string())?;
 
-    serde_json::from_slice(&plaintext)
-        .map_err(|e| format!("Wallet data corrupted: {}", e))
+    serde_json::from_slice(&plaintext).map_err(|e| format!("Wallet data corrupted: {}", e))
 }
 
 /// Charset guard for a renderer-supplied identity id that becomes a filesystem
@@ -112,7 +115,9 @@ pub fn decrypt_wallet(encrypted: &[u8], password: &str) -> Result<WalletFileData
 pub fn valid_identity_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Get the wallet file path for an identity. Rejects ids that aren't a safe path
@@ -121,11 +126,18 @@ pub fn wallet_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, String
     if !valid_identity_id(identity_id) {
         return Err("Invalid identity id".into());
     }
-    Ok(data_dir.join("wallets").join(format!("{}.vault", identity_id)))
+    Ok(data_dir
+        .join("wallets")
+        .join(format!("{}.vault", identity_id)))
 }
 
 /// Save encrypted wallet to disk.
-pub fn save_wallet(data_dir: &Path, identity_id: &str, data: &WalletFileData, password: &str) -> Result<(), String> {
+pub fn save_wallet(
+    data_dir: &Path,
+    identity_id: &str,
+    data: &WalletFileData,
+    password: &str,
+) -> Result<(), String> {
     let path = wallet_path(data_dir, identity_id)?;
     std::fs::create_dir_all(path.parent().unwrap())
         .map_err(|e| format!("Failed to create wallet dir: {}", e))?;
@@ -138,8 +150,7 @@ pub fn save_wallet(data_dir: &Path, identity_id: &str, data: &WalletFileData, pa
     // vault under a different key; rename is atomic on the same filesystem, so the
     // old vault survives intact until the new one is fully written.
     let tmp = path.with_extension("vault.tmp");
-    std::fs::write(&tmp, &encrypted)
-        .map_err(|e| format!("Failed to write wallet file: {}", e))?;
+    std::fs::write(&tmp, &encrypted).map_err(|e| format!("Failed to write wallet file: {}", e))?;
     if let Err(e) = std::fs::rename(&tmp, &path) {
         // Don't leave the half-written temp behind if the commit rename fails.
         let _ = std::fs::remove_file(&tmp);
@@ -151,17 +162,23 @@ pub fn save_wallet(data_dir: &Path, identity_id: &str, data: &WalletFileData, pa
 }
 
 /// Load and decrypt wallet from disk.
-pub fn load_wallet(data_dir: &Path, identity_id: &str, password: &str) -> Result<WalletFileData, String> {
+pub fn load_wallet(
+    data_dir: &Path,
+    identity_id: &str,
+    password: &str,
+) -> Result<WalletFileData, String> {
     let path = wallet_path(data_dir, identity_id)?;
-    let encrypted = std::fs::read(&path)
-        .map_err(|e| format!("Failed to read wallet file: {}", e))?;
+    let encrypted =
+        std::fs::read(&path).map_err(|e| format!("Failed to read wallet file: {}", e))?;
 
     decrypt_wallet(&encrypted, password)
 }
 
 /// Check if a wallet file exists for an identity.
 pub fn wallet_exists(data_dir: &Path, identity_id: &str) -> bool {
-    wallet_path(data_dir, identity_id).map(|p| p.exists()).unwrap_or(false)
+    wallet_path(data_dir, identity_id)
+        .map(|p| p.exists())
+        .unwrap_or(false)
 }
 
 // ── Output Cache (separate from encrypted wallet) ──
@@ -235,7 +252,9 @@ fn output_cache_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, Stri
     if !valid_identity_id(identity_id) {
         return Err("Invalid identity id".into());
     }
-    Ok(data_dir.join("wallets").join(format!("{}.cache", identity_id)))
+    Ok(data_dir
+        .join("wallets")
+        .join(format!("{}.cache", identity_id)))
 }
 
 // ── Device-key sealed container (watch tier) ────────────────────────────────
@@ -250,7 +269,9 @@ fn seal(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Vec<u8> {
     let cipher = ChaCha20Poly1305::new(key.into());
     let mut nonce = [0u8; NONCE_LEN];
     rand::thread_rng().fill_bytes(&mut nonce);
-    let ct = cipher.encrypt(&nonce.into(), plaintext).expect("ChaCha20Poly1305 encrypt");
+    let ct = cipher
+        .encrypt(&nonce.into(), plaintext)
+        .expect("ChaCha20Poly1305 encrypt");
     let mut out = Vec::with_capacity(SEAL_MAGIC.len() + NONCE_LEN + ct.len());
     out.extend_from_slice(SEAL_MAGIC);
     out.extend_from_slice(&nonce);
@@ -294,10 +315,14 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
 /// Without a device key (keychain unavailable) this degrades to the legacy
 /// plaintext write: no worse than the historical behavior, and the cache holds
 /// no key material (it IS full financial history though — hence the seal).
-pub fn save_output_cache(data_dir: &Path, identity_id: &str, cache: &OutputCache) -> Result<(), String> {
+pub fn save_output_cache(
+    data_dir: &Path,
+    identity_id: &str,
+    cache: &OutputCache,
+) -> Result<(), String> {
     let path = output_cache_path(data_dir, identity_id)?;
-    let data = serde_json::to_vec(cache)
-        .map_err(|e| format!("Failed to serialize cache: {}", e))?;
+    let data =
+        serde_json::to_vec(cache).map_err(|e| format!("Failed to serialize cache: {}", e))?;
     let body = match super::device_key::cache_key() {
         Some(k) => seal(&k, &data),
         None => data,
@@ -361,18 +386,31 @@ fn watch_path(data_dir: &Path, identity_id: &str) -> Result<PathBuf, String> {
     if !valid_identity_id(identity_id) {
         return Err("Invalid identity id".into());
     }
-    Ok(data_dir.join("wallets").join(format!("{}.watch", identity_id)))
+    Ok(data_dir
+        .join("wallets")
+        .join(format!("{}.watch", identity_id)))
 }
 
 /// Persist an identity's view pair (watch tier). Refuses without a device key.
-pub fn save_watch(data_dir: &Path, identity_id: &str, spend_pub: &[u8; 32], view_sec: &Zeroizing<[u8; 32]>) -> Result<(), String> {
+pub fn save_watch(
+    data_dir: &Path,
+    identity_id: &str,
+    spend_pub: &[u8; 32],
+    view_sec: &Zeroizing<[u8; 32]>,
+) -> Result<(), String> {
     let Some(k) = super::device_key::watch_key() else {
         return Err("device key unavailable — refusing to persist a view key unencrypted".into());
     };
     save_watch_with_key(&k, data_dir, identity_id, spend_pub, view_sec)
 }
 
-fn save_watch_with_key(k: &[u8; KEY_LEN], data_dir: &Path, identity_id: &str, spend_pub: &[u8; 32], view_sec: &Zeroizing<[u8; 32]>) -> Result<(), String> {
+fn save_watch_with_key(
+    k: &[u8; KEY_LEN],
+    data_dir: &Path,
+    identity_id: &str,
+    spend_pub: &[u8; 32],
+    view_sec: &Zeroizing<[u8; 32]>,
+) -> Result<(), String> {
     let path = watch_path(data_dir, identity_id)?;
     // Zeroizing: the serialized payload embeds the view secret (hex) — wipe the
     // heap copy once the sealed bytes are written.
@@ -398,7 +436,11 @@ pub fn load_watch(data_dir: &Path, identity_id: &str) -> Option<monero_wallet::V
     load_watch_with_key(&k, data_dir, identity_id)
 }
 
-fn load_watch_with_key(k: &[u8; KEY_LEN], data_dir: &Path, identity_id: &str) -> Option<monero_wallet::ViewPair> {
+fn load_watch_with_key(
+    k: &[u8; KEY_LEN],
+    data_dir: &Path,
+    identity_id: &str,
+) -> Option<monero_wallet::ViewPair> {
     let path = watch_path(data_dir, identity_id).ok()?;
     let data = std::fs::read(&path).ok()?;
     let pt = Zeroizing::new(open_sealed(k, &data)?);
@@ -450,7 +492,10 @@ mod tests {
         let data = WalletFileData {
             seed_entropy: "deadbeef".repeat(4),
             scan_height: 3245000,
-            accounts: vec![AccountLabel { index: 0, label: "Main".into() }],
+            accounts: vec![AccountLabel {
+                index: 0,
+                label: "Main".into(),
+            }],
             subaddress_labels: vec![],
         };
 
@@ -506,7 +551,8 @@ mod tests {
     // ── Watch-tier seal/open + watch store invariants ────────────────────────
 
     fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ripley-watch-test-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("ripley-watch-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -517,7 +563,10 @@ mod tests {
         let k = [7u8; KEY_LEN];
         let sealed = seal(&k, b"watch tier payload");
         assert!(is_sealed(&sealed));
-        assert_eq!(open_sealed(&k, &sealed).as_deref(), Some(&b"watch tier payload"[..]));
+        assert_eq!(
+            open_sealed(&k, &sealed).as_deref(),
+            Some(&b"watch tier payload"[..])
+        );
         // Wrong key → authenticated decrypt refuses (None), never garbage.
         let wrong = [8u8; KEY_LEN];
         assert!(open_sealed(&wrong, &sealed).is_none());
@@ -546,7 +595,11 @@ mod tests {
     fn legacy_cache_loads_and_decrypt_failure_degrades_to_default() {
         let dir = tmpdir("cache");
         // Legacy plaintext cache parses (device key absent in tests → no re-seal).
-        let legacy = serde_json::to_vec(&OutputCache { scan_height: 42, ..Default::default() }).unwrap();
+        let legacy = serde_json::to_vec(&OutputCache {
+            scan_height: 42,
+            ..Default::default()
+        })
+        .unwrap();
         std::fs::create_dir_all(dir.join("wallets")).unwrap();
         std::fs::write(dir.join("wallets/vault_t.cache"), &legacy).unwrap();
         assert_eq!(load_output_cache(&dir, "vault_t").scan_height, 42);
@@ -576,7 +629,9 @@ mod tests {
         // The file on disk is sealed — the view secret never plaintext.
         let raw = std::fs::read(dir.join("wallets/vault_t.watch")).unwrap();
         assert!(is_sealed(&raw));
-        assert!(!raw.windows(3).any(|w| w == hex::encode([3u8; 32]).as_bytes()[..3].to_vec()));
+        assert!(!raw
+            .windows(3)
+            .any(|w| w == hex::encode([3u8; 32]).as_bytes()[..3].to_vec()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

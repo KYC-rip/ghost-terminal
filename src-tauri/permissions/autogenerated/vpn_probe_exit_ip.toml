@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-probe-exit-ip"
+description = "Enables the vpn_probe_exit_ip command without any pre-configured scope."
+commands.allow = ["vpn_probe_exit_ip"]
+
+[[permission]]
+identifier = "deny-vpn-probe-exit-ip"
+description = "Denies the vpn_probe_exit_ip command without any pre-configured scope."
+commands.deny = ["vpn_probe_exit_ip"]

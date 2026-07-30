@@ -127,8 +127,15 @@ struct StatusSnapshot {
     killswitch_active: bool,
     ipv6_policy: Option<Ipv6Policy>,
     interface: Option<String>,
+    /// Display-only label of the active profile (never used for routing decisions).
+    profile_name: Option<String>,
     /// Seconds since the last successful handshake (age), not a wall-clock stamp.
     handshake_age_secs: Option<u64>,
+    /// Seconds the tunnel has been configured in this broker process.
+    uptime_secs: Option<u64>,
+    connected_at_unix: Option<u64>,
+    received_bytes: Option<u64>,
+    sent_bytes: Option<u64>,
     /// A prior teardown left possibly-stale state; a normal restore stays blocked
     /// until it verifies a clean teardown (emergency forces).
     cleanup_required: bool,
@@ -146,7 +153,12 @@ impl StatusSnapshot {
             killswitch_active: false,
             ipv6_policy: None,
             interface: None,
+            profile_name: None,
             handshake_age_secs: None,
+            uptime_secs: None,
+            connected_at_unix: None,
+            received_bytes: None,
+            sent_bytes: None,
             cleanup_required: false,
             error_code: None,
         }
@@ -177,7 +189,12 @@ enum Request {
     /// Raw `.conf` text — the broker parses + validates it (parse-as-data at the
     /// trust boundary), so the unprivileged side never decides what's safe. Held
     /// as `SecretText` so it zeroizes even on a rejected envelope.
-    Up { config_text: SecretText },
+    /// Optional `profile_name` is display-only metadata echoed in status.
+    Up {
+        config_text: SecretText,
+        #[serde(default)]
+        profile_name: Option<String>,
+    },
     /// Tear down the tunnel but KEEP the egress block (fail-closed).
     DisconnectBlocked,
     /// Tear down the tunnel AND restore clearnet — the only path that re-opens
@@ -196,12 +213,27 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 enum Response {
-    Ok { id: String, status: StatusSnapshot },
+    Ok {
+        id: String,
+        status: StatusSnapshot,
+    },
     /// Caller not permitted (peer-cred / future Polkit). Distinct from a bad config.
-    Denied { id: String, code: ErrCode, reason: String },
+    Denied {
+        id: String,
+        code: ErrCode,
+        reason: String,
+    },
     /// The submitted config failed validation — NOT a permission problem.
-    InvalidConfig { id: String, code: ErrCode, reason: String },
-    Error { id: String, code: ErrCode, reason: String },
+    InvalidConfig {
+        id: String,
+        code: ErrCode,
+        reason: String,
+    },
+    Error {
+        id: String,
+        code: ErrCode,
+        reason: String,
+    },
 }
 
 /// RAII guard for a worker-pool slot: decrements the in-flight counter on drop,
@@ -214,7 +246,9 @@ impl Drop for SlotGuard {
 }
 
 fn main() {
-    let sock_path = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_SOCK.to_string());
+    let sock_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_SOCK.to_string());
 
     // Refuse to run unprivileged — the whole point is to be the single root gate.
     if !Uid::effective().is_root() {
@@ -248,11 +282,14 @@ fn main() {
         // spawn unbounded threads or block the accept loop.
         if inflight.fetch_add(1, Ordering::SeqCst) >= MAX_CLIENTS {
             inflight.fetch_sub(1, Ordering::SeqCst);
-            let _ = reply(&stream, Response::Error {
-                id: String::new(),
-                code: ErrCode::Busy,
-                reason: "broker busy".into(),
-            });
+            let _ = reply(
+                &stream,
+                Response::Error {
+                    id: String::new(),
+                    code: ErrCode::Busy,
+                    reason: "broker busy".into(),
+                },
+            );
             continue;
         }
         let guard = SlotGuard(Arc::clone(&inflight));
@@ -283,7 +320,9 @@ fn bind_socket(sock_path: &str) -> Result<UnixListener, String> {
                 return Err(format!("refusing to remove non-socket at {sock_path}"));
             }
             if st.st_uid != 0 {
-                return Err(format!("refusing to remove non-root-owned socket at {sock_path}"));
+                return Err(format!(
+                    "refusing to remove non-root-owned socket at {sock_path}"
+                ));
             }
             std::fs::remove_file(path).map_err(|e| format!("unlink {sock_path}: {e}"))?;
         }
@@ -304,8 +343,13 @@ fn bind_socket(sock_path: &str) -> Result<UnixListener, String> {
         .map_err(|e| format!("lookup group {BROKER_GROUP}: {e}"))?
         .ok_or_else(|| format!("required group {BROKER_GROUP} does not exist"))?;
     chown(path, None, Some(group.gid)).map_err(|e| format!("chgrp {sock_path}: {e}"))?;
-    fchmodat(None, path, Mode::from_bits_truncate(0o660), FchmodatFlags::FollowSymlink)
-        .map_err(|e| format!("chmod {sock_path}: {e}"))?;
+    fchmodat(
+        None,
+        path,
+        Mode::from_bits_truncate(0o660),
+        FchmodatFlags::FollowSymlink,
+    )
+    .map_err(|e| format!("chmod {sock_path}: {e}"))?;
 
     Ok(listener)
 }
@@ -324,22 +368,33 @@ fn handle(stream: UnixStream) {
     let peer = match getsockopt(&stream, PeerCredentials) {
         Ok(cred) => cred,
         Err(e) => {
-            let _ = reply(&stream, Response::Denied {
-                id: String::new(),
-                code: ErrCode::NotAuthorized,
-                reason: format!("no peer creds: {e}"),
-            });
+            let _ = reply(
+                &stream,
+                Response::Denied {
+                    id: String::new(),
+                    code: ErrCode::NotAuthorized,
+                    reason: format!("no peer creds: {e}"),
+                },
+            );
             return;
         }
     };
     let group = Group::from_name(BROKER_GROUP).ok().flatten().map(|g| g.gid);
     let peer_pid = Some(Pid::from_raw(peer.pid()));
-    if !authorized_connect(Uid::from_raw(peer.uid()), Gid::from_raw(peer.gid()), peer_pid, group) {
-        let _ = reply(&stream, Response::Denied {
-            id: String::new(),
-            code: ErrCode::NotAuthorized,
-            reason: "peer not authorized".into(),
-        });
+    if !authorized_connect(
+        Uid::from_raw(peer.uid()),
+        Gid::from_raw(peer.gid()),
+        peer_pid,
+        group,
+    ) {
+        let _ = reply(
+            &stream,
+            Response::Denied {
+                id: String::new(),
+                code: ErrCode::NotAuthorized,
+                reason: "peer not authorized".into(),
+            },
+        );
         return;
     }
 
@@ -348,7 +403,14 @@ fn handle(stream: UnixStream) {
     let frame = match read_frame(&stream, deadline) {
         Ok(f) => f,
         Err((code, reason)) => {
-            let _ = reply(&stream, Response::Error { id: String::new(), code, reason });
+            let _ = reply(
+                &stream,
+                Response::Error {
+                    id: String::new(),
+                    code,
+                    reason,
+                },
+            );
             return;
         }
     };
@@ -377,7 +439,10 @@ fn handle(stream: UnixStream) {
 /// Read exactly one newline-terminated frame, capped at MAX_FRAME, within one
 /// ABSOLUTE deadline. Before each read the socket timeout is set to the time
 /// remaining, so total read time is bounded regardless of how the bytes dribble.
-fn read_frame(mut stream: &UnixStream, deadline: Instant) -> Result<Zeroizing<Vec<u8>>, (ErrCode, String)> {
+fn read_frame(
+    mut stream: &UnixStream,
+    deadline: Instant,
+) -> Result<Zeroizing<Vec<u8>>, (ErrCode, String)> {
     let mut buf: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(256));
     let mut byte = [0u8; 1];
     loop {
@@ -427,14 +492,29 @@ fn safe_id(id: &str) -> String {
 /// check covers primary and supplementary group membership and avoids trusting
 /// a non-group peer if the socket is misconfigured.
 fn authorized_connect(uid: Uid, gid: Gid, pid: Option<Pid>, broker_gid: Option<Gid>) -> bool {
-    if uid.is_root() { return true; }
-    let Some(target) = broker_gid else { return false; };
-    if gid == target { return true; }
-    let Some(pid) = pid else { return false; };
-    let Ok(status) = std::fs::read_to_string(format!("/proc/{}/status", pid.as_raw())) else { return false; };
-    status.lines()
+    if uid.is_root() {
+        return true;
+    }
+    let Some(target) = broker_gid else {
+        return false;
+    };
+    if gid == target {
+        return true;
+    }
+    let Some(pid) = pid else {
+        return false;
+    };
+    let Ok(status) = std::fs::read_to_string(format!("/proc/{}/status", pid.as_raw())) else {
+        return false;
+    };
+    status
+        .lines()
         .find(|line| line.starts_with("Groups:"))
-        .map(|line| line.split_whitespace().skip(1).any(|g| g.parse::<u32>().ok() == Some(target.as_raw())))
+        .map(|line| {
+            line.split_whitespace()
+                .skip(1)
+                .any(|g| g.parse::<u32>().ok() == Some(target.as_raw()))
+        })
         .unwrap_or(false)
 }
 
@@ -442,15 +522,36 @@ fn authorized_connect(uid: Uid, gid: Gid, pid: Option<Pid>, broker_gid: Option<G
 /// time prevents a PID-reuse race between the socket connection and the prompt.
 /// No shell is involved; the broker invokes pkcheck directly.
 fn authorized_strong(uid: Uid, pid: Option<Pid>, action: &str) -> bool {
-    if uid.is_root() { return true; }
-    let Some(pid) = pid else { return false; };
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw())) else { return false; };
+    if uid.is_root() {
+        return true;
+    }
+    let Some(pid) = pid else {
+        return false;
+    };
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw())) else {
+        return false;
+    };
     // After the closing ')' the first token is field 3; field 22 is token 19.
-    let Some(start) = stat.rsplit_once(')').and_then(|(_, suffix)| suffix.split_whitespace().nth(19)) else { return false; };
+    let Some(start) = stat
+        .rsplit_once(')')
+        .and_then(|(_, suffix)| suffix.split_whitespace().nth(19))
+    else {
+        return false;
+    };
     let process = format!("{},{}", pid.as_raw(), start);
-    let checker = if Path::new("/usr/bin/pkcheck").exists() { "/usr/bin/pkcheck" } else { "pkcheck" };
+    let checker = if Path::new("/usr/bin/pkcheck").exists() {
+        "/usr/bin/pkcheck"
+    } else {
+        "pkcheck"
+    };
     Command::new(checker)
-        .args(["--action-id", action, "--process", &process, "--allow-user-interaction"])
+        .args([
+            "--action-id",
+            action,
+            "--process",
+            &process,
+            "--allow-user-interaction",
+        ])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -477,10 +578,13 @@ fn dispatch(env: Envelope, uid: Uid, pid: Option<Pid>) -> Response {
         // (permission) — the caller can distinguish "you may not" from "this
         // config is bad". `up()` seals the fail-closed nftables block BEFORE any
         // route/wg change and tears down partial state on any failure.
-        Request::Up { config_text } => match parser::parse_wg_config(config_text.as_str()) {
+        Request::Up {
+            config_text,
+            profile_name,
+        } => match parser::parse_wg_config(config_text.as_str()) {
             Ok(cfg) => match strong(uid, &id, "org.ripley.vpn.connect") {
                 Some(deny) => deny,
-                None => run_op(id, |m| m.up(&cfg)),
+                None => run_op(id, |m| m.up(&cfg, clean_profile_name(profile_name))),
             },
             Err(e) => Response::InvalidConfig {
                 id,
@@ -509,6 +613,21 @@ fn dispatch(env: Envelope, uid: Uid, pid: Option<Pid>) -> Response {
     }
 }
 
+/// Display-only profile label: bound length and reject control / non-ASCII so a
+/// ZIP-derived name cannot smuggle log/UI injection across the root boundary.
+fn clean_profile_name(value: Option<String>) -> Option<String> {
+    let value = value?.trim().to_string();
+    if value.is_empty()
+        || value.len() > 80
+        || !value.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b' ' | b'.' | b'_' | b'-' | b'(' | b')')
+        })
+    {
+        return None;
+    }
+    Some(value)
+}
+
 /// Build a wire snapshot from the manager's view.
 fn snapshot_from(view: state::View) -> StatusSnapshot {
     StatusSnapshot {
@@ -519,7 +638,12 @@ fn snapshot_from(view: state::View) -> StatusSnapshot {
         killswitch_active: view.ks_active,
         ipv6_policy: view.ipv6,
         interface: view.iface,
+        profile_name: view.profile_name,
         handshake_age_secs: view.handshake_age_secs,
+        uptime_secs: view.uptime_secs,
+        connected_at_unix: view.connected_at_unix,
+        received_bytes: view.received_bytes,
+        sent_bytes: view.sent_bytes,
         cleanup_required: view.cleanup_required,
         error_code: None,
     }
@@ -544,7 +668,10 @@ fn lock_manager() -> std::sync::MutexGuard<'static, state::Manager> {
 fn status_response(id: String) -> Response {
     // Capture state under the lock, release it, THEN probe the handshake.
     let base = lock_manager().base();
-    Response::Ok { id, status: snapshot_from(state::finalize(base)) }
+    Response::Ok {
+        id,
+        status: snapshot_from(state::finalize(base)),
+    }
 }
 
 /// Run a state-mutating op under the single lock and reply with the resulting
@@ -555,15 +682,25 @@ fn run_op(id: String, f: impl FnOnce(&mut state::Manager) -> Result<(), String>)
         let mut mgr = lock_manager();
         match f(&mut mgr) {
             Ok(()) => mgr.base(),
-            Err(reason) => return Response::Error { id, code: ErrCode::Internal, reason },
+            Err(reason) => {
+                return Response::Error {
+                    id,
+                    code: ErrCode::Internal,
+                    reason,
+                }
+            }
         }
     };
-    Response::Ok { id, status: snapshot_from(state::finalize(base)) }
+    Response::Ok {
+        id,
+        status: snapshot_from(state::finalize(base)),
+    }
 }
 
 fn reply(mut stream: &UnixStream, resp: Response) -> std::io::Result<()> {
-    let mut json = serde_json::to_string(&resp)
-        .unwrap_or_else(|_| "{\"result\":\"error\",\"code\":\"internal\",\"reason\":\"serialize\"}".into());
+    let mut json = serde_json::to_string(&resp).unwrap_or_else(|_| {
+        "{\"result\":\"error\",\"code\":\"internal\",\"reason\":\"serialize\"}".into()
+    });
     json.push('\n');
     stream.write_all(json.as_bytes())
 }

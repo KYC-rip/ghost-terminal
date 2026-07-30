@@ -95,6 +95,7 @@
     "allow-restart-tor",
     "allow-vpn-status",
     "allow-vpn-probe-endpoints",
+    "allow-vpn-probe-exit-ip",
     "allow-vpn-connect",
     "allow-vpn-disconnect",
     "allow-vpn-set-killswitch",

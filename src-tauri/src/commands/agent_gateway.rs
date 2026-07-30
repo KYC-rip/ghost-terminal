@@ -54,9 +54,13 @@ pub async fn agent_gateway_set_config(
     }
     // boundGrantId is nullable: an explicit null clears it (back to read-only).
     if patch.get("boundGrantId").is_some() {
-        cfg.bound_grant_id = patch
-            .get("boundGrantId")
-            .and_then(|v| if v.is_null() { None } else { v.as_str().map(String::from) });
+        cfg.bound_grant_id = patch.get("boundGrantId").and_then(|v| {
+            if v.is_null() {
+                None
+            } else {
+                v.as_str().map(String::from)
+            }
+        });
     }
     if let Some(v) = patch.get("accountIndex").and_then(|v| v.as_u64()) {
         cfg.account_index = v as u32;

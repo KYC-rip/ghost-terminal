@@ -98,16 +98,26 @@ pub fn sign_message_v1(message: &str, spend_sec: &Scalar, spend_pub: &EdwardsPoi
 /// the embedded `c`. Used for self-consistency tests and to check golden vectors
 /// produced by real Monero. (The production verifier is monero-wallet-rpc; this is
 /// our independent reference.)
-pub fn verify_message_v1(message: &str, spend_pub: &EdwardsPoint, signature: &str) -> Result<bool, String> {
-    let body = signature.strip_prefix(SIG_PREFIX).ok_or("not a SigV1 signature")?;
+pub fn verify_message_v1(
+    message: &str,
+    spend_pub: &EdwardsPoint,
+    signature: &str,
+) -> Result<bool, String> {
+    let body = signature
+        .strip_prefix(SIG_PREFIX)
+        .ok_or("not a SigV1 signature")?;
     let bytes = base58_monero::decode(body)?;
     if bytes.len() != 64 {
         return Err(format!("expected 64 signature bytes, got {}", bytes.len()));
     }
-    let c: Scalar = Option::from(Scalar::from_canonical_bytes(bytes[0..32].try_into().unwrap()))
-        .ok_or("non-canonical c")?;
-    let r: Scalar = Option::from(Scalar::from_canonical_bytes(bytes[32..64].try_into().unwrap()))
-        .ok_or("non-canonical r")?;
+    let c: Scalar = Option::from(Scalar::from_canonical_bytes(
+        bytes[0..32].try_into().unwrap(),
+    ))
+    .ok_or("non-canonical c")?;
+    let r: Scalar = Option::from(Scalar::from_canonical_bytes(
+        bytes[32..64].try_into().unwrap(),
+    ))
+    .ok_or("non-canonical r")?;
     if c == Scalar::ZERO {
         return Ok(false);
     }
@@ -136,10 +146,14 @@ mod tests {
     #[test]
     fn sign_then_verify_roundtrips() {
         let (sec, pubk) = keypair();
-        let msg = "xmr.bio wants you to sign in with your Monero address:\n4Abc...\n\nNonce: deadbeef";
+        let msg =
+            "xmr.bio wants you to sign in with your Monero address:\n4Abc...\n\nNonce: deadbeef";
         let sig = sign_message_v1(msg, &sec, &pubk);
         assert!(sig.starts_with("SigV1"));
-        assert!(verify_message_v1(msg, &pubk, &sig).unwrap(), "honest signature must verify");
+        assert!(
+            verify_message_v1(msg, &pubk, &sig).unwrap(),
+            "honest signature must verify"
+        );
     }
 
     #[test]
@@ -159,7 +173,10 @@ mod tests {
         let mut bad = sig.clone();
         let last = bad.pop().unwrap();
         bad.push(if last == 'A' { 'B' } else { 'A' });
-        assert!(matches!(verify_message_v1(msg, &pubk, &bad), Ok(false) | Err(_)));
+        assert!(matches!(
+            verify_message_v1(msg, &pubk, &bad),
+            Ok(false) | Err(_)
+        ));
     }
 
     #[test]

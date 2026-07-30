@@ -32,9 +32,18 @@ fn header() -> String {
 fn ruleset(endpoint_ip: IpAddr, port: u16, ipv6: Ipv6Policy, phys: &str) -> String {
     // `meta mark {FWMARK}` ensures ONLY WireGuard's own marked transport packets
     // can use the endpoint hole — not another process racing during bring-up.
+    // WireGuard transport is fwmark-stamped. Plain ICMP to the same peer is
+    // also allowed so the host speed-test can measure the live server while
+    // connected (without opening a general clearnet hole).
     let ep = match endpoint_ip {
-        IpAddr::V4(v4) => format!("        oifname \"{phys}\" meta mark {FWMARK} ip daddr {v4} udp dport {port} accept\n"),
-        IpAddr::V6(v6) => format!("        oifname \"{phys}\" meta mark {FWMARK} ip6 daddr {v6} udp dport {port} accept\n"),
+        IpAddr::V4(v4) => format!(
+            "        oifname \"{phys}\" meta mark {FWMARK} ip daddr {v4} udp dport {port} accept\n\
+             oifname \"{phys}\" ip daddr {v4} icmp type echo-request accept\n"
+        ),
+        IpAddr::V6(v6) => format!(
+            "        oifname \"{phys}\" meta mark {FWMARK} ip6 daddr {v6} udp dport {port} accept\n\
+             oifname \"{phys}\" ip6 daddr {v6} icmpv6 type echo-request accept\n"
+        ),
     };
     let mut s = header();
     s.push_str(&format!("table inet {TABLE} {{\n"));
@@ -43,8 +52,10 @@ fn ruleset(endpoint_ip: IpAddr, port: u16, ipv6: Ipv6Policy, phys: &str) -> Stri
     s.push_str("        oifname \"lo\" accept\n");
     s.push_str(&format!("        oifname \"{IFACE}\" accept\n")); // tunnel traffic
     s.push_str(&ep); // the exact pinned endpoint, via the physical link only
-    // DHCPv4 + NDP, scoped to the physical link so the tunnel path stays clean.
-    s.push_str(&format!("        oifname \"{phys}\" udp dport 67 udp sport 68 accept\n"));
+                     // DHCPv4 + NDP, scoped to the physical link so the tunnel path stays clean.
+    s.push_str(&format!(
+        "        oifname \"{phys}\" udp dport 67 udp sport 68 accept\n"
+    ));
     s.push_str(&format!("        oifname \"{phys}\" icmpv6 type {{ nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert }} accept\n"));
     if matches!(ipv6, Ipv6Policy::Block) {
         s.push_str("        meta nfproto ipv6 drop\n");
@@ -55,8 +66,17 @@ fn ruleset(endpoint_ip: IpAddr, port: u16, ipv6: Ipv6Policy, phys: &str) -> Stri
 
 /// Install (or atomically replace) the kill-switch pinning `endpoint_ip:port`
 /// out `phys`.
-pub fn install(endpoint_ip: IpAddr, port: u16, ipv6: Ipv6Policy, phys: &str) -> Result<(), NetError> {
-    run_stdin("nft", &["-f", "-"], ruleset(endpoint_ip, port, ipv6, phys).as_bytes())
+pub fn install(
+    endpoint_ip: IpAddr,
+    port: u16,
+    ipv6: Ipv6Policy,
+    phys: &str,
+) -> Result<(), NetError> {
+    run_stdin(
+        "nft",
+        &["-f", "-"],
+        ruleset(endpoint_ip, port, ipv6, phys).as_bytes(),
+    )
 }
 
 /// Maximally fail-closed block with NO endpoint hole — used for crash recovery
@@ -86,9 +106,19 @@ mod tests {
 
     #[test]
     fn ruleset_pins_endpoint_and_has_no_established_hole() {
-        let rs = ruleset(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)), 51820, Ipv6Policy::Block, "eth0");
+        let rs = ruleset(
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+            51820,
+            Ipv6Policy::Block,
+            "eth0",
+        );
         assert!(rs.contains("policy drop;"));
-        assert!(rs.contains("oifname \"eth0\" meta mark 0xca6c ip daddr 203.0.113.7 udp dport 51820 accept"));
+        assert!(rs.contains(
+            "oifname \"eth0\" meta mark 0xca6c ip daddr 203.0.113.7 udp dport 51820 accept"
+        ));
+        assert!(rs.contains(
+            "oifname \"eth0\" ip daddr 203.0.113.7 icmp type echo-request accept"
+        ));
         assert!(rs.contains(&format!("oifname \"{IFACE}\" accept")));
         assert!(rs.contains("meta nfproto ipv6 drop"));
         // The pre-existing-flow leak must be gone.
@@ -97,12 +127,19 @@ mod tests {
 
     #[test]
     fn full_tunnel_v6_has_no_extra_ipv6_drop() {
-        let rs = ruleset(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 1, Ipv6Policy::FullTunnel, "wlan0");
+        let rs = ruleset(
+            IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+            1,
+            Ipv6Policy::FullTunnel,
+            "wlan0",
+        );
         assert!(!rs.contains("meta nfproto ipv6 drop"));
     }
 
     #[test]
     fn atomic_replace_header_is_add_then_delete() {
-        assert!(header().starts_with(&format!("add table inet {TABLE}\ndelete table inet {TABLE}")));
+        assert!(header().starts_with(&format!(
+            "add table inet {TABLE}\ndelete table inet {TABLE}"
+        )));
     }
 }

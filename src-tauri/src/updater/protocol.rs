@@ -116,10 +116,7 @@ fn path_from_uri(uri: &str) -> String {
         None => "", // "ros://local" with no path
     };
     // Drop query/fragment.
-    let path = path_and_rest
-        .split(['?', '#'])
-        .next()
-        .unwrap_or("");
+    let path = path_and_rest.split(['?', '#']).next().unwrap_or("");
     // Percent-decode is not needed for our own build's ASCII asset names; normalize the
     // same way archive keys were normalized (rejects traversal → empty ⇒ index fallback).
     super::ota::normalize_entry_path(path).unwrap_or_default()

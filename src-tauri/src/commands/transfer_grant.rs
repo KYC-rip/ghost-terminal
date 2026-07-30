@@ -8,10 +8,10 @@
 //! address is renderer-trusted by design: the caps bound HOW MUCH leaves, not WHERE.
 //! See ripley-os/docs/auto-eject-design.md §1/§1a/§1b and wallet::transfer_ledger.
 
-use tauri::{AppHandle, Manager, State};
 use crate::emit_log;
-use crate::wallet::{WalletState, TxDestination};
-use crate::wallet::transfer_ledger::{parse_xmr, format_xmr};
+use crate::wallet::transfer_ledger::{format_xmr, parse_xmr};
+use crate::wallet::{TxDestination, WalletState};
+use tauri::{AppHandle, Manager, State};
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -44,7 +44,9 @@ pub async fn arm_transfer_grant(
     // 2. The grant's wallet MUST be the resident one — else its relays would try to
     //    spend from whatever identity happens to be loaded.
     if state.get_active_identity_id().await.as_deref() != Some(identity_id.as_str()) {
-        return Err("This wallet is not the active identity — open it before arming a grant".into());
+        return Err(
+            "This wallet is not the active identity — open it before arming a grant".into(),
+        );
     }
 
     // 3. Parse the XMR budgets to atomic piconero.
@@ -115,7 +117,11 @@ pub async fn relay_transfer_grant(
     // 3. The spend key must be resident (armed ledger flag can outlive the key across a
     //    restart). If cold, roll the reservation back and demand a re-arm.
     if state.get_spend_key().await.is_none() {
-        state.transfer_grants.lock().await.rollback(&grant_id, amount);
+        state
+            .transfer_grants
+            .lock()
+            .await
+            .rollback(&grant_id, amount);
         return Err("wallet not hot — re-arm required".into());
     }
 
@@ -123,14 +129,21 @@ pub async fn relay_transfer_grant(
     let account_index = match state.transfer_grants.lock().await.account_index(&grant_id) {
         Some(a) => a,
         None => {
-            state.transfer_grants.lock().await.rollback(&grant_id, amount);
+            state
+                .transfer_grants
+                .lock()
+                .await
+                .rollback(&grant_id, amount);
             return Err("grant not found".into());
         }
     };
     let prep = match crate::commands::wallet::prepare_transfer(
         app.clone(),
         app.state::<WalletState>(),
-        vec![TxDestination { address: to.clone(), amount: amount.to_string() }],
+        vec![TxDestination {
+            address: to.clone(),
+            amount: amount.to_string(),
+        }],
         account_index,
         Some(0),
         None,
@@ -139,7 +152,11 @@ pub async fn relay_transfer_grant(
     {
         Ok(p) => p,
         Err(e) => {
-            state.transfer_grants.lock().await.rollback(&grant_id, amount);
+            state
+                .transfer_grants
+                .lock()
+                .await
+                .rollback(&grant_id, amount);
             return Err(e);
         }
     };
@@ -147,27 +164,32 @@ pub async fn relay_transfer_grant(
     // 5. Sign + broadcast via the no-dialog helper (pre-authorized at arm time). On
     //    failure, roll the reservation back AND discard the pending spend prepare()
     //    staged, so the (never-broadcast) inputs return to the spendable balance.
-    let tx_hash = match crate::commands::wallet::sign_and_broadcast(
-        &app,
-        &state,
-        prep.tx_metadata.clone(),
-    )
-    .await
-    {
-        Ok(h) => h,
-        Err(e) => {
-            state.transfer_grants.lock().await.rollback(&grant_id, amount);
-            state
-                .discard_pending_spend(&crate::wallet::state::tx_meta_key(&prep.tx_metadata))
-                .await;
-            return Err(e);
-        }
-    };
+    let tx_hash =
+        match crate::commands::wallet::sign_and_broadcast(&app, &state, prep.tx_metadata.clone())
+            .await
+        {
+            Ok(h) => h,
+            Err(e) => {
+                state
+                    .transfer_grants
+                    .lock()
+                    .await
+                    .rollback(&grant_id, amount);
+                state
+                    .discard_pending_spend(&crate::wallet::state::tx_meta_key(&prep.tx_metadata))
+                    .await;
+                return Err(e);
+            }
+        };
 
     // 6. COMMIT the spend under the ledger lock (moves reserved → spent, auto-disarms
     //    if exhausted). The next lock() drops the key when retention is no longer
     //    justified — nothing to clear here (the wallet may be unlocked and in use).
-    state.transfer_grants.lock().await.commit(&grant_id, amount, now_ms());
+    state
+        .transfer_grants
+        .lock()
+        .await
+        .commit(&grant_id, amount, now_ms());
 
     // 7. Explicit audit line (no secrets): grant, amount, destination, tx hash.
     emit_log(
@@ -188,11 +210,12 @@ pub async fn relay_transfer_grant(
 /// Disarm a single grant (keeps its spent history for audit). If no armed grants
 /// remain and the legacy vigil flag is off, drop the hot key immediately when locked.
 #[tauri::command]
-pub async fn revoke_transfer_grant(state: State<'_, WalletState>, id: String) -> Result<(), String> {
+pub async fn revoke_transfer_grant(
+    state: State<'_, WalletState>,
+    id: String,
+) -> Result<(), String> {
     state.transfer_grants.lock().await.revoke(&id);
-    if !state.grants_armed().await
-        && !state.vigil_hot.load(std::sync::atomic::Ordering::SeqCst)
-    {
+    if !state.grants_armed().await && !state.vigil_hot.load(std::sync::atomic::Ordering::SeqCst) {
         state.clear_spend_key_if_locked().await;
     }
     Ok(())
@@ -204,7 +227,9 @@ pub async fn revoke_transfer_grant(state: State<'_, WalletState>, id: String) ->
 #[tauri::command]
 pub async fn revoke_all_transfer_grants(state: State<'_, WalletState>) -> Result<(), String> {
     state.transfer_grants.lock().await.revoke_all();
-    state.vigil_hot.store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .vigil_hot
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     state.clear_spend_key_if_locked().await;
     Ok(())
 }

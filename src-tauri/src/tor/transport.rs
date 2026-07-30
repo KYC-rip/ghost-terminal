@@ -30,10 +30,10 @@ use http_body_util::{BodyExt, Full, Limited};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_socks::tcp::Socks5Stream;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
+use tokio_socks::tcp::Socks5Stream;
 
 /// Hard ceiling on a single Tor request — circuits can be slow, but we must not
 /// hang a background fetch forever. Applies to connect + TLS + HTTP round-trip.
@@ -97,8 +97,18 @@ impl HttpTransport for ArtiTransport {
             // instead of the failover abandoning it after one try.
             const TOR_POST_ATTEMPTS: u32 = 3;
             let mut last_err = String::new();
-            for attempt in 1 ..= TOR_POST_ATTEMPTS {
-                match tor_http(&tor, Method::POST, &host, port, &path, body.clone(), response_size_limit).await {
+            for attempt in 1..=TOR_POST_ATTEMPTS {
+                match tor_http(
+                    &tor,
+                    Method::POST,
+                    &host,
+                    port,
+                    &path,
+                    body.clone(),
+                    response_size_limit,
+                )
+                .await
+                {
                     Ok(bytes) => return Ok(bytes),
                     Err(e) => {
                         last_err = e;
@@ -109,7 +119,9 @@ impl HttpTransport for ArtiTransport {
                     }
                 }
             }
-            Err(InterfaceError::InterfaceError(format!("{last_err} (after {TOR_POST_ATTEMPTS} Tor attempts)")))
+            Err(InterfaceError::InterfaceError(format!(
+                "{last_err} (after {TOR_POST_ATTEMPTS} Tor attempts)"
+            )))
         }
     }
 }
@@ -158,9 +170,17 @@ impl HttpTransport for SocksTransport {
             format!("/{route}")
         };
         async move {
-            socks_http(&proxy, Method::POST, &host, port, &path, body, response_size_limit)
-                .await
-                .map_err(InterfaceError::InterfaceError)
+            socks_http(
+                &proxy,
+                Method::POST,
+                &host,
+                port,
+                &path,
+                body,
+                response_size_limit,
+            )
+            .await
+            .map_err(InterfaceError::InterfaceError)
         }
     }
 }
@@ -282,7 +302,11 @@ pub async fn socks_get_capped(proxy: &str, url: &str, limit: usize) -> Result<Ve
 
 /// Like `tor_get` but attaches caller-supplied request headers (e.g. a DoH
 /// `Accept: application/dns-message`). Same graceful-degradation contract.
-pub async fn tor_get_with_headers(tor: &TorClient<PreferredRuntime>, url: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
+pub async fn tor_get_with_headers(
+    tor: &TorClient<PreferredRuntime>,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+) -> Result<Vec<u8>, String> {
     let (https, host, port, path) = parse_url(url)?;
     let exchange = async {
         let stream = tor
@@ -304,7 +328,11 @@ pub async fn socks_get(proxy: &str, url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Like `socks_get` but attaches caller-supplied request headers (DoH `Accept`).
-pub async fn socks_get_with_headers(proxy: &str, url: &str, extra_headers: &[(&str, &str)]) -> Result<Vec<u8>, String> {
+pub async fn socks_get_with_headers(
+    proxy: &str,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+) -> Result<Vec<u8>, String> {
     let (https, host, port, path) = parse_url(url)?;
     let exchange = async {
         let stream = Socks5Stream::connect(proxy, (host.as_str(), port))
@@ -320,7 +348,14 @@ pub async fn socks_get_with_headers(proxy: &str, url: &str, extra_headers: &[(&s
 /// Issue a GET over an already-connected byte stream, wrapping in TLS first when
 /// the scheme is https. Shared by `tor_get` (arti DataStream) and `socks_get`
 /// (SOCKS5 stream) — only the stream source differs.
-async fn http_get_over<S>(stream: S, https: bool, host: &str, path: &str, extra_headers: &[(&str, &str)], limit: Option<usize>) -> Result<Vec<u8>, String>
+async fn http_get_over<S>(
+    stream: S,
+    https: bool,
+    host: &str,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+    limit: Option<usize>,
+) -> Result<Vec<u8>, String>
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
@@ -329,7 +364,10 @@ where
         .uri(path)
         .header(hyper::header::HOST, host)
         // GitHub's API 403s without a User-Agent; harmless for other GETs.
-        .header(hyper::header::USER_AGENT, concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
+        .header(
+            hyper::header::USER_AGENT,
+            concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")),
+        )
         // No connection reuse — ask the server to close after the response.
         .header(hyper::header::CONNECTION, "close");
     // Caller-supplied headers (e.g. `Accept: application/dns-message` for DoH).
@@ -471,13 +509,15 @@ fn parse_host_port(url: &str) -> Result<(String, u16), InterfaceError> {
     // Strip any trailing path.
     let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
     if authority.is_empty() {
-        return Err(InterfaceError::InterfaceError(format!("invalid node URL: {url}")));
+        return Err(InterfaceError::InterfaceError(format!(
+            "invalid node URL: {url}"
+        )));
     }
     match authority.rsplit_once(':') {
         Some((host, port)) => {
-            let port: u16 = port
-                .parse()
-                .map_err(|_| InterfaceError::InterfaceError(format!("invalid port in URL: {url}")))?;
+            let port: u16 = port.parse().map_err(|_| {
+                InterfaceError::InterfaceError(format!("invalid port in URL: {url}"))
+            })?;
             Ok((host.to_string(), port))
         }
         None => Ok((authority.to_string(), 18081)),
@@ -490,10 +530,22 @@ mod tests {
 
     #[test]
     fn parses_host_and_port() {
-        assert_eq!(parse_host_port("http://node.example:18089").unwrap(), ("node.example".into(), 18089));
-        assert_eq!(parse_host_port("node.example:18081").unwrap(), ("node.example".into(), 18081));
-        assert_eq!(parse_host_port("xmrtoaddr.onion").unwrap(), ("xmrtoaddr.onion".into(), 18081));
-        assert_eq!(parse_host_port("https://abc.onion:443/foo").unwrap(), ("abc.onion".into(), 443));
+        assert_eq!(
+            parse_host_port("http://node.example:18089").unwrap(),
+            ("node.example".into(), 18089)
+        );
+        assert_eq!(
+            parse_host_port("node.example:18081").unwrap(),
+            ("node.example".into(), 18081)
+        );
+        assert_eq!(
+            parse_host_port("xmrtoaddr.onion").unwrap(),
+            ("xmrtoaddr.onion".into(), 18081)
+        );
+        assert_eq!(
+            parse_host_port("https://abc.onion:443/foo").unwrap(),
+            ("abc.onion".into(), 443)
+        );
         assert!(parse_host_port("http://").is_err());
     }
 
@@ -501,11 +553,21 @@ mod tests {
     fn parses_urls() {
         assert_eq!(
             parse_url("https://raw.githubusercontent.com/a/b/nodes.json").unwrap(),
-            (true, "raw.githubusercontent.com".into(), 443, "/a/b/nodes.json".into())
+            (
+                true,
+                "raw.githubusercontent.com".into(),
+                443,
+                "/a/b/nodes.json".into()
+            )
         );
         assert_eq!(
             parse_url("https://api.kraken.com/0/public/OHLC?pair=XMRUSD&interval=1").unwrap(),
-            (true, "api.kraken.com".into(), 443, "/0/public/OHLC?pair=XMRUSD&interval=1".into())
+            (
+                true,
+                "api.kraken.com".into(),
+                443,
+                "/0/public/OHLC?pair=XMRUSD&interval=1".into()
+            )
         );
         assert_eq!(
             parse_url("http://example.com").unwrap(),

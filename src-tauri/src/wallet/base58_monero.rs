@@ -36,7 +36,10 @@ pub fn encode(data: &[u8]) -> String {
     let mut out = Vec::new();
     let full = data.len() / FULL_BLOCK_SIZE;
     for i in 0..full {
-        encode_block(&data[i * FULL_BLOCK_SIZE..(i + 1) * FULL_BLOCK_SIZE], &mut out);
+        encode_block(
+            &data[i * FULL_BLOCK_SIZE..(i + 1) * FULL_BLOCK_SIZE],
+            &mut out,
+        );
     }
     let rem = data.len() % FULL_BLOCK_SIZE;
     if rem != 0 {

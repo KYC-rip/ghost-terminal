@@ -2781,6 +2781,18 @@
           "markdownDescription": "Enables the vpn_open_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the vpn_probe_endpoints command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-probe-endpoints",
+          "markdownDescription": "Enables the vpn_probe_endpoints command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vpn_probe_exit_ip command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-probe-exit-ip",
+          "markdownDescription": "Enables the vpn_probe_exit_ip command without any pre-configured scope."
+        },
+        {
           "description": "Enables the vpn_profiles_clear command without any pre-configured scope.",
           "type": "string",
           "const": "allow-vpn-profiles-clear",
@@ -2809,6 +2821,12 @@
           "type": "string",
           "const": "allow-vpn-set-killswitch",
           "markdownDescription": "Enables the vpn_set_killswitch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vpn_set_locale command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-set-locale",
+          "markdownDescription": "Enables the vpn_set_locale command without any pre-configured scope."
         },
         {
           "description": "Enables the vpn_status command without any pre-configured scope.",
@@ -3417,6 +3435,18 @@
           "markdownDescription": "Denies the vpn_open_window command without any pre-configured scope."
         },
         {
+          "description": "Denies the vpn_probe_endpoints command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-probe-endpoints",
+          "markdownDescription": "Denies the vpn_probe_endpoints command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_probe_exit_ip command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-probe-exit-ip",
+          "markdownDescription": "Denies the vpn_probe_exit_ip command without any pre-configured scope."
+        },
+        {
           "description": "Denies the vpn_profiles_clear command without any pre-configured scope.",
           "type": "string",
           "const": "deny-vpn-profiles-clear",
@@ -3445,6 +3475,12 @@
           "type": "string",
           "const": "deny-vpn-set-killswitch",
           "markdownDescription": "Denies the vpn_set_killswitch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_set_locale command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-set-locale",
+          "markdownDescription": "Denies the vpn_set_locale command without any pre-configured scope."
         },
         {
           "description": "Denies the vpn_status command without any pre-configured scope.",

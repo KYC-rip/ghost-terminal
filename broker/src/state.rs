@@ -15,9 +15,14 @@
 
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{Ipv6Policy, WgConfig};
 use crate::{killswitch, netops, Egress, VpnPhase};
+
+fn now_unix() -> Option<u64> {
+    SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
 
 const JOURNAL_DIR: &str = "/var/lib/ripley-vpn";
 const JOURNAL: &str = "/var/lib/ripley-vpn/state";
@@ -30,7 +35,13 @@ pub struct View {
     pub ks_active: bool,
     pub ipv6: Option<Ipv6Policy>,
     pub iface: Option<String>,
+    pub profile_name: Option<String>,
     pub handshake_age_secs: Option<u64>,
+    pub uptime_secs: Option<u64>,
+    /// Unix epoch when the tunnel became configured (for live UI clocks).
+    pub connected_at_unix: Option<u64>,
+    pub received_bytes: Option<u64>,
+    pub sent_bytes: Option<u64>,
     /// A prior teardown left possibly-stale routes/DNS/iface — a normal restore
     /// will refuse to open until it verifies a clean teardown (emergency forces).
     pub cleanup_required: bool,
@@ -48,6 +59,9 @@ pub struct Base {
     degraded: bool,
     errored: bool,
     dirty: bool,
+    profile_name: Option<String>,
+    /// Process-local epoch seconds when the tunnel last became configured.
+    connected_since_unix: Option<u64>,
 }
 
 /// Finalize a snapshot: probe the handshake (bounded, outside the lock) and
@@ -56,7 +70,16 @@ pub struct Base {
 /// no keepalive legitimately has an old last-handshake), so age is surfaced in
 /// `handshake_age_secs` for the UI to judge rather than triggering false alarms.
 pub fn finalize(b: Base) -> View {
-    let hs = if b.configured { netops::handshake_age_secs() } else { None };
+    let hs = if b.configured {
+        netops::handshake_age_secs()
+    } else {
+        None
+    };
+    let transfer = if b.configured {
+        netops::transfer_bytes()
+    } else {
+        None
+    };
     let phase = if b.configured {
         if b.degraded {
             VpnPhase::DegradedBlocked
@@ -79,21 +102,40 @@ pub fn finalize(b: Base) -> View {
         ks_pref: b.ks_pref,
         ks_active: b.ks_active,
         ipv6: b.ipv6,
-        iface: if b.configured { Some(netops::IFACE.to_string()) } else { None },
+        iface: if b.configured {
+            Some(netops::IFACE.to_string())
+        } else {
+            None
+        },
+        // Only surface a label while a tunnel is actually configured.
+        profile_name: if b.configured { b.profile_name } else { None },
         handshake_age_secs: hs,
+        uptime_secs: if b.configured {
+            match (b.connected_since_unix, now_unix()) {
+                (Some(since), Some(now)) => Some(now.saturating_sub(since)),
+                _ => None,
+            }
+        } else {
+            None
+        },
+        connected_at_unix: if b.configured { b.connected_since_unix } else { None },
+        received_bytes: transfer.map(|value| value.0),
+        sent_bytes: transfer.map(|value| value.1),
         cleanup_required: b.dirty,
     }
 }
 
 pub struct Manager {
-    egress: Egress,        // authoritative — set only after a verified kernel op
-    ks_pref: bool,         // operator's desired setting
-    ks_active: bool,       // our nft table is actually installed
+    egress: Egress,  // authoritative — set only after a verified kernel op
+    ks_pref: bool,   // operator's desired setting
+    ks_active: bool, // our nft table is actually installed
     ipv6: Option<Ipv6Policy>,
-    configured: bool,      // wg interface is up
-    degraded: bool,        // tunnel up but DNS failed
-    errored: bool,         // last op left an error
-    dirty: bool,           // a teardown left (possibly) stale routes/DNS/iface
+    configured: bool, // wg interface is up
+    degraded: bool,   // tunnel up but DNS failed
+    errored: bool,    // last op left an error
+    dirty: bool,      // a teardown left (possibly) stale routes/DNS/iface
+    profile_name: Option<String>, // display-only; cleared when tunnel is down
+    connected_since_unix: Option<u64>, // session start for uptime (process-local)
 }
 
 /// Atomic, durable journal write. tmp → fsync → rename → fsync(dir).
@@ -164,6 +206,8 @@ impl Manager {
             degraded: false,
             errored: false,
             dirty: false,
+            profile_name: None,
+            connected_since_unix: None,
         }
     }
 
@@ -173,6 +217,8 @@ impl Manager {
         if !netops::wg_down().is_empty() {
             self.dirty = true;
         }
+        self.profile_name = None;
+        self.connected_since_unix = None;
     }
 
     /// The single guarded path to clearnet: verify a CLEAN teardown, then remove
@@ -194,9 +240,9 @@ impl Manager {
     fn boot() -> Manager {
         let mut m = Manager::fresh();
         let recover = match journal_read() {
-            Journal::FirstRun => false,               // never ran — genuinely open
+            Journal::FirstRun => false,                 // never ran — genuinely open
             Journal::Marker(m) if m == "open" => false, // clean shutdown
-            Journal::Marker(_) => true,                // may have touched the network
+            Journal::Marker(_) => true,                 // may have touched the network
             Journal::Unreadable(e) => {
                 eprintln!("ripley-vpn-broker: journal unreadable ({e}) — treating as unknown, recovering fail-closed");
                 true
@@ -237,13 +283,15 @@ impl Manager {
             degraded: self.degraded,
             errored: self.errored,
             dirty: self.dirty,
+            profile_name: self.profile_name.clone(),
+            connected_since_unix: self.connected_since_unix,
         }
     }
 
     /// guard source state → resolve → capture phys dev → persist intent → seal
     /// block → wg → DNS. egress flips to Blocked ONLY after the nft install
     /// verifiably succeeds. Allowed only from a not-connected state.
-    pub fn up(&mut self, cfg: &WgConfig) -> Result<(), String> {
+    pub fn up(&mut self, cfg: &WgConfig, profile_name: Option<String>) -> Result<(), String> {
         // Reconnect semantics: refuse to bring up over a live tunnel (that would
         // risk tearing down a working link and leaving the box blocked). The
         // caller must disconnect first.
@@ -266,7 +314,11 @@ impl Manager {
 
         // The pre-attempt durable marker, so a CLEAN install failure restores the
         // real prior state instead of clobbering an existing block's journal.
-        let prior = if self.egress == Egress::Blocked { "blocked" } else { "open" };
+        let prior = if self.egress == Egress::Blocked {
+            "blocked"
+        } else {
+            "open"
+        };
 
         // Persist intent BEFORE touching the network; refuse if we can't.
         journal_persist("connecting").map_err(|e| format!("cannot persist intent: {e}"))?;
@@ -301,6 +353,8 @@ impl Manager {
         self.configured = true;
         self.errored = false;
         self.dirty = false; // clean bring-up clears any prior dirty state
+        self.profile_name = profile_name;
+        self.connected_since_unix = now_unix();
 
         // DNS failure degrades (still blocked), it does not leak.
         self.degraded = if let Err(e) = netops::dns_up(cfg) {
@@ -330,6 +384,8 @@ impl Manager {
         self.configured = false;
         self.degraded = false;
         self.errored = false;
+        self.profile_name = None;
+        self.connected_since_unix = None;
         Ok(())
     }
 
@@ -354,6 +410,8 @@ impl Manager {
         self.errored = false;
         self.dirty = false;
         self.ipv6 = None;
+        self.profile_name = None;
+        self.connected_since_unix = None;
         journal_best("open");
         Ok(())
     }
@@ -406,6 +464,8 @@ impl Manager {
         self.configured = false;
         self.degraded = false;
         self.errored = false;
+        self.profile_name = None;
+        self.connected_since_unix = None;
         Ok(())
     }
 }
@@ -415,7 +475,18 @@ mod tests {
     use super::*;
 
     fn base(egress: Egress) -> Base {
-        Base { egress, ks_pref: false, ks_active: false, ipv6: None, configured: false, degraded: false, errored: false, dirty: false }
+        Base {
+            egress,
+            ks_pref: false,
+            ks_active: false,
+            ipv6: None,
+            configured: false,
+            degraded: false,
+            errored: false,
+            dirty: false,
+            profile_name: None,
+            connected_since_unix: None,
+        }
     }
 
     #[test]

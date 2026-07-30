@@ -523,6 +523,7 @@ pub fn run() {
             // VPN (unprivileged client of the root-owned broker)
             commands::vpn::vpn_status,
             commands::vpn::vpn_probe_endpoints,
+            commands::vpn::vpn_probe_exit_ip,
             commands::vpn::vpn_connect,
             commands::vpn::vpn_disconnect,
             commands::vpn::vpn_set_killswitch,

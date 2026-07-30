@@ -26,8 +26,7 @@ pub const OTA_MANIFEST_ONION: &str =
 /// The onion HOST that mirrors `ros.rip` (serves `/ota/…` byte-identically). In tor/custom
 /// routing mode `https://ros.rip` is rewritten to `http://<this>` so OTA fetches never
 /// touch an exit node / leak the user's IP (see `proxied_get_bytes`).
-pub const OTA_ONION_HOST: &str =
-    "rosriprqvi346zjxaxdxfhntf7l2gdba45ou2skk24waewizo3fttdqd.onion";
+pub const OTA_ONION_HOST: &str = "rosriprqvi346zjxaxdxfhntf7l2gdba45ou2skk24waewizo3fttdqd.onion";
 
 /// Hard size cap on the archive — rejected before download (anti-DoS).
 pub const OTA_MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -86,7 +85,10 @@ impl std::fmt::Display for OtaReject {
             OtaReject::UnsupportedSchema(s) => write!(f, "unsupported manifest schema {s}"),
             OtaReject::BadSemver(v) => write!(f, "unparseable version \"{v}\""),
             OtaReject::Rollback { candidate, current } => {
-                write!(f, "rollback refused: candidate {candidate} <= current {current}")
+                write!(
+                    f,
+                    "rollback refused: candidate {candidate} <= current {current}"
+                )
             }
             OtaReject::Stale { age_secs } => write!(f, "manifest too old ({age_secs}s)"),
             OtaReject::BackendTooOld { min, backend } => {
@@ -160,8 +162,7 @@ pub fn evaluate_manifest(
         return Err(OtaReject::BadSignature);
     }
     // 2. Parse.
-    let m: Manifest =
-        serde_json::from_slice(raw).map_err(|e| OtaReject::BadJson(e.to_string()))?;
+    let m: Manifest = serde_json::from_slice(raw).map_err(|e| OtaReject::BadJson(e.to_string()))?;
     // 3. Schema.
     if m.schema != SUPPORTED_SCHEMA {
         return Err(OtaReject::UnsupportedSchema(m.schema));
@@ -184,10 +185,10 @@ pub fn evaluate_manifest(
         return Err(OtaReject::Stale { age_secs: age });
     }
     // 6. Backend compat.
-    let min = parse_semver(&m.min_backend)
-        .ok_or_else(|| OtaReject::BadSemver(m.min_backend.clone()))?;
-    let backend =
-        parse_semver(backend_version).ok_or_else(|| OtaReject::BadSemver(backend_version.to_string()))?;
+    let min =
+        parse_semver(&m.min_backend).ok_or_else(|| OtaReject::BadSemver(m.min_backend.clone()))?;
+    let backend = parse_semver(backend_version)
+        .ok_or_else(|| OtaReject::BadSemver(backend_version.to_string()))?;
     if min > backend {
         return Err(OtaReject::BackendTooOld {
             min: m.min_backend.clone(),
@@ -237,7 +238,9 @@ pub fn extract_tar_zst(bytes: &[u8]) -> Result<std::collections::HashMap<String,
             continue;
         }
         let mut buf = Vec::new();
-        entry.read_to_end(&mut buf).map_err(|e| format!("tar read: {e}"))?;
+        entry
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("tar read: {e}"))?;
         out.insert(rel, buf);
     }
     if out.is_empty() {
@@ -283,7 +286,10 @@ pub fn stage_verified_archive(
     std::fs::write(&atmp, bytes).map_err(|e| format!("write archive: {e}"))?;
     std::fs::rename(&atmp, &archive).map_err(|e| format!("rename archive: {e}"))?;
     // 2. state.json: temp + rename, only after the archive is in place.
-    let state = State { version: version.to_string(), sha256: sha256.to_string() };
+    let state = State {
+        version: version.to_string(),
+        sha256: sha256.to_string(),
+    };
     let data = serde_json::to_vec(&state).map_err(|e| format!("serialize state: {e}"))?;
     let spath = ota_dir.join("state.json");
     let stmp = ota_dir.join("state.json.tmp");
@@ -299,7 +305,9 @@ pub fn stage_verified_archive(
 pub fn prune_archives(ota_dir: &std::path::Path, keep: &str) {
     let keep_file = format!("ros-{keep}.tar.zst");
     let mut others: Vec<(String, std::path::PathBuf)> = Vec::new();
-    let Ok(rd) = std::fs::read_dir(ota_dir) else { return };
+    let Ok(rd) = std::fs::read_dir(ota_dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name.starts_with("ros-") && name.ends_with(".tar.zst") && name != keep_file {
@@ -372,7 +380,9 @@ mod tests {
     #[test]
     fn rejects_wrong_key() {
         let (sk, _vk) = test_keys();
-        let other_vk = SigningKey::from_bytes(&[9u8; 32]).verifying_key().to_bytes();
+        let other_vk = SigningKey::from_bytes(&[9u8; 32])
+            .verifying_key()
+            .to_bytes();
         let raw = manifest_json("2.4.0", "2.0.0", FRESH, 8_000_000);
         let sig = sk.sign(&raw).to_bytes();
         assert_eq!(
@@ -401,7 +411,10 @@ mod tests {
             let raw = manifest_json(v, "2.0.0", FRESH, 10);
             let sig = sk.sign(&raw).to_bytes();
             let r = evaluate_manifest(&vk, &raw, &sig, NOW, "2.3.0", "2.0.0");
-            assert!(matches!(r, Err(OtaReject::Rollback { .. })), "{v} must be refused");
+            assert!(
+                matches!(r, Err(OtaReject::Rollback { .. })),
+                "{v} must be refused"
+            );
         }
     }
 
@@ -477,8 +490,14 @@ mod tests {
 
     #[test]
     fn path_normalization_rejects_traversal() {
-        assert_eq!(normalize_entry_path("index.html").as_deref(), Some("index.html"));
-        assert_eq!(normalize_entry_path("./assets/app.js").as_deref(), Some("assets/app.js"));
+        assert_eq!(
+            normalize_entry_path("index.html").as_deref(),
+            Some("index.html")
+        );
+        assert_eq!(
+            normalize_entry_path("./assets/app.js").as_deref(),
+            Some("assets/app.js")
+        );
         assert_eq!(normalize_entry_path("a//b/./c").as_deref(), Some("a/b/c"));
         assert_eq!(normalize_entry_path("../etc/passwd"), None);
         assert_eq!(normalize_entry_path("assets/../../x"), None);
@@ -504,8 +523,15 @@ mod tests {
 
         // Verify with the PINNED production key (not a test key) — proves the dev key that
         // signed the fixture matches OTA_UPDATE_PUBKEY.
-        let m = evaluate_manifest(&OTA_UPDATE_PUBKEY, FIX_MANIFEST, FIX_SIG, now, "1.0.0", "2.0.0")
-            .expect("golden fixture must verify against the pinned key");
+        let m = evaluate_manifest(
+            &OTA_UPDATE_PUBKEY,
+            FIX_MANIFEST,
+            FIX_SIG,
+            now,
+            "1.0.0",
+            "2.0.0",
+        )
+        .expect("golden fixture must verify against the pinned key");
         assert_eq!(m.version, "2.0.0");
 
         // Archive bytes hash to the manifest's sha256.
@@ -523,8 +549,12 @@ mod tests {
         // flip a byte in the middle of the manifest → signature no longer matches.
         let mid = bad.len() / 2;
         bad[mid] ^= 0x01;
-        let now = released_unix(&serde_json::from_slice::<Manifest>(FIX_MANIFEST).unwrap().released)
-            .unwrap()
+        let now = released_unix(
+            &serde_json::from_slice::<Manifest>(FIX_MANIFEST)
+                .unwrap()
+                .released,
+        )
+        .unwrap()
             + 3600;
         assert_eq!(
             evaluate_manifest(&OTA_UPDATE_PUBKEY, &bad, FIX_SIG, now, "1.0.0", "2.0.0"),
@@ -560,8 +590,14 @@ mod tests {
         }
         let zst = zstd::stream::encode_all(&tar_buf[..], 3).unwrap();
         let map = extract_tar_zst(&zst).unwrap();
-        assert_eq!(map.get("index.html").map(|v| v.as_slice()), Some(&b"<h1>ros</h1>"[..]));
-        assert_eq!(map.get("assets/x.js").map(|v| v.as_slice()), Some(&b"1"[..]));
+        assert_eq!(
+            map.get("index.html").map(|v| v.as_slice()),
+            Some(&b"<h1>ros</h1>"[..])
+        );
+        assert_eq!(
+            map.get("assets/x.js").map(|v| v.as_slice()),
+            Some(&b"1"[..])
+        );
     }
 
     #[test]
@@ -574,7 +610,10 @@ mod tests {
         let st: State =
             serde_json::from_slice(&std::fs::read(dir.join("state.json")).unwrap()).unwrap();
         assert_eq!((st.version.as_str(), st.sha256.as_str()), ("2.0.0", "aa"));
-        assert_eq!(std::fs::read(dir.join("ros-2.0.0.tar.zst")).unwrap(), b"archive-200");
+        assert_eq!(
+            std::fs::read(dir.join("ros-2.0.0.tar.zst")).unwrap(),
+            b"archive-200"
+        );
 
         // Stage v2.1.0 → keeps current + previous (2 archives).
         stage_verified_archive(&dir, "2.1.0", "bb", b"archive-210").unwrap();
@@ -585,7 +624,10 @@ mod tests {
         stage_verified_archive(&dir, "2.2.0", "cc", b"archive-220").unwrap();
         assert!(dir.join("ros-2.2.0.tar.zst").exists());
         assert!(dir.join("ros-2.1.0.tar.zst").exists());
-        assert!(!dir.join("ros-2.0.0.tar.zst").exists(), "oldest should be pruned");
+        assert!(
+            !dir.join("ros-2.0.0.tar.zst").exists(),
+            "oldest should be pruned"
+        );
 
         // No leftover temp files (atomic rename cleaned up).
         let names: Vec<String> = std::fs::read_dir(&dir)
@@ -593,7 +635,10 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "temp files left: {names:?}");
+        assert!(
+            !names.iter().any(|n| n.ends_with(".tmp")),
+            "temp files left: {names:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

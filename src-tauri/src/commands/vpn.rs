@@ -20,13 +20,12 @@
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
-    time::Duration,
 };
 use std::{
     net::IpAddr,
     path::{Path, PathBuf},
     process::Command,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chacha20poly1305::{
@@ -62,6 +61,9 @@ pub struct StoredVpnProfile {
     source_path: String,
     kind: String,
     config_text: String,
+    /// Import bundle label (usually the ZIP basename). Groups the rail by pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bundle: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -92,6 +94,11 @@ fn validate_profile_store(store: &VpnProfileStore) -> Result<(), String> {
             || !matches!(profile.kind.as_str(), "wireguard" | "openvpn")
         {
             return Err("invalid VPN profile store entry".into());
+        }
+        if let Some(bundle) = &profile.bundle {
+            if bundle.is_empty() || bundle.len() > 256 || bundle.contains('\0') {
+                return Err("invalid VPN profile bundle label".into());
+            }
         }
         if profile.config_text.contains('\0') {
             return Err("VPN profile contains binary data".into());
@@ -375,30 +382,24 @@ pub async fn vpn_status() -> Result<Value, String> {
     call(json!({ "op": "status" })).await
 }
 
-fn probe_host(endpoint: &str) -> Result<String, String> {
-    let endpoint = endpoint.trim();
-    if endpoint.is_empty() || endpoint.len() > 320 || endpoint.bytes().any(|b| b.is_ascii_control())
-    {
-        return Err("invalid VPN endpoint".into());
+/// Parsed endpoint host + port for latency probes. Invalid endpoints map to
+/// `None` results rather than aborting the whole speed-test batch.
+fn probe_host(endpoint: &str) -> Option<(String, u16)> {
+    // Strip trailing comments WireGuard configs sometimes carry.
+    let endpoint = endpoint.split('#').next().unwrap_or(endpoint).trim();
+    if endpoint.is_empty() || endpoint.len() > 320 || endpoint.bytes().any(|b| b.is_ascii_control()) {
+        return None;
     }
-    let (host, port) = if let Some(rest) = endpoint.strip_prefix('[') {
-        let (host, tail) = rest
-            .split_once(']')
-            .ok_or_else(|| "invalid IPv6 VPN endpoint".to_string())?;
-        let port = tail
-            .strip_prefix(':')
-            .ok_or_else(|| "VPN endpoint has no port".to_string())?;
+    let (host, port_str) = if let Some(rest) = endpoint.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        let port = tail.strip_prefix(':')?;
         (host, port)
     } else {
-        endpoint
-            .rsplit_once(':')
-            .ok_or_else(|| "VPN endpoint has no port".to_string())?
+        endpoint.rsplit_once(':')?
     };
-    let port = port
-        .parse::<u16>()
-        .map_err(|_| "invalid VPN endpoint port".to_string())?;
+    let port: u16 = port_str.trim().parse().ok()?;
     if port == 0 || host.is_empty() {
-        return Err("invalid VPN endpoint".into());
+        return None;
     }
     if host.parse::<IpAddr>().is_err()
         && (host.len() > 253
@@ -408,9 +409,9 @@ fn probe_host(endpoint: &str) -> Result<String, String> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')))
     {
-        return Err("invalid VPN endpoint host".into());
+        return None;
     }
-    Ok(host.to_string())
+    Some((host.to_string(), port))
 }
 
 fn ping_millis(host: &str) -> Option<u64> {
@@ -424,45 +425,173 @@ fn ping_millis(host: &str) -> Option<u64> {
     #[cfg(target_os = "linux")]
     command.args(["-n", "-c", "1", "-W", "1", host]);
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    return None;
-    let result = command.env_clear().output().ok()?;
-    if !result.status.success() {
+    {
+        let _ = (host, started);
         return None;
     }
-    let output = String::from_utf8_lossy(&result.stdout);
-    output
-        .split("time=")
-        .nth(1)
-        .and_then(|tail| tail.split_whitespace().next())
-        .and_then(|value| value.parse::<f64>().ok())
-        .map(|value| value.round().max(1.0) as u64)
-        .or_else(|| Some(started.elapsed().as_millis().max(1).min(u64::MAX as u128) as u64))
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let result = command
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .output()
+            .ok()?;
+        if !result.status.success() {
+            return None;
+        }
+        let output = String::from_utf8_lossy(&result.stdout);
+        output
+            .split("time=")
+            .nth(1)
+            .and_then(|tail| tail.split_whitespace().next())
+            .and_then(|value| value.parse::<f64>().ok())
+            .map(|value| value.round().max(1.0) as u64)
+            .or_else(|| {
+                Some(
+                    started
+                        .elapsed()
+                        .as_millis()
+                        .max(1)
+                        .min(u64::MAX as u128) as u64,
+                )
+            })
+    }
+}
+
+/// TCP connect RTT fallback. WireGuard itself is UDP, but a SYN/RST or quick
+/// connect error still gives a usable path latency when ICMP is filtered or
+/// rate-limited (common when flooding many peers at once).
+fn tcp_connect_millis(host: &str, port: u16) -> Option<u64> {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let started = Instant::now();
+    let addrs = (host, port).to_socket_addrs().ok()?.take(4);
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(1500)) {
+            Ok(_) => {
+                return Some(
+                    started
+                        .elapsed()
+                        .as_millis()
+                        .max(1)
+                        .min(u64::MAX as u128) as u64,
+                );
+            }
+            Err(e) => {
+                // Immediate refuse still proves the host is reachable; a timeout does not.
+                let ms = started.elapsed().as_millis();
+                if ms < 1400
+                    && (e.kind() == std::io::ErrorKind::ConnectionRefused
+                        || e.kind() == std::io::ErrorKind::ConnectionReset)
+                {
+                    return Some(ms.max(1) as u64);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn probe_latency(host: String, port: u16) -> Option<u64> {
+    // ICMP first (cheap RTT), then TCP connect fallback for ICMP-blocked peers.
+    ping_millis(&host)
+        .or_else(|| tcp_connect_millis(&host, port))
+        .or_else(|| {
+            // One short retry: concurrent storms and DNS blips often clear on a second try.
+            std::thread::sleep(Duration::from_millis(40));
+            ping_millis(&host).or_else(|| tcp_connect_millis(&host, port))
+        })
 }
 
 /// Latency probe for the trusted native VPN picker. Inputs are reduced to validated
-/// endpoint hosts before spawning `ping`; no renderer text is ever interpreted by a shell.
+/// endpoint hosts before spawning `ping`/connect; no renderer text is ever interpreted
+/// by a shell.
+///
+/// Soft-fails per endpoint (invalid/unresponsive → `None`) and runs with bounded
+/// concurrency so a 20+ server list doesn't starve the last few pings.
 #[tauri::command]
 pub async fn vpn_probe_endpoints(endpoints: Vec<String>) -> Result<Vec<Option<u64>>, String> {
     if endpoints.len() > MAX_PROFILE_COUNT {
         return Err(format!("speed test exceeds {MAX_PROFILE_COUNT} endpoints"));
     }
-    let hosts = endpoints
-        .iter()
-        .map(|endpoint| probe_host(endpoint))
-        .collect::<Result<Vec<_>, _>>()?;
-    let probes = hosts
-        .into_iter()
-        .map(|host| tauri::async_runtime::spawn_blocking(move || ping_millis(&host)))
-        .collect::<Vec<_>>();
-    let mut results = Vec::with_capacity(probes.len());
-    for probe in probes {
-        results.push(
-            probe
+    // Soft-parse: a single bad Endpoint line must not abort the whole list.
+    let targets: Vec<Option<(String, u16)>> = endpoints.iter().map(|e| probe_host(e)).collect();
+    let mut results: Vec<Option<u64>> = vec![None; targets.len()];
+
+    // Cap concurrent blocking probes — flooding ICMP was leaving the tail of the
+    // list untested (rate-limits / thread-pool saturation).
+    const CONCURRENCY: usize = 4;
+    let mut start = 0usize;
+    while start < targets.len() {
+        let end = (start + CONCURRENCY).min(targets.len());
+        let mut handles = Vec::with_capacity(end - start);
+        for (idx, target) in targets.iter().enumerate().take(end).skip(start) {
+            if let Some((host, port)) = target.clone() {
+                handles.push((
+                    idx,
+                    tauri::async_runtime::spawn_blocking(move || probe_latency(host, port)),
+                ));
+            }
+        }
+        for (idx, handle) in handles {
+            results[idx] = handle
                 .await
-                .map_err(|e| format!("VPN speed probe failed: {e}"))?,
-        );
+                .map_err(|e| format!("VPN speed probe failed: {e}"))?;
+        }
+        start = end;
     }
     Ok(results)
+}
+
+/// What the outside world sees as this machine's exit IP, via **OS routing**
+/// (not Arti/Tor). When WireGuard is up this is the VPN egress; when clearnet
+/// is open it is the real ISP address; when the kill-switch is holding egress
+/// shut the probe fails (honest — nothing should leave).
+///
+/// Host-window only. Fixed HTTPS endpoints, short timeout, no renderer-supplied
+/// URL (avoids SSRF / log injection).
+#[tauri::command]
+pub async fn vpn_probe_exit_ip() -> Result<Value, String> {
+    // Plain-text IP responders only. Tried in order; first success wins.
+    const ENDPOINTS: &[&str] = &[
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ];
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(6))
+        .user_agent(concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("exit-IP client: {e}"))?;
+
+    let mut last = String::from("no endpoint answered");
+    for url in ENDPOINTS {
+        match client.get(*url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let body = resp.text().await.unwrap_or_default();
+                let ip = body.trim();
+                if is_plausible_ip(ip) {
+                    return Ok(json!({
+                        "ip": ip,
+                        "source": url,
+                    }));
+                }
+                last = format!("{url} returned a non-IP body");
+            }
+            Ok(resp) => last = format!("{url} HTTP {}", resp.status()),
+            Err(e) => last = format!("{url}: {e}"),
+        }
+    }
+    Err(format!(
+        "could not determine exit IP ({last}). If the kill-switch is active with no tunnel, that is expected — nothing should leave this machine."
+    ))
+}
+
+fn is_plausible_ip(s: &str) -> bool {
+    if s.is_empty() || s.len() > 45 {
+        return false;
+    }
+    s.parse::<IpAddr>().is_ok()
 }
 
 /// Bring the tunnel up from raw `.conf` text. The broker parses+validates it
@@ -474,16 +603,13 @@ pub async fn vpn_connect(
     config_text: String,
     profile_name: Option<String>,
 ) -> Result<Value, String> {
-    #[cfg(target_os = "macos")]
+    // Display-only metadata: both macOS helper and Linux broker accept (and
+    // sanitize) an optional profile label so status can show which server is live.
     let request = json!({
         "op": "up",
         "config_text": config_text,
         "profile_name": profile_name,
     });
-    // The Linux broker predates display-only profile metadata and intentionally
-    // receives only its strict protocol fields.
-    #[cfg(not(target_os = "macos"))]
-    let request = json!({ "op": "up", "config_text": config_text });
     logged_mutation(&app, "Connect", request).await
 }
 
@@ -719,6 +845,7 @@ mod capability_tests {
     fn ros_capabilities_cannot_mutate_the_host_vpn() {
         let forbidden = [
             "allow-vpn-probe-endpoints",
+            "allow-vpn-probe-exit-ip",
             "allow-vpn-connect",
             "allow-vpn-disconnect",
             "allow-vpn-set-killswitch",
@@ -749,6 +876,7 @@ mod capability_tests {
         let p = permissions(include_str!("../../capabilities/vpn_control.json"));
         assert!(p.iter().all(|v| v.starts_with("allow-vpn-")));
         assert!(p.contains(&"allow-vpn-probe-endpoints".to_string()));
+        assert!(p.contains(&"allow-vpn-probe-exit-ip".to_string()));
         assert!(p.contains(&"allow-vpn-emergency-restore".to_string()));
         assert!(!p.contains(&"allow-vpn-open-window".to_string()));
     }

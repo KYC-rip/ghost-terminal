@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::sleep;
@@ -15,18 +15,19 @@ use tokio::time::sleep;
 use arti_client::TorClient;
 use tor_rtcompat::PreferredRuntime;
 
+use monero_address::SubaddressIndex;
 use monero_daemon_rpc::prelude::*;
 use monero_daemon_rpc::{HttpTransport, MoneroDaemon};
 use monero_simple_request_rpc::SimpleRequestTransport;
 use monero_wallet::{Scanner, ViewPair};
-use monero_address::SubaddressIndex;
 
-use crate::emit_log;
-use crate::tor::{ArtiTransport, SocksTransport, TorState};
 use super::state::WalletState;
 use super::{storage, types::SyncStatus};
+use crate::emit_log;
+use crate::tor::{ArtiTransport, SocksTransport, TorState};
 
-const GITHUB_NODES_URL: &str = "https://raw.githubusercontent.com/KYC-rip/ripley-terminal/main/resources/nodes.json";
+const GITHUB_NODES_URL: &str =
+    "https://raw.githubusercontent.com/KYC-rip/ripley-terminal/main/resources/nodes.json";
 
 /// Read the configured routing mode ("tor" | "clearnet") from config.json.
 /// Defaults to "clearnet" when the file is absent or unparseable.
@@ -48,7 +49,7 @@ pub(crate) fn fold_fullwidth(s: &str) -> String {
     s.chars()
         .map(|c| {
             let u = c as u32;
-            if (0xFF01 ..= 0xFF5E).contains(&u) {
+            if (0xFF01..=0xFF5E).contains(&u) {
                 char::from_u32(u - 0xFEE0).unwrap_or(c)
             } else if u == 0x3000 {
                 ' '
@@ -122,7 +123,9 @@ fn parse_nodes(parsed: &serde_json::Value, network: &str, section: &str) -> Vec<
                             // retired simple-request transport and it silently dropped
                             // the only nodes that survive DPI-filtered networks (plain
                             // HTTP on 18081/18089 gets reset; TLS on 443 passes).
-                            let url = if addr_str.starts_with("http://") || addr_str.starts_with("https://") {
+                            let url = if addr_str.starts_with("http://")
+                                || addr_str.starts_with("https://")
+                            {
                                 addr_str.to_string()
                             } else {
                                 format!("http://{}", addr_str)
@@ -168,7 +171,12 @@ impl DaemonConnector for ClearnetConnector {
         "clearnet"
     }
     async fn connect(&self, url: String) -> Option<MoneroDaemon<Self::Transport>> {
-        crate::wallet::reqwest_transport::ReqwestTransport::connect(url, std::time::Duration::from_secs(60)).await.ok()
+        crate::wallet::reqwest_transport::ReqwestTransport::connect(
+            url,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .ok()
     }
 }
 
@@ -248,7 +256,9 @@ pub(crate) async fn load_nodes(app: &AppHandle, section: &str) -> Vec<(String, S
 /// override. Used by the connect-time fallback path: when a pinned node is
 /// unreachable AND the user enabled `nodeFallback`, we race this pool instead.
 pub(crate) async fn load_pool_nodes(app: &AppHandle, section: &str) -> Vec<(String, String)> {
-    let cache_path = app.path().app_data_dir()
+    let cache_path = app
+        .path()
+        .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join("latest_nodes.json");
 
@@ -334,7 +344,12 @@ async fn race_nodes<C: DaemonConnector>(
     if nodes.len() == 1 {
         emit_log(app, "Network", "info", "🔗 Connecting to pinned node…");
     } else {
-        emit_log(app, "Network", "info", &format!("🏁 Racing {} nodes...", nodes.len()));
+        emit_log(
+            app,
+            "Network",
+            "info",
+            &format!("🏁 Racing {} nodes...", nodes.len()),
+        );
     }
     race_list(connector, nodes).await
 }
@@ -459,7 +474,12 @@ pub(crate) async fn ensure_tor(app: &AppHandle) -> Option<TorClient<PreferredRun
     );
     match tor_state.connect(app).await {
         Ok(()) => {
-            emit_log(app, "Tor", "success", "🧅 Tor connected — daemon RPC routes through Tor");
+            emit_log(
+                app,
+                "Tor",
+                "success",
+                "🧅 Tor connected — daemon RPC routes through Tor",
+            );
             tor_state.get_client().await
         }
         Err(e) => {
@@ -480,7 +500,12 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
         // Check if we've been superseded by a newer scanner
         let ws = app_clone.state::<WalletState>();
         if ws.current_scanner_generation() != generation {
-            emit_log(&app_clone, "Sync", "info", "🛑 Scanner stopped (superseded by newer scan)");
+            emit_log(
+                &app_clone,
+                "Sync",
+                "info",
+                "🛑 Scanner stopped (superseded by newer scan)",
+            );
             return;
         }
 
@@ -495,7 +520,12 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
                 let custom = read_config_str(&app_clone, "customNodeAddress").unwrap_or_default();
                 let custom = custom.trim().to_string();
                 if !custom.is_empty() && read_config_bool(&app_clone, "nodeFallback") {
-                    emit_log(&app_clone, "Network", "warn", "🔌 Pinned node unreachable — falling back to the public pool…");
+                    emit_log(
+                        &app_clone,
+                        "Network",
+                        "warn",
+                        "🔌 Pinned node unreachable — falling back to the public pool…",
+                    );
                     let pool = load_pool_nodes(&app_clone, connector.section()).await;
                     match race_list(&connector, pool).await {
                         Some(result) => result,
@@ -510,14 +540,24 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
                     sleep(Duration::from_secs(10)).await;
                     continue;
                 } else {
-                    emit_log(&app_clone, "Network", "error", "❌ All nodes failed. Retrying in 10s...");
+                    emit_log(
+                        &app_clone,
+                        "Network",
+                        "error",
+                        "❌ All nodes failed. Retrying in 10s...",
+                    );
                     sleep(Duration::from_secs(10)).await;
                     continue;
                 }
             }
         };
 
-        emit_log(&app_clone, "Network", "success", &format!("✅ Fastest node: {} ({})", label, url));
+        emit_log(
+            &app_clone,
+            "Network",
+            "success",
+            &format!("✅ Fastest node: {} ({})", label, url),
+        );
 
         // Store daemon URL so tx commands can connect
         let wallet_state = app_clone.state::<WalletState>();
@@ -530,10 +570,25 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
         };
 
         // Run scan loop — if it fails, re-race
-        match scan_loop(app_clone.clone(), daemon, current_height, url.clone(), label.clone(), generation, &connector).await {
+        match scan_loop(
+            app_clone.clone(),
+            daemon,
+            current_height,
+            url.clone(),
+            label.clone(),
+            generation,
+            &connector,
+        )
+        .await
+        {
             Ok(()) => break,
             Err(e) => {
-                emit_log(&app_clone, "Sync", "error", &format!("⚠️ {} disconnected: {}. Re-racing...", label, e));
+                emit_log(
+                    &app_clone,
+                    "Sync",
+                    "error",
+                    &format!("⚠️ {} disconnected: {}. Re-racing...", label, e),
+                );
                 sleep(Duration::from_secs(2)).await;
             }
         }
@@ -727,13 +782,28 @@ async fn scan_loop<C: DaemonConnector>(
     if app.state::<WalletState>().can_detect_spends().await {
         emit_log(&app, "Sync", "info", "🔑 Key-image spend detection: ON");
     } else {
-        emit_log(&app, "Sync", "info", "🔑 Key-image spend detection: OFF (no spend key)");
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            "🔑 Key-image spend detection: OFF (no spend key)",
+        );
     }
 
     if scan_height == u64::MAX {
-        emit_log(&app, "Sync", "info", "🔍 New wallet — will sync from daemon tip");
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            "🔍 New wallet — will sync from daemon tip",
+        );
     } else {
-        emit_log(&app, "Sync", "info", &format!("🔍 Scan loop started from height {}", scan_height));
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            &format!("🔍 Scan loop started from height {}", scan_height),
+        );
     }
     // Restore baseline — the height this session's scan begins from (captured once,
     // after the sentinel/RingCT clamps below). Lets the UI show restore-range progress.
@@ -753,13 +823,22 @@ async fn scan_loop<C: DaemonConnector>(
     if fast_sync {
         emit_log(&app, "Sync", "info", &format!("⚡ Fast sync ON — bulk get_blocks.bin, trusting {} (fallback nodes spun up only if a batch fails)", node_label));
     } else {
-        emit_log(&app, "Sync", "info", &format!("🔗 Fetching across {} nodes in parallel", pool_n));
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            &format!("🔗 Fetching across {} nodes in parallel", pool_n),
+        );
     }
 
     // Rolling measured throughput (blocks/sec), seeded then EMA-smoothed from real
     // batch timings so the ETA reflects actual speed. Fast sync is seeded high
     // (bulk path) so the first ETA isn't wildly pessimistic; both self-correct.
-    let mut measured_bps: f64 = if fast_sync { 80.0 } else { (pool_n as f64) * 1.5 };
+    let mut measured_bps: f64 = if fast_sync {
+        80.0
+    } else {
+        (pool_n as f64) * 1.5
+    };
 
     // Public nodes routinely drop the keep-alive connection after a big
     // get_blocks.bin response, so the next request fails with ConnectionReset.
@@ -825,9 +904,20 @@ async fn scan_loop<C: DaemonConnector>(
             Err(e) => {
                 consecutive_failures += 1;
                 if consecutive_failures >= MAX_NODE_FAILURES {
-                    return Err(format!("{} unresponsive ({} consecutive failures): {:?}", node_label, consecutive_failures, e));
+                    return Err(format!(
+                        "{} unresponsive ({} consecutive failures): {:?}",
+                        node_label, consecutive_failures, e
+                    ));
                 }
-                emit_log(&app, "Sync", "warn", &format!("⚠️ Height check failed ({}/{}) — reconnecting…", consecutive_failures, MAX_NODE_FAILURES));
+                emit_log(
+                    &app,
+                    "Sync",
+                    "warn",
+                    &format!(
+                        "⚠️ Height check failed ({}/{}) — reconnecting…",
+                        consecutive_failures, MAX_NODE_FAILURES
+                    ),
+                );
                 sleep(Duration::from_millis(400)).await;
                 continue;
             }
@@ -835,7 +925,15 @@ async fn scan_loop<C: DaemonConnector>(
 
         if scan_height == u64::MAX {
             // New wallet sentinel — start near the tip.
-            emit_log(&app, "Sync", "info", &format!("📦 New wallet: starting near daemon tip ({})", daemon_height));
+            emit_log(
+                &app,
+                "Sync",
+                "info",
+                &format!(
+                    "📦 New wallet: starting near daemon tip ({})",
+                    daemon_height
+                ),
+            );
             scan_height = daemon_height.saturating_sub(10);
         }
         // NOTE: being slightly AHEAD of the daemon (scan_height == daemon_height + 1,
@@ -856,7 +954,8 @@ async fn scan_loop<C: DaemonConnector>(
 
         if scan_height >= daemon_height {
             // Active wallet caught up — let the background pool run again.
-            app.state::<crate::wallet::SyncPool>().set_active_busy(false);
+            app.state::<crate::wallet::SyncPool>()
+                .set_active_busy(false);
             // Persist the tip here too. update_sync_status is otherwise only called in
             // the batch-scan path below, which runs solely when there are NEW blocks to
             // scan. A wallet that resumes already at/near the tip goes straight to this
@@ -870,7 +969,15 @@ async fn scan_loop<C: DaemonConnector>(
                 spend_reconciled = true;
                 let unspent = ws.unspent_key_images().await;
                 if !unspent.is_empty() {
-                    emit_log(&app, "Scan", "info", &format!("🔁 Reconciling spend status of {} outputs with the daemon…", unspent.len()));
+                    emit_log(
+                        &app,
+                        "Scan",
+                        "info",
+                        &format!(
+                            "🔁 Reconciling spend status of {} outputs with the daemon…",
+                            unspent.len()
+                        ),
+                    );
                     let kis: Vec<String> = unspent.iter().map(|(_, k)| k.clone()).collect();
                     match query_spent_status(&daemon, &kis).await {
                         Some(status) => {
@@ -898,7 +1005,15 @@ async fn scan_loop<C: DaemonConnector>(
                 let (total, unlocked) = ws.balances(daemon_height).await;
                 crate::emit_balance(&app, total, unlocked);
             }
-            crate::emit_sync_status(&app, "SYNCED", scan_height, daemon_height, 100.0, &node_label, restore_base);
+            crate::emit_sync_status(
+                &app,
+                "SYNCED",
+                scan_height,
+                daemon_height,
+                100.0,
+                &node_label,
+                restore_base,
+            );
             sleep(Duration::from_secs(10)).await;
             continue;
         }
@@ -915,7 +1030,8 @@ async fn scan_loop<C: DaemonConnector>(
         // Pause the background "Sync all wallets" pool during a heavy catch-up so
         // it doesn't compete with the active wallet for the node + CPU. Resumes
         // automatically once the gap is small (and in the SYNCED branch above).
-        app.state::<crate::wallet::SyncPool>().set_active_busy(gap > 2_000);
+        app.state::<crate::wallet::SyncPool>()
+            .set_active_busy(gap > 2_000);
         let batch_size: u64 = if fast_sync {
             // K sub-ranges of `bulk_batch`, fetched concurrently (see bulk_parallel).
             (bulk_batch * BULK_STREAMS as u64).min(gap)
@@ -932,16 +1048,43 @@ async fn scan_loop<C: DaemonConnector>(
             let eta_mins = eta_secs / 60;
             let eta_hours = eta_mins / 60;
             if eta_hours > 0 {
-                emit_log(&app, "Sync", "info", &format!("⏱️ ETA: ~{}h {}m ({} blocks remaining at {:.1} blk/s)", eta_hours, eta_mins % 60, gap, measured_bps));
+                emit_log(
+                    &app,
+                    "Sync",
+                    "info",
+                    &format!(
+                        "⏱️ ETA: ~{}h {}m ({} blocks remaining at {:.1} blk/s)",
+                        eta_hours,
+                        eta_mins % 60,
+                        gap,
+                        measured_bps
+                    ),
+                );
             } else {
-                emit_log(&app, "Sync", "info", &format!("⏱️ ETA: ~{}m ({} blocks remaining at {:.1} blk/s)", eta_mins, gap, measured_bps));
+                emit_log(
+                    &app,
+                    "Sync",
+                    "info",
+                    &format!(
+                        "⏱️ ETA: ~{}m ({} blocks remaining at {:.1} blk/s)",
+                        eta_mins, gap, measured_bps
+                    ),
+                );
             }
         }
 
         let batch_end = (scan_height + batch_size).min(daemon_height);
         let range = (scan_height as usize)..=(batch_end as usize);
 
-        emit_log(&app, "Sync", "info", &format!("📥 Fetching blocks {}-{} / {}", scan_height, batch_end, daemon_height));
+        emit_log(
+            &app,
+            "Sync",
+            "info",
+            &format!(
+                "📥 Fetching blocks {}-{} / {}",
+                scan_height, batch_end, daemon_height
+            ),
+        );
 
         let fetch_start = std::time::Instant::now();
         // When set, this batch was served by the slow per-block fallback because the
@@ -951,7 +1094,14 @@ async fn scan_loop<C: DaemonConnector>(
         // Fast sync: one bulk get_blocks.bin call for the whole batch (trusting the
         // node). Normal mode uses the validated per-block path across the pool.
         let parallel_result = if fast_sync {
-            match with_deadline(bulk_parallel(&daemon, range.clone(), bulk_batch as usize, BULK_STREAMS)).await {
+            match with_deadline(bulk_parallel(
+                &daemon,
+                range.clone(),
+                bulk_batch as usize,
+                BULK_STREAMS,
+            ))
+            .await
+            {
                 Ok(blocks) => {
                     // Grow the sub-range size after a clean fetch, but never straight
                     // back into a size that just timed out (see bulk_ceiling). Stay
@@ -986,8 +1136,20 @@ async fn scan_loop<C: DaemonConnector>(
                     // size) — never grinding the slow path forever.
                     emit_log(&app, "Sync", "warn", &format!("⚡ Bulk unavailable on {} even at {} blocks ({:?}) — one validated per-block batch, then re-racing", node_label, MIN_BULK_BATCH, e));
                     if pool.len() == 1 {
-                        pool = build_fallback_pool(&app, connector, &daemon, &node_url, fetch_concurrency).await;
-                        emit_log(&app, "Sync", "info", &format!("🔗 Fallback pool ready: {} nodes", pool.len()));
+                        pool = build_fallback_pool(
+                            &app,
+                            connector,
+                            &daemon,
+                            &node_url,
+                            fetch_concurrency,
+                        )
+                        .await;
+                        emit_log(
+                            &app,
+                            "Sync",
+                            "info",
+                            &format!("🔗 Fallback pool ready: {} nodes", pool.len()),
+                        );
                     }
                     reraise_for_bulk = true;
                     bulk_batch = MAX_BULK_BATCH;
@@ -1007,8 +1169,22 @@ async fn scan_loop<C: DaemonConnector>(
                     let batch_bps = blocks.len() as f64 / (fetch_ms as f64 / 1000.0);
                     measured_bps = measured_bps * 0.6 + batch_bps * 0.4;
                 }
-                let blk_s = if fetch_ms > 0 { blocks.len() as f64 / (fetch_ms as f64 / 1000.0) } else { 0.0 };
-                emit_log(&app, "Sync", "info", &format!("✅ Got {} blocks in {}ms ({:.0} blk/s)", blocks.len(), fetch_ms, blk_s));
+                let blk_s = if fetch_ms > 0 {
+                    blocks.len() as f64 / (fetch_ms as f64 / 1000.0)
+                } else {
+                    0.0
+                };
+                emit_log(
+                    &app,
+                    "Sync",
+                    "info",
+                    &format!(
+                        "✅ Got {} blocks in {}ms ({:.0} blk/s)",
+                        blocks.len(),
+                        fetch_ms,
+                        blk_s
+                    ),
+                );
                 // A successful fetch means the node is healthy — reset the failure counter.
                 consecutive_failures = 0;
                 // Scan each block with the wallet's Scanner. This is CPU-bound and,
@@ -1041,18 +1217,33 @@ async fn scan_loop<C: DaemonConnector>(
                                     // Real block header time (Unix s) — stable, unlike the
                                     // now−(tip−height)·120 estimate that drifts during sync.
                                     let block_ts = block.block.header.timestamp;
-                                    wallet_state.add_outputs(outputs, block_height, block_ts, generation).await;
+                                    wallet_state
+                                        .add_outputs(outputs, block_height, block_ts, generation)
+                                        .await;
                                 }
                             }
                             Err(e) => {
-                                emit_log(&app, "Scan", "error", &format!("⚠️ Scan error at ~{}: {:?}", scan_height, e));
+                                emit_log(
+                                    &app,
+                                    "Scan",
+                                    "error",
+                                    &format!("⚠️ Scan error at ~{}: {:?}", scan_height, e),
+                                );
                             }
                         }
                         // Collect key image -> spending tx for this block's (non-miner) txs.
                         for (tx_idx, tx) in block.transactions.iter().enumerate() {
-                            let txid = block.block.transactions.get(tx_idx).copied().unwrap_or([0u8; 32]);
+                            let txid = block
+                                .block
+                                .transactions
+                                .get(tx_idx)
+                                .copied()
+                                .unwrap_or([0u8; 32]);
                             for input in &tx.prefix().inputs {
-                                if let monero_oxide::transaction::Input::ToKey { key_image, .. } = input {
+                                if let monero_oxide::transaction::Input::ToKey {
+                                    key_image, ..
+                                } = input
+                                {
                                     ki_to_tx.insert(key_image.to_bytes(), (txid, block_height));
                                 }
                             }
@@ -1060,8 +1251,22 @@ async fn scan_loop<C: DaemonConnector>(
                     }
 
                     let scan_ms = scan_start.elapsed().as_millis();
-                    let scan_bps = if scan_ms > 0 { blocks.len() as f64 / (scan_ms as f64 / 1000.0) } else { 0.0 };
-                    emit_log(&app, "Scan", "info", &format!("🔬 Scanned {} blocks in {}ms ({:.0} blk/s)", blocks.len(), scan_ms, scan_bps));
+                    let scan_bps = if scan_ms > 0 {
+                        blocks.len() as f64 / (scan_ms as f64 / 1000.0)
+                    } else {
+                        0.0
+                    };
+                    emit_log(
+                        &app,
+                        "Scan",
+                        "info",
+                        &format!(
+                            "🔬 Scanned {} blocks in {}ms ({:.0} blk/s)",
+                            blocks.len(),
+                            scan_ms,
+                            scan_bps
+                        ),
+                    );
 
                     // Diagnostics (filter console for KIDIAG).
                     if !diag_inputs_logged {
@@ -1077,21 +1282,43 @@ async fn scan_loop<C: DaemonConnector>(
 
                     // Detect spends + record outgoing ledger entries for the spending
                     // txs. Requires the spend key (active wallet only).
-                    let newly_spent = wallet_state.detect_and_record_spends(&ki_to_tx, daemon_height).await;
+                    let newly_spent = wallet_state
+                        .detect_and_record_spends(&ki_to_tx, daemon_height)
+                        .await;
                     if newly_spent > 0 {
-                        emit_log(&app, "Scan", "info", &format!("📤 Detected {} spent output(s) in blocks {}-{}", newly_spent, scan_height, batch_end));
+                        emit_log(
+                            &app,
+                            "Scan",
+                            "info",
+                            &format!(
+                                "📤 Detected {} spent output(s) in blocks {}-{}",
+                                newly_spent, scan_height, batch_end
+                            ),
+                        );
                         let (total, unlocked) = wallet_state.balances(daemon_height).await;
                         crate::emit_balance(&app, total, unlocked);
                     }
 
                     if new_output_count > 0 {
-                        emit_log(&app, "Scan", "success", &format!(
-                            "💰 Found {} outputs ({} piconero) in blocks {}-{}",
-                            new_output_count, new_amount, scan_height, batch_end
-                        ));
+                        emit_log(
+                            &app,
+                            "Scan",
+                            "success",
+                            &format!(
+                                "💰 Found {} outputs ({} piconero) in blocks {}-{}",
+                                new_output_count, new_amount, scan_height, batch_end
+                            ),
+                        );
                         let total = wallet_state.compute_balance().await;
-                        crate::emit_sync_status(&app, "SYNCING", scan_height, daemon_height,
-                            (scan_height as f64 / daemon_height as f64) * 100.0, &node_label, restore_base);
+                        crate::emit_sync_status(
+                            &app,
+                            "SYNCING",
+                            scan_height,
+                            daemon_height,
+                            (scan_height as f64 / daemon_height as f64) * 100.0,
+                            &node_label,
+                            restore_base,
+                        );
                     }
                 }
 
@@ -1100,7 +1327,12 @@ async fn scan_loop<C: DaemonConnector>(
                 // Check generation BEFORE updating state — don't overwrite a rescan's reset
                 let ws = app.state::<WalletState>();
                 if ws.current_scanner_generation() != generation {
-                    emit_log(&app, "Sync", "info", "🛑 Scan loop stopped (superseded after batch)");
+                    emit_log(
+                        &app,
+                        "Sync",
+                        "info",
+                        "🛑 Scan loop stopped (superseded after batch)",
+                    );
                     return Ok(());
                 }
 
@@ -1118,9 +1350,20 @@ async fn scan_loop<C: DaemonConnector>(
             Err(e) => {
                 consecutive_failures += 1;
                 if consecutive_failures >= MAX_NODE_FAILURES {
-                    return Err(format!("{} block fetch failing ({} consecutive): {:?}", node_label, consecutive_failures, e));
+                    return Err(format!(
+                        "{} block fetch failing ({} consecutive): {:?}",
+                        node_label, consecutive_failures, e
+                    ));
                 }
-                emit_log(&app, "Sync", "warn", &format!("⚠️ Block fetch failed {}-{} ({}/{}) — reconnecting…", scan_height, batch_end, consecutive_failures, MAX_NODE_FAILURES));
+                emit_log(
+                    &app,
+                    "Sync",
+                    "warn",
+                    &format!(
+                        "⚠️ Block fetch failed {}-{} ({}/{}) — reconnecting…",
+                        scan_height, batch_end, consecutive_failures, MAX_NODE_FAILURES
+                    ),
+                );
                 sleep(Duration::from_millis(400)).await;
                 continue;
             }
@@ -1130,7 +1373,10 @@ async fn scan_loop<C: DaemonConnector>(
         // persisted its progress above; now re-race for a bulk-capable node so fast
         // sync resumes rather than crawling the slow path on a bulk-hostile node.
         if reraise_for_bulk {
-            return Err(format!("{} can't serve bulk — re-racing for a faster node", node_label));
+            return Err(format!(
+                "{} can't serve bulk — re-racing for a faster node",
+                node_label
+            ));
         }
 
         // Emit sync progress
@@ -1139,7 +1385,15 @@ async fn scan_loop<C: DaemonConnector>(
         } else {
             0.0
         };
-        crate::emit_sync_status(&app, "SYNCING", scan_height, daemon_height, percent, &node_label, restore_base);
+        crate::emit_sync_status(
+            &app,
+            "SYNCING",
+            scan_height,
+            daemon_height,
+            percent,
+            &node_label,
+            restore_base,
+        );
     }
 }
 
@@ -1209,7 +1463,14 @@ async fn pool_loop<C: DaemonConnector>(
         scan_height = RINGCT_FORK_HEIGHT;
     }
 
-    let short = identity_id.chars().rev().take(7).collect::<String>().chars().rev().collect::<String>();
+    let short = identity_id
+        .chars()
+        .rev()
+        .take(7)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
 
     // Opt-in fast sync (same trade-off as the active scanner; see scan_loop).
     let fast_sync = read_config_bool(&app, "fast_sync");
@@ -1219,7 +1480,11 @@ async fn pool_loop<C: DaemonConnector>(
             return;
         }
         // The active wallet scans itself via WalletState — never double-scan it.
-        if app.state::<WalletState>().is_active_identity(&identity_id).await {
+        if app
+            .state::<WalletState>()
+            .is_active_identity(&identity_id)
+            .await
+        {
             return;
         }
 
@@ -1233,7 +1498,10 @@ async fn pool_loop<C: DaemonConnector>(
 
         loop {
             if cancel.load(Ordering::SeqCst)
-                || app.state::<WalletState>().is_active_identity(&identity_id).await
+                || app
+                    .state::<WalletState>()
+                    .is_active_identity(&identity_id)
+                    .await
             {
                 return;
             }
@@ -1271,7 +1539,10 @@ async fn pool_loop<C: DaemonConnector>(
             // Fast sync: one bulk get_blocks.bin call (trusting node); fall back to
             // the validated per-block path on any error.
             let fetched = if fast_sync {
-                match daemon.bulk_scannable_blocks_trusting_node(range.clone()).await {
+                match daemon
+                    .bulk_scannable_blocks_trusting_node(range.clone())
+                    .await
+                {
                     Ok(b) => Ok(b),
                     Err(_) => per_block().await,
                 }
@@ -1302,7 +1573,10 @@ async fn pool_loop<C: DaemonConnector>(
             scan_height = batch_end + 1;
             cache.scan_height = scan_height;
             let _ = storage::save_output_cache(&data_dir, &identity_id, &cache);
-            log::info!("[bg {short}] {scan_height} / {daemon_height} ({} outputs)", cache.outputs.len());
+            log::info!(
+                "[bg {short}] {scan_height} / {daemon_height} ({} outputs)",
+                cache.outputs.len()
+            );
         }
     }
 }
@@ -1315,12 +1589,18 @@ mod fold_tests {
     fn folds_fullwidth_colon_and_digits() {
         // CJK-IME fullwidth colon + fullwidth digits → ASCII host:port.
         assert_eq!(fold_fullwidth("127.0.0.1：17890"), "127.0.0.1:17890");
-        assert_eq!(fold_fullwidth("１２７．０．０．１：９０５０"), "127.0.0.1:9050");
+        assert_eq!(
+            fold_fullwidth("１２７．０．０．１：９０５０"),
+            "127.0.0.1:9050"
+        );
     }
     #[test]
     fn leaves_ascii_untouched() {
         assert_eq!(fold_fullwidth("127.0.0.1:9050"), "127.0.0.1:9050");
-        assert_eq!(fold_fullwidth("socks5://localhost:1080"), "socks5://localhost:1080");
+        assert_eq!(
+            fold_fullwidth("socks5://localhost:1080"),
+            "socks5://localhost:1080"
+        );
     }
     #[test]
     fn folds_ideographic_space() {
@@ -1339,8 +1619,8 @@ mod fold_tests {
 
 #[cfg(test)]
 mod connect_smoke {
-    use monero_simple_request_rpc::SimpleRequestTransport;
     use monero_daemon_rpc::prelude::*;
+    use monero_simple_request_rpc::SimpleRequestTransport;
 
     // Reproduce the app's exact clearnet connect path against a known-reachable
     // node. Run: cargo test -p ripley-terminal clearnet_connect -- --ignored --nocapture
@@ -1377,15 +1657,28 @@ mod connect_smoke {
         for url in nodes {
             let daemon = match SimpleRequestTransport::new(url.to_string()).await {
                 Ok(d) => d,
-                Err(e) => { println!("⚠️  {url}: connect failed {e:?}"); continue; }
+                Err(e) => {
+                    println!("⚠️  {url}: connect failed {e:?}");
+                    continue;
+                }
             };
             let t = std::time::Instant::now();
-            let r = ProvidesScannableBlocks::contiguous_scannable_blocks(&daemon, start..=(start + 29)).await;
+            let r =
+                ProvidesScannableBlocks::contiguous_scannable_blocks(&daemon, start..=(start + 29))
+                    .await;
             let ms = t.elapsed().as_millis();
             match r {
-                Ok(b) => println!("{} {url}: {} blocks in {}ms ({:.0} blk/s)",
-                    if ms < 2500 { "🚀 BULK" } else { "🐌 FALLBACK" }, b.len(), ms,
-                    b.len() as f64 / (ms.max(1) as f64 / 1000.0)),
+                Ok(b) => println!(
+                    "{} {url}: {} blocks in {}ms ({:.0} blk/s)",
+                    if ms < 2500 {
+                        "🚀 BULK"
+                    } else {
+                        "🐌 FALLBACK"
+                    },
+                    b.len(),
+                    ms,
+                    b.len() as f64 / (ms.max(1) as f64 / 1000.0)
+                ),
                 Err(e) => println!("❌ {url}: {e:?}"),
             }
         }
@@ -1397,9 +1690,10 @@ mod connect_smoke {
     #[ignore]
     async fn fast_bulk_speed() {
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        let daemon = SimpleRequestTransport::new("http://xmr-node.cakewallet.com:18081".to_string())
-            .await
-            .expect("connect");
+        let daemon =
+            SimpleRequestTransport::new("http://xmr-node.cakewallet.com:18081".to_string())
+                .await
+                .expect("connect");
         let start = 3_400_000usize;
         let t = std::time::Instant::now();
         let blocks = daemon
@@ -1414,9 +1708,14 @@ mod connect_smoke {
             blocks.len() as f64 / (ms as f64 / 1000.0)
         );
         assert_eq!(blocks.len(), 1000);
-        let with_idx =
-            blocks.iter().filter(|b| b.output_index_for_first_ringct_output.is_some()).count();
+        let with_idx = blocks
+            .iter()
+            .filter(|b| b.output_index_for_first_ringct_output.is_some())
+            .count();
         println!("   {with_idx}/1000 blocks carry a first-ringct output index");
-        assert!(with_idx > 0, "no output indices populated — spending would break");
+        assert!(
+            with_idx > 0,
+            "no output indices populated — spending would break"
+        );
     }
 }

@@ -1,21 +1,21 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 use tauri::AppHandle;
 use tauri::Manager;
+use tokio::sync::RwLock;
 
 use zeroize::Zeroizing;
 
-use monero_wallet::{ViewPair, Scanner, WalletOutput};
-use monero_oxide::ed25519::{Scalar, Point};
-use monero_address::{Network, MoneroAddress};
+use monero_address::{MoneroAddress, Network};
+use monero_oxide::ed25519::{Point, Scalar};
+use monero_wallet::{Scanner, ViewPair, WalletOutput};
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 
 use super::keys;
-use super::storage::{self, WalletFileData, AccountLabel};
+use super::storage::{self, AccountLabel, WalletFileData};
 use super::types::*;
 
 /// A scanned output we own, tagged with the block height it was received at
@@ -33,7 +33,11 @@ pub struct OwnedOutput {
 /// the synthetic key image surfaced to the UI (a real key image needs output
 /// private-key derivation, which monero-oxide doesn't expose).
 pub fn output_id(o: &WalletOutput) -> String {
-    format!("{}:{}", hex::encode(o.transaction()), o.index_in_transaction())
+    format!(
+        "{}:{}",
+        hex::encode(o.transaction()),
+        o.index_in_transaction()
+    )
 }
 
 /// Max length (chars) for an account / subaddress label — bounds wallet-file bloat.
@@ -54,12 +58,19 @@ fn persist_meta(inner: &WalletInner) -> Result<(), String> {
     wd.accounts = inner
         .accounts
         .iter()
-        .map(|a| storage::AccountLabel { index: a.index, label: a.label.clone() })
+        .map(|a| storage::AccountLabel {
+            index: a.index,
+            label: a.label.clone(),
+        })
         .collect();
     wd.subaddress_labels = inner
         .subaddress_labels
         .iter()
-        .map(|(a, i, l)| storage::SubaddressLabel { account: *a, index: *i, label: l.clone() })
+        .map(|(a, i, l)| storage::SubaddressLabel {
+            account: *a,
+            index: *i,
+            label: l.clone(),
+        })
         .collect();
     storage::save_wallet(&inner.data_dir, &id, &wd, &pw).map_err(|e| format!("save wallet: {}", e))
 }
@@ -197,12 +208,14 @@ struct WalletInner {
 
 impl WalletState {
     pub fn new(app: AppHandle) -> Self {
-        let data_dir = app.path().app_data_dir()
+        let data_dir = app
+            .path()
+            .app_data_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
 
-        let transfer_grants = tokio::sync::Mutex::new(
-            super::transfer_ledger::GrantLedger::load(data_dir.join("transfer_grants.json")),
-        );
+        let transfer_grants = tokio::sync::Mutex::new(super::transfer_ledger::GrantLedger::load(
+            data_dir.join("transfer_grants.json"),
+        ));
 
         Self {
             app,
@@ -218,7 +231,9 @@ impl WalletState {
                     status: "OFFLINE".to_string(),
                     height: 0,
                     daemon_height: 0,
-                    sync_percent: 0.0, node_label: String::new(), node_url: String::new(),
+                    sync_percent: 0.0,
+                    node_label: String::new(),
+                    node_url: String::new(),
                 },
                 network: Network::Mainnet,
                 spend_key: None,
@@ -278,7 +293,10 @@ impl WalletState {
             // For new wallets, use u64::MAX as sentinel — scanner auto-adjusts to daemon tip.
             // For restores, use provided height (or 0 for full scan).
             scan_height: restore_height.unwrap_or(if seed_phrase.is_some() { 0 } else { u64::MAX }),
-            accounts: vec![AccountLabel { index: 0, label: "Primary".into() }],
+            accounts: vec![AccountLabel {
+                index: 0,
+                label: "Primary".into(),
+            }],
             subaddress_labels: vec![],
         };
         storage::save_wallet(&inner.data_dir, identity_id, &wallet_data, password)?;
@@ -353,34 +371,43 @@ impl WalletState {
 
         // Set up accounts from saved labels; account 0 = legacy main address, account>0
         // base = subaddress (N,0). Guarantee account 0 is always present.
-        let mut accounts: Vec<MoneroAccount> = wallet_data.accounts.iter().map(|a| {
-            let base_address = if a.index == 0 {
-                addr_str.clone()
-            } else {
-                monero_address::SubaddressIndex::new(a.index, 0)
-                    .map(|idx| view_pair.subaddress(network, idx).to_string())
-                    .unwrap_or_default()
-            };
-            MoneroAccount {
-                index: a.index,
-                label: a.label.clone(),
-                balance: "0".to_string(),
-                unlocked_balance: "0".to_string(),
-                base_address,
-            }
-        }).collect();
+        let mut accounts: Vec<MoneroAccount> = wallet_data
+            .accounts
+            .iter()
+            .map(|a| {
+                let base_address = if a.index == 0 {
+                    addr_str.clone()
+                } else {
+                    monero_address::SubaddressIndex::new(a.index, 0)
+                        .map(|idx| view_pair.subaddress(network, idx).to_string())
+                        .unwrap_or_default()
+                };
+                MoneroAccount {
+                    index: a.index,
+                    label: a.label.clone(),
+                    balance: "0".to_string(),
+                    unlocked_balance: "0".to_string(),
+                    base_address,
+                }
+            })
+            .collect();
         if !accounts.iter().any(|a| a.index == 0) {
-            accounts.insert(0, MoneroAccount {
-                index: 0,
-                label: "Primary".to_string(),
-                balance: "0".to_string(),
-                unlocked_balance: "0".to_string(),
-                base_address: addr_str.clone(),
-            });
+            accounts.insert(
+                0,
+                MoneroAccount {
+                    index: 0,
+                    label: "Primary".to_string(),
+                    balance: "0".to_string(),
+                    unlocked_balance: "0".to_string(),
+                    base_address: addr_str.clone(),
+                },
+            );
         }
 
         // Restore subaddress labels as (account, index, label).
-        let subaddress_labels: Vec<(u32, u32, String)> = wallet_data.subaddress_labels.iter()
+        let subaddress_labels: Vec<(u32, u32, String)> = wallet_data
+            .subaddress_labels
+            .iter()
             .map(|s| (s.account, s.index, s.label.clone()))
             .collect();
 
@@ -415,7 +442,11 @@ impl WalletState {
             // Restore WalletOutputs (+ their block height) from serialized cache
             for cached in &cache.outputs {
                 if let Ok(output) = monero_wallet::WalletOutput::read(&mut cached.data.as_slice()) {
-                    inner.scanned_outputs.push(OwnedOutput { output, height: cached.height, timestamp: cached.timestamp });
+                    inner.scanned_outputs.push(OwnedOutput {
+                        output,
+                        height: cached.height,
+                        timestamp: cached.timestamp,
+                    });
                 }
             }
             // Use cached scan height if it's ahead of what's in the wallet file
@@ -435,15 +466,15 @@ impl WalletState {
     /// Get mnemonic seed (for backup).
     pub async fn get_mnemonic(&self) -> Result<String, String> {
         let inner = self.inner.read().await;
-        let spend_key = inner.spend_key.as_ref()
-            .ok_or("Wallet is locked")?;
+        let spend_key = inner.spend_key.as_ref().ok_or("Wallet is locked")?;
 
         // Convert spend key back to mnemonic via entropy
         let entropy: [u8; 32] = <[u8; 32]>::from(**spend_key);
         let seed = monero_seed::Seed::from_entropy(
             monero_seed::Language::English,
             Zeroizing::new(entropy),
-        ).ok_or("Failed to convert key to mnemonic")?;
+        )
+        .ok_or("Failed to convert key to mnemonic")?;
 
         Ok((*seed.to_string()).clone())
     }
@@ -569,13 +600,23 @@ impl WalletState {
                 let wallet_data = WalletFileData {
                     seed_entropy: entropy_hex,
                     scan_height: inner.scan_height,
-                    accounts: inner.accounts.iter().map(|a| AccountLabel {
-                        index: a.index,
-                        label: a.label.clone(),
-                    }).collect(),
-                    subaddress_labels: inner.subaddress_labels.iter().map(|(account, idx, label)| {
-                        storage::SubaddressLabel { account: *account, index: *idx, label: label.clone() }
-                    }).collect(),
+                    accounts: inner
+                        .accounts
+                        .iter()
+                        .map(|a| AccountLabel {
+                            index: a.index,
+                            label: a.label.clone(),
+                        })
+                        .collect(),
+                    subaddress_labels: inner
+                        .subaddress_labels
+                        .iter()
+                        .map(|(account, idx, label)| storage::SubaddressLabel {
+                            account: *account,
+                            index: *idx,
+                            label: label.clone(),
+                        })
+                        .collect(),
                 };
                 let _ = storage::save_wallet(&inner.data_dir, identity_id, &wallet_data, password);
             }
@@ -639,7 +680,13 @@ impl WalletState {
     /// scanned_outputs) has taken over, a stale scanner's outputs are dropped
     /// rather than re-appended on top of the fresh state (which would
     /// double-count the balance).
-    pub async fn add_outputs(&self, outputs: Vec<WalletOutput>, height: u64, timestamp: u64, generation: u64) {
+    pub async fn add_outputs(
+        &self,
+        outputs: Vec<WalletOutput>,
+        height: u64,
+        timestamp: u64,
+        generation: u64,
+    ) {
         let mut inner = self.inner.write().await;
         if self.scanner_generation.load(Ordering::SeqCst) != generation {
             return;
@@ -647,15 +694,24 @@ impl WalletState {
         // Dedupe by output id (txid:index). Re-scanning a block (e.g. a re-race or a
         // restart overlapping the same range) would otherwise add the same output
         // twice and inflate the balance. output_id is unique per real output.
-        let mut existing: HashSet<String> =
-            inner.scanned_outputs.iter().map(|o| output_id(&o.output)).collect();
+        let mut existing: HashSet<String> = inner
+            .scanned_outputs
+            .iter()
+            .map(|o| output_id(&o.output))
+            .collect();
         for output in outputs {
             let id = output_id(&output);
             if existing.insert(id) {
                 // The real change output just arrived — drop its optimistic credit
                 // so the balance isn't double-counted (now counted via this output).
-                inner.pending_change.remove(&hex::encode(output.transaction()));
-                inner.scanned_outputs.push(OwnedOutput { output, height, timestamp });
+                inner
+                    .pending_change
+                    .remove(&hex::encode(output.transaction()));
+                inner.scanned_outputs.push(OwnedOutput {
+                    output,
+                    height,
+                    timestamp,
+                });
             }
         }
     }
@@ -776,7 +832,11 @@ impl WalletState {
             .iter()
             .map(|o| {
                 let id = output_id(&o.output);
-                (o.clone(), inner.spent.contains(&id), inner.frozen.contains(&id))
+                (
+                    o.clone(),
+                    inner.spent.contains(&id),
+                    inner.frozen.contains(&id),
+                )
             })
             .collect()
     }
@@ -805,8 +865,17 @@ impl WalletState {
     /// Stage the spend a prepared tx will perform, keyed by a hash of its tx
     /// metadata. `sent` carries amount/fee/destinations; tx_hash/height/timestamp
     /// are filled at commit. Applied to the spent set only once broadcast succeeds.
-    pub async fn stage_pending_spend(&self, meta_key: String, ids: Vec<String>, sent: storage::SentTx) {
-        self.inner.write().await.pending_spends.insert(meta_key, (ids, sent));
+    pub async fn stage_pending_spend(
+        &self,
+        meta_key: String,
+        ids: Vec<String>,
+        sent: storage::SentTx,
+    ) {
+        self.inner
+            .write()
+            .await
+            .pending_spends
+            .insert(meta_key, (ids, sent));
     }
 
     /// Drop a staged spend WITHOUT committing — e.g. the user cancelled at the native
@@ -821,7 +890,10 @@ impl WalletState {
     /// record `prepare_transfer` staged — NEVER from renderer-supplied text — so a hostile
     /// renderer can't display address A while the prepared tx (tx_metadata) actually pays B.
     /// Amounts are atomic units.
-    pub async fn peek_pending_spend(&self, meta_key: &str) -> Option<(Vec<(String, u64)>, u64, u64)> {
+    pub async fn peek_pending_spend(
+        &self,
+        meta_key: &str,
+    ) -> Option<(Vec<(String, u64)>, u64, u64)> {
         let inner = self.inner.read().await;
         inner
             .pending_spends
@@ -853,7 +925,9 @@ impl WalletState {
                     .scanned_outputs
                     .iter()
                     .any(|o| hex::encode(o.output.transaction()) == tx_hash);
-                let change = spent_sum.saturating_sub(sent.amount).saturating_sub(sent.fee);
+                let change = spent_sum
+                    .saturating_sub(sent.amount)
+                    .saturating_sub(sent.fee);
 
                 // Destinations that are OUR OWN addresses (splinter shatters the
                 // balance into fragments on our own subaddresses; also a send-to-self)
@@ -904,7 +978,9 @@ impl WalletState {
                     .iter()
                     .any(|o| hex::encode(o.output.transaction()) == sent.tx_hash);
                 if !already_scanned {
-                    inner.pending_change.insert(sent.tx_hash.clone(), sent.amount);
+                    inner
+                        .pending_change
+                        .insert(sent.tx_hash.clone(), sent.amount);
                 }
             }
             inner.sent.push(sent);
@@ -1057,7 +1133,12 @@ impl WalletState {
             .scanned_outputs
             .iter()
             .filter(|o| !inner.spent.contains(&output_id(&o.output)))
-            .map(|o| (output_id(&o.output), hex::encode(output_key_image(sk, &o.output))))
+            .map(|o| {
+                (
+                    output_id(&o.output),
+                    hex::encode(output_key_image(sk, &o.output)),
+                )
+            })
             .collect()
     }
 
@@ -1118,7 +1199,10 @@ impl WalletState {
         identity_id: &str,
         password: &str,
     ) -> Result<ViewPair, String> {
-        Ok(self.derive_view_pair_and_parts_for(identity_id, password).await?.0)
+        Ok(self
+            .derive_view_pair_and_parts_for(identity_id, password)
+            .await?
+            .0)
     }
 
     /// Like `derive_view_pair_for`, but also returns the raw watch-store parts:
@@ -1187,12 +1271,19 @@ impl WalletState {
     /// Derive the primary (legacy) address.
     pub async fn get_primary_address(&self) -> Option<String> {
         let inner = self.inner.read().await;
-        inner.view_pair.as_ref().map(|vp| vp.legacy_address(inner.network).to_string())
+        inner
+            .view_pair
+            .as_ref()
+            .map(|vp| vp.legacy_address(inner.network).to_string())
     }
 
     /// Create a new subaddress under `account_index` and register it with the scanner.
     /// Persists so it survives relaunch (else funds sent to it would be untracked).
-    pub async fn create_subaddress(&self, account_index: u32, label: &str) -> Result<SubaddressInfo, String> {
+    pub async fn create_subaddress(
+        &self,
+        account_index: u32,
+        label: &str,
+    ) -> Result<SubaddressInfo, String> {
         if label.chars().count() > MAX_LABEL_CHARS {
             return Err("Label too long".to_string());
         }
@@ -1209,7 +1300,9 @@ impl WalletState {
         // Persist FIRST (with the new label staged), and only register with the scanner
         // once disk agrees — otherwise a persist failure would leave in-memory ahead of
         // disk and, after restart, funds to this subaddress could go undetected.
-        inner.subaddress_labels.push((account_index, idx, label.to_string()));
+        inner
+            .subaddress_labels
+            .push((account_index, idx, label.to_string()));
         inner.subaddress_next.insert(account_index, idx + 1);
         if let Err(e) = persist_meta(&inner) {
             inner.subaddress_labels.pop();
@@ -1250,8 +1343,8 @@ impl WalletState {
             .map(|m| m + 1)
             .unwrap_or(1)
             .max(1);
-        let base_idx = monero_address::SubaddressIndex::new(new_index, 0)
-            .ok_or("Invalid account index")?;
+        let base_idx =
+            monero_address::SubaddressIndex::new(new_index, 0).ok_or("Invalid account index")?;
         let base_address = view_pair.subaddress(net, base_idx).to_string();
 
         let account = MoneroAccount {
@@ -1310,7 +1403,8 @@ impl WalletState {
         // Sum unspent outputs per minor index WITHIN this account. Mirrors balances() for
         // the unlocked figure (skip frozen, require the 10-block lock + any timelock).
         // Outputs with no subaddress attribute to account 0 / minor 0.
-        let mut totals: std::collections::HashMap<u32, (u64, u64)> = std::collections::HashMap::new();
+        let mut totals: std::collections::HashMap<u32, (u64, u64)> =
+            std::collections::HashMap::new();
         for o in &inner.scanned_outputs {
             let id = output_id(&o.output);
             if inner.spent.contains(&id) {
@@ -1353,7 +1447,11 @@ impl WalletState {
         result.push(SubaddressInfo {
             index: 0,
             address: base_address,
-            label: if account_index == 0 { "Primary".to_string() } else { "Base".to_string() },
+            label: if account_index == 0 {
+                "Primary".to_string()
+            } else {
+                "Base".to_string()
+            },
             balance: b0.to_string(),
             unlocked_balance: u0.to_string(),
             is_used: true,
@@ -1364,7 +1462,9 @@ impl WalletState {
         for i in 1..next {
             if let Some(sub_idx) = monero_address::SubaddressIndex::new(account_index, i) {
                 let address = view_pair.subaddress(net, sub_idx);
-                let label = inner.subaddress_labels.iter()
+                let label = inner
+                    .subaddress_labels
+                    .iter()
                     .find(|(a, idx, _)| *a == account_index && *idx == i)
                     .map(|(_, _, l)| l.clone())
                     .unwrap_or_else(|| format!("Subaddress #{}", i));
@@ -1389,8 +1489,10 @@ impl WalletState {
     pub async fn save_output_cache(&self) {
         let inner = self.inner.read().await;
         if let Some(identity_id) = &inner.active_identity {
-            let cached_outputs: Vec<storage::CachedOutput> = inner.scanned_outputs.iter().map(|o| {
-                storage::CachedOutput {
+            let cached_outputs: Vec<storage::CachedOutput> = inner
+                .scanned_outputs
+                .iter()
+                .map(|o| storage::CachedOutput {
                     data: o.output.serialize(),
                     amount: o.output.commitment().amount,
                     tx_hash: hex::encode(o.output.transaction()),
@@ -1398,8 +1500,8 @@ impl WalletState {
                     subaddress: o.output.subaddress().map(|s| s.address()),
                     height: o.height,
                     timestamp: o.timestamp,
-                }
-            }).collect();
+                })
+                .collect();
 
             let cache = storage::OutputCache {
                 scan_height: inner.scan_height,
@@ -1412,17 +1514,27 @@ impl WalletState {
             if let Err(e) = storage::save_output_cache(&inner.data_dir, identity_id, &cache) {
                 log::warn!("Failed to save output cache: {}", e);
             } else {
-                log::info!("Output cache saved: {} outputs at height {}", cache.outputs.len(), cache.scan_height);
+                log::info!(
+                    "Output cache saved: {} outputs at height {}",
+                    cache.outputs.len(),
+                    cache.scan_height
+                );
             }
         }
     }
 
     pub async fn set_subaddress_label(&self, account: u32, index: u32, label: &str) {
         let mut inner = self.inner.write().await;
-        if let Some(entry) = inner.subaddress_labels.iter_mut().find(|(a, idx, _)| *a == account && *idx == index) {
+        if let Some(entry) = inner
+            .subaddress_labels
+            .iter_mut()
+            .find(|(a, idx, _)| *a == account && *idx == index)
+        {
             entry.2 = label.to_string();
         } else {
-            inner.subaddress_labels.push((account, index, label.to_string()));
+            inner
+                .subaddress_labels
+                .push((account, index, label.to_string()));
         }
         // A label is cosmetic and re-editable, so best-effort persistence is fine here
         // (unlike the irreversible create_* ops, which roll back on persist failure).
@@ -1434,7 +1546,9 @@ impl WalletState {
     /// Compute total balance from scanned outputs (in atomic units / piconero).
     pub async fn compute_balance(&self) -> u64 {
         let inner = self.inner.read().await;
-        inner.scanned_outputs.iter()
+        inner
+            .scanned_outputs
+            .iter()
             .filter(|o| !inner.spent.contains(&output_id(&o.output)))
             .map(|o| o.output.commitment().amount)
             .sum()
@@ -1486,7 +1600,11 @@ impl WalletState {
         let mut total = 0u64;
         let mut unlocked = 0u64;
         for o in &inner.scanned_outputs {
-            let acct = o.output.subaddress().map(|s| s.account() as u32).unwrap_or(0);
+            let acct = o
+                .output
+                .subaddress()
+                .map(|s| s.account() as u32)
+                .unwrap_or(0);
             if acct != account_index {
                 continue;
             }

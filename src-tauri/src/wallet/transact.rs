@@ -3,16 +3,16 @@
 //! Uses monero-wallet's SignableTransaction for construction + signing,
 //! and MoneroDaemon's publish_transaction for broadcasting.
 
-use zeroize::Zeroizing;
 use rand_core::OsRng;
+use zeroize::Zeroizing;
 
-use monero_wallet::{OutputWithDecoys, WalletOutput, ViewPair};
-use monero_wallet::send::{Change, SignableTransaction, TransactionKeys};
-use monero_oxide::ringct::RctType;
-use monero_oxide::transaction::Transaction;
-use monero_oxide::ed25519::{Point, Scalar};
 use monero_address::MoneroAddress;
 use monero_daemon_rpc::prelude::*;
+use monero_oxide::ed25519::{Point, Scalar};
+use monero_oxide::ringct::RctType;
+use monero_oxide::transaction::Transaction;
+use monero_wallet::send::{Change, SignableTransaction, TransactionKeys};
+use monero_wallet::{OutputWithDecoys, ViewPair, WalletOutput};
 
 /// Prepared transaction ready for signing.
 pub struct PreparedTransaction {
@@ -35,7 +35,10 @@ pub struct PreparedTransaction {
 /// generator the library uses internally — not novel crypto. Returns the main
 /// key only (correct for single standard-address sends and sweeps; multi-output
 /// / subaddress sends also use per-output additional keys, which we omit).
-fn derive_tx_key_hex(outgoing_view_key: &Zeroizing<[u8; 32]>, inputs: &[OutputWithDecoys]) -> String {
+fn derive_tx_key_hex(
+    outgoing_view_key: &Zeroizing<[u8; 32]>,
+    inputs: &[OutputWithDecoys],
+) -> String {
     let iks: Vec<(Point, Point)> = inputs
         .iter()
         .map(|o| (o.key(), o.commitment().commit()))
@@ -90,7 +93,9 @@ pub async fn prepare_transaction(
     let spent_ids: Vec<String> = inputs.iter().map(crate::wallet::state::output_id).collect();
 
     // Get current block number for decoy selection
-    let block_number = daemon.latest_block_number().await
+    let block_number = daemon
+        .latest_block_number()
+        .await
         .map_err(|e| format!("Failed to get block number: {:?}", e))?;
 
     // Select decoys for each input (concurrently — see fetch_decoys_parallel).
@@ -100,7 +105,9 @@ pub async fn prepare_transaction(
     // Get fee rate from daemon
     // max_per_weight: safety cap to prevent absurd fees from a malicious node
     // 500_000 pico per weight unit is generous (~0.05 XMR for a typical tx)
-    let fee_rate = daemon.fee_rate(priority, 500_000).await
+    let fee_rate = daemon
+        .fee_rate(priority, 500_000)
+        .await
         .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
 
     // Outgoing view key — used to seed deterministic RNGs for transaction construction.
@@ -116,7 +123,8 @@ pub async fn prepare_transaction(
     let change = Change::new(view_pair.clone(), None);
 
     // Destination info for display
-    let destinations: Vec<(String, u64)> = payments.iter()
+    let destinations: Vec<(String, u64)> = payments
+        .iter()
         .map(|(addr, amt)| (addr.to_string(), *amt))
         .collect();
 
@@ -131,7 +139,8 @@ pub async fn prepare_transaction(
         change,
         vec![], // no extra data
         fee_rate,
-    ).map_err(|e| format!("Transaction construction failed: {:?}", e))?;
+    )
+    .map_err(|e| format!("Transaction construction failed: {:?}", e))?;
 
     let fee = signable.necessary_fee();
 
@@ -162,11 +171,15 @@ pub async fn prepare_sweep(
     let spent_ids: Vec<String> = inputs.iter().map(crate::wallet::state::output_id).collect();
     let total: u64 = inputs.iter().map(|o| o.commitment().amount).sum();
 
-    let block_number = daemon.latest_block_number().await
+    let block_number = daemon
+        .latest_block_number()
+        .await
         .map_err(|e| format!("Failed to get block number: {:?}", e))?;
     let ring_len = 16u8;
     let owds = fetch_decoys_parallel(daemon, inputs, ring_len, block_number).await?;
-    let fee_rate = daemon.fee_rate(priority, 500_000).await
+    let fee_rate = daemon
+        .fee_rate(priority, 500_000)
+        .await
         .map_err(|e| format!("Failed to get fee rate: {:?}", e))?;
     let outgoing_view_key = Zeroizing::new(view_pair.spend().compress().to_bytes());
 
@@ -189,19 +202,20 @@ pub async fn prepare_sweep(
 
     // Probe with a safe sub-total amount to read the necessary fee for this
     // (N inputs, 1 output, no change) shape, then rebuild at total - fee.
-    let probe = build(total / 2, owds.clone())
-        .map_err(|e| format!("Sweep probe failed: {:?}", e))?;
+    let probe =
+        build(total / 2, owds.clone()).map_err(|e| format!("Sweep probe failed: {:?}", e))?;
     let fee = probe.necessary_fee();
     if total <= fee {
         return Err(format!(
             "Balance ({}) is too small to cover the sweep fee ({})",
-            format_atomic(total), format_atomic(fee)
+            format_atomic(total),
+            format_atomic(fee)
         ));
     }
     let amount = total - fee;
     let tx_key_hex = derive_tx_key_hex(&outgoing_view_key, &owds);
-    let signable = build(amount, owds)
-        .map_err(|e| format!("Sweep construction failed: {:?}", e))?;
+    let signable =
+        build(amount, owds).map_err(|e| format!("Sweep construction failed: {:?}", e))?;
 
     Ok(PreparedTransaction {
         signable,
@@ -215,7 +229,11 @@ pub async fn prepare_sweep(
 
 /// Format atomic units to an XMR string (local helper to avoid a state dep).
 fn format_atomic(atomic: u64) -> String {
-    format!("{}.{:012}", atomic / 1_000_000_000_000, atomic % 1_000_000_000_000)
+    format!(
+        "{}.{:012}",
+        atomic / 1_000_000_000_000,
+        atomic % 1_000_000_000_000
+    )
 }
 
 /// Sign a prepared transaction with the spend key.
@@ -224,7 +242,9 @@ pub fn sign_transaction(
     spend_key: &Zeroizing<Scalar>,
 ) -> Result<Transaction, String> {
     let mut rng = OsRng;
-    prepared.signable.sign(&mut rng, spend_key)
+    prepared
+        .signable
+        .sign(&mut rng, spend_key)
         .map_err(|e| format!("Transaction signing failed: {:?}", e))
 }
 
@@ -233,6 +253,8 @@ pub async fn broadcast_transaction(
     daemon: &impl PublishTransaction,
     tx: &Transaction,
 ) -> Result<(), String> {
-    daemon.publish_transaction(tx).await
+    daemon
+        .publish_transaction(tx)
+        .await
         .map_err(|e| format!("Broadcast failed: {:?}", e))
 }

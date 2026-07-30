@@ -12,7 +12,10 @@ pub use transport::{ArtiTransport, SocksTransport};
 // tor_get/socks_get route HTTPS GETs (nodes.json, price) over Tor / an external
 // SOCKS proxy with TLS; tor_http is the shared hyper-over-arti helper.
 #[allow(unused_imports)]
-pub use transport::{parse_url, socks_get, socks_get_capped, socks_get_with_headers, tor_get, tor_get_capped, tor_get_with_headers, tor_http};
+pub use transport::{
+    parse_url, socks_get, socks_get_capped, socks_get_with_headers, tor_get, tor_get_capped,
+    tor_get_with_headers, tor_http,
+};
 
 /// Surface Tor bootstrap status to the renderer's status chip. Piggybacks on
 /// core-log with source="TOR_STATUS" because Tauri v2 custom events don't reach
@@ -23,7 +26,12 @@ fn emit_tor_status(app: &AppHandle, status: &str, percent: Option<u8>, message: 
         app,
         "TOR_STATUS",
         "info",
-        &format!("{}|{}|{}", status, percent.unwrap_or(0), message.unwrap_or("")),
+        &format!(
+            "{}|{}|{}",
+            status,
+            percent.unwrap_or(0),
+            message.unwrap_or("")
+        ),
     );
 }
 
@@ -74,11 +82,11 @@ impl TorState {
         const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(75);
         const MAX_ATTEMPTS: u32 = 3;
 
-        let runtime = PreferredRuntime::current()
-            .map_err(|e| format!("Tor needs an async runtime: {e}"))?;
+        let runtime =
+            PreferredRuntime::current().map_err(|e| format!("Tor needs an async runtime: {e}"))?;
 
         let mut last_err = String::from("unknown");
-        for attempt in 1 ..= MAX_ATTEMPTS {
+        for attempt in 1..=MAX_ATTEMPTS {
             {
                 let mut inner = self.inner.write().await;
                 inner.status = TorStatus::Bootstrapping { percent: 0 };
@@ -144,7 +152,12 @@ impl TorState {
             }
             log::warn!("Tor bootstrap attempt {attempt}/{MAX_ATTEMPTS} failed: {last_err}");
             if attempt < MAX_ATTEMPTS {
-                emit_tor_status(app, "bootstrapping", Some(0), Some(&format!("attempt {attempt} failed; retrying…")));
+                emit_tor_status(
+                    app,
+                    "bootstrapping",
+                    Some(0),
+                    Some(&format!("attempt {attempt} failed; retrying…")),
+                );
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
         }
@@ -152,7 +165,9 @@ impl TorState {
         let msg = format!("Tor bootstrap failed after {MAX_ATTEMPTS} attempts: {last_err}");
         {
             let mut inner = self.inner.write().await;
-            inner.status = TorStatus::Error { message: msg.clone() };
+            inner.status = TorStatus::Error {
+                message: msg.clone(),
+            };
         }
         emit_tor_status(app, "error", None, Some(&msg));
         log::error!("{msg}");

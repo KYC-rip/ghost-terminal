@@ -48,9 +48,18 @@ const CMD_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 pub enum NetError {
-    Spawn { cmd: String, err: String },
-    NonZero { cmd: String, code: Option<i32>, stderr: String },
-    Timeout { cmd: String },
+    Spawn {
+        cmd: String,
+        err: String,
+    },
+    NonZero {
+        cmd: String,
+        code: Option<i32>,
+        stderr: String,
+    },
+    Timeout {
+        cmd: String,
+    },
     Resolve(String),
     NoEndpointIp,
     RouteParse,
@@ -60,7 +69,9 @@ impl fmt::Display for NetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NetError::Spawn { cmd, err } => write!(f, "spawn {cmd}: {err}"),
-            NetError::NonZero { cmd, code, stderr } => write!(f, "{cmd} exited {code:?}: {}", stderr.trim()),
+            NetError::NonZero { cmd, code, stderr } => {
+                write!(f, "{cmd} exited {code:?}: {}", stderr.trim())
+            }
             NetError::Timeout { cmd } => write!(f, "{cmd} timed out"),
             NetError::Resolve(e) => write!(f, "resolve endpoint: {e}"),
             NetError::NoEndpointIp => write!(f, "endpoint resolved to no usable address"),
@@ -101,7 +112,10 @@ fn wait_bounded(cmd: &str, child: &mut Child) -> Result<std::process::ExitStatus
             }
             Err(e) => {
                 reap(child);
-                return Err(NetError::Spawn { cmd: cmd.into(), err: e.to_string() });
+                return Err(NetError::Spawn {
+                    cmd: cmd.into(),
+                    err: e.to_string(),
+                });
             }
         }
     }
@@ -116,16 +130,26 @@ fn exec(cmd: &str, args: &[&str], input: Option<&[u8]>) -> Result<(), NetError> 
         .env("PATH", SAFE_PATH)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .spawn()
-        .map_err(|e| NetError::Spawn { cmd: cmd.into(), err: e.to_string() })?;
+        .map_err(|e| NetError::Spawn {
+            cmd: cmd.into(),
+            err: e.to_string(),
+        })?;
 
     if let Some(bytes) = input {
         if let Some(mut sin) = child.stdin.take() {
             if let Err(e) = sin.write_all(bytes) {
                 drop(sin);
                 reap(&mut child);
-                return Err(NetError::Spawn { cmd: cmd.into(), err: e.to_string() });
+                return Err(NetError::Spawn {
+                    cmd: cmd.into(),
+                    err: e.to_string(),
+                });
             }
         }
     }
@@ -137,7 +161,11 @@ fn exec(cmd: &str, args: &[&str], input: Option<&[u8]>) -> Result<(), NetError> 
     if status.success() {
         return Ok(());
     }
-    Err(NetError::NonZero { cmd: cmd.into(), code: status.code(), stderr })
+    Err(NetError::NonZero {
+        cmd: cmd.into(),
+        code: status.code(),
+        stderr,
+    })
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<(), NetError> {
@@ -159,7 +187,10 @@ fn exec_capture(cmd: &str, args: &[&str]) -> Result<String, NetError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| NetError::Spawn { cmd: cmd.into(), err: e.to_string() })?;
+        .map_err(|e| NetError::Spawn {
+            cmd: cmd.into(),
+            err: e.to_string(),
+        })?;
 
     // Drain BOTH pipes concurrently so neither can block the child until timeout.
     let stdout_h = spawn_drain(child.stdout.take());
@@ -171,7 +202,11 @@ fn exec_capture(cmd: &str, args: &[&str]) -> Result<String, NetError> {
     if status.success() {
         return Ok(out);
     }
-    Err(NetError::NonZero { cmd: cmd.into(), code: status.code(), stderr })
+    Err(NetError::NonZero {
+        cmd: cmd.into(),
+        code: status.code(),
+        stderr,
+    })
 }
 
 /// Resolve the peer endpoint to a single pinned IP, BEFORE egress is sealed. DNS
@@ -200,7 +235,15 @@ pub fn physical_egress_dev(endpoint_ip: IpAddr) -> Result<String, NetError> {
     while let Some(tok) = it.next() {
         if tok == "dev" {
             if let Some(dev) = it.next() {
-                if dev.len() <= 15 && dev.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_' || b == b'@') {
+                if dev.len() <= 15
+                    && dev.bytes().all(|b| {
+                        b.is_ascii_alphanumeric()
+                            || b == b'.'
+                            || b == b'-'
+                            || b == b'_'
+                            || b == b'@'
+                    })
+                {
                     return Ok(dev.to_string());
                 }
             }
@@ -241,8 +284,15 @@ fn render_wg_conf(cfg: &WgConfig, endpoint_ip: IpAddr) -> Zeroizing<String> {
     let port = cfg.endpoint().port();
     t.push_str("Endpoint = ");
     match endpoint_ip {
-        IpAddr::V4(v4) => { t.push_str(&v4.to_string()); t.push(':'); }
-        IpAddr::V6(v6) => { t.push('['); t.push_str(&v6.to_string()); t.push_str("]:"); }
+        IpAddr::V4(v4) => {
+            t.push_str(&v4.to_string());
+            t.push(':');
+        }
+        IpAddr::V6(v6) => {
+            t.push('[');
+            t.push_str(&v6.to_string());
+            t.push_str("]:");
+        }
     }
     t.push_str(&port.to_string());
     t.push('\n');
@@ -264,10 +314,16 @@ pub fn wg_up(cfg: &WgConfig, endpoint_ip: IpAddr) -> Result<(), NetError> {
 
     for c in cfg.address() {
         let family = if c.addr.is_ipv4() { "-4" } else { "-6" };
-        run("ip", &[family, "address", "add", &fmt_cidr(c), "dev", IFACE])?;
+        run(
+            "ip",
+            &[family, "address", "add", &fmt_cidr(c), "dev", IFACE],
+        )?;
     }
     if let Some(mtu) = cfg.mtu() {
-        run("ip", &["link", "set", "mtu", &mtu.to_string(), "dev", IFACE])?;
+        run(
+            "ip",
+            &["link", "set", "mtu", &mtu.to_string(), "dev", IFACE],
+        )?;
     }
     run("ip", &["link", "set", IFACE, "up"])?;
 
@@ -281,9 +337,41 @@ pub fn wg_up(cfg: &WgConfig, endpoint_ip: IpAddr) -> Result<(), NetError> {
 fn install_policy_routing(family: &str) -> Result<(), NetError> {
     // Both rules BEFORE the tunnel default (wg-quick ordering): the table stays
     // ineffective until the suppress-main rule exists.
-    run("ip", &[family, "rule", "add", "pref", RT_PREF_SUPPRESS, "table", "main", "suppress_prefixlength", "0"])?;
-    run("ip", &[family, "rule", "add", "pref", RT_PREF_MARK, "not", "fwmark", FWMARK, "table", RT_TABLE])?;
-    run("ip", &[family, "route", "add", "default", "dev", IFACE, "table", RT_TABLE])?;
+    run(
+        "ip",
+        &[
+            family,
+            "rule",
+            "add",
+            "pref",
+            RT_PREF_SUPPRESS,
+            "table",
+            "main",
+            "suppress_prefixlength",
+            "0",
+        ],
+    )?;
+    run(
+        "ip",
+        &[
+            family,
+            "rule",
+            "add",
+            "pref",
+            RT_PREF_MARK,
+            "not",
+            "fwmark",
+            FWMARK,
+            "table",
+            RT_TABLE,
+        ],
+    )?;
+    run(
+        "ip",
+        &[
+            family, "route", "add", "default", "dev", IFACE, "table", RT_TABLE,
+        ],
+    )?;
     Ok(())
 }
 
@@ -309,9 +397,42 @@ pub fn dns_up(cfg: &WgConfig) -> Result<(), NetError> {
 pub fn wg_down() -> Vec<NetError> {
     let mut errs = Vec::new();
     for family in ["-4", "-6"] {
-        collect(&mut errs, "ip", &[family, "rule", "del", "pref", RT_PREF_SUPPRESS, "table", "main", "suppress_prefixlength", "0"]);
-        collect(&mut errs, "ip", &[family, "rule", "del", "pref", RT_PREF_MARK, "not", "fwmark", FWMARK, "table", RT_TABLE]);
-        collect(&mut errs, "ip", &[family, "route", "flush", "table", RT_TABLE]);
+        collect(
+            &mut errs,
+            "ip",
+            &[
+                family,
+                "rule",
+                "del",
+                "pref",
+                RT_PREF_SUPPRESS,
+                "table",
+                "main",
+                "suppress_prefixlength",
+                "0",
+            ],
+        );
+        collect(
+            &mut errs,
+            "ip",
+            &[
+                family,
+                "rule",
+                "del",
+                "pref",
+                RT_PREF_MARK,
+                "not",
+                "fwmark",
+                FWMARK,
+                "table",
+                RT_TABLE,
+            ],
+        );
+        collect(
+            &mut errs,
+            "ip",
+            &[family, "route", "flush", "table", RT_TABLE],
+        );
     }
     collect(&mut errs, "resolvectl", &["revert", IFACE]);
     collect(&mut errs, "ip", &["link", "del", "dev", IFACE]);
@@ -353,4 +474,25 @@ pub fn handshake_age_secs() -> Option<u64> {
         .max()?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     Some(now.saturating_sub(newest))
+}
+
+/// Aggregate WireGuard peer transfer counters for the status UI.
+pub fn transfer_bytes() -> Option<(u64, u64)> {
+    let text = exec_capture("wg", &["show", IFACE, "transfer"]).ok()?;
+    Some(text.lines().fold((0_u64, 0_u64), |totals, line| {
+        let mut fields = line.split_whitespace();
+        let _public_key = fields.next();
+        let received = fields
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let sent = fields
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        (
+            totals.0.saturating_add(received),
+            totals.1.saturating_add(sent),
+        )
+    }))
 }

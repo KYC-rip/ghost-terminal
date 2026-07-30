@@ -1,5 +1,5 @@
-use tauri::{AppHandle, State};
 use crate::tor::TorState;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn get_tor_status(state: State<'_, TorState>) -> Result<serde_json::Value, String> {
@@ -13,7 +13,10 @@ pub async fn get_tor_status(state: State<'_, TorState>) -> Result<serde_json::Va
 /// is the meaningful, reliable datum for the circuit panel.
 #[tauri::command]
 pub async fn tor_circuit(state: State<'_, TorState>) -> Result<serde_json::Value, String> {
-    let client = state.get_client().await.ok_or_else(|| "Tor not connected".to_string())?;
+    let client = state
+        .get_client()
+        .await
+        .ok_or_else(|| "Tor not connected".to_string())?;
     let body = crate::tor::tor_get(&client, "https://ipinfo.io/json").await?;
     let info: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({

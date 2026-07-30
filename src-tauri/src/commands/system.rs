@@ -1,19 +1,19 @@
 //! Miscellaneous app/system commands: pick a skin background image, and check
 //! GitHub for app updates.
 
+use serde_json::{json, Value};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
-use serde_json::{json, Value};
 
 use base64::Engine;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::wallet::WalletState;
-use monero_address::MoneroAddress;
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use monero_address::MoneroAddress;
 
 /// Default DoH resolver for OpenAlias (RFC 8484 binary wire format). Mullvad —
 /// privacy-focused, no-logging, DNSSEC-validating. MUST speak HTTP/1.1: our Tor
@@ -23,7 +23,8 @@ use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 /// promoting this to a user setting later is a one-line change.
 const OPENALIAS_DOH_ENDPOINT: &str = "https://dns.mullvad.net/dns-query";
 
-const RELEASES_LATEST: &str = "https://api.github.com/repos/KYC-rip/ripley-terminal/releases/latest";
+const RELEASES_LATEST: &str =
+    "https://api.github.com/repos/KYC-rip/ripley-terminal/releases/latest";
 const RELEASES_LIST: &str = "https://api.github.com/repos/KYC-rip/ripley-terminal/releases";
 const MAX_BACKGROUND_BYTES: usize = 5 * 1024 * 1024;
 
@@ -67,36 +68,47 @@ pub async fn select_background_image(app: AppHandle) -> Result<Option<String>, S
 /// shows no update banner.
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle, include_prereleases: bool) -> Result<Value, String> {
-    let url = if include_prereleases { RELEASES_LIST } else { RELEASES_LATEST };
-
-    let fetched: Result<Vec<u8>, String> = match crate::wallet::scanner::read_routing_mode(&app).as_str() {
-        "tor" => match app.state::<crate::tor::TorState>().get_client().await {
-            Some(tor) => crate::tor::tor_get(&tor, url).await,
-            None => Err("Tor not available".into()),
-        },
-        "custom" => {
-            let proxy = crate::wallet::scanner::read_proxy_address(&app);
-            if proxy.trim().is_empty() {
-                Err("No proxy address set".into())
-            } else {
-                crate::tor::socks_get(&proxy, url).await
-            }
-        }
-        _ => {
-            // Clearnet via reqwest. GitHub requires a User-Agent.
-            async {
-                let resp = reqwest::Client::new()
-                    .get(url)
-                    .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
-                    .timeout(Duration::from_secs(10))
-                    .send()
-                    .await
-                    .map_err(|e| e.to_string())?;
-                resp.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
-            }
-            .await
-        }
+    let url = if include_prereleases {
+        RELEASES_LIST
+    } else {
+        RELEASES_LATEST
     };
+
+    let fetched: Result<Vec<u8>, String> =
+        match crate::wallet::scanner::read_routing_mode(&app).as_str() {
+            "tor" => match app.state::<crate::tor::TorState>().get_client().await {
+                Some(tor) => crate::tor::tor_get(&tor, url).await,
+                None => Err("Tor not available".into()),
+            },
+            "custom" => {
+                let proxy = crate::wallet::scanner::read_proxy_address(&app);
+                if proxy.trim().is_empty() {
+                    Err("No proxy address set".into())
+                } else {
+                    crate::tor::socks_get(&proxy, url).await
+                }
+            }
+            _ => {
+                // Clearnet via reqwest. GitHub requires a User-Agent.
+                async {
+                    let resp = reqwest::Client::new()
+                        .get(url)
+                        .header(
+                            "User-Agent",
+                            concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")),
+                        )
+                        .timeout(Duration::from_secs(10))
+                        .send()
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    resp.bytes()
+                        .await
+                        .map(|b| b.to_vec())
+                        .map_err(|e| e.to_string())
+                }
+                .await
+            }
+        };
 
     let bytes = match fetched {
         Ok(b) => b,
@@ -105,12 +117,19 @@ pub async fn check_for_updates(app: AppHandle, include_prereleases: bool) -> Res
     let parsed: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     // /releases returns an array (take the first); /releases/latest is an object.
     let release = if include_prereleases {
-        parsed.as_array().and_then(|a| a.first()).cloned().unwrap_or(Value::Null)
+        parsed
+            .as_array()
+            .and_then(|a| a.first())
+            .cloned()
+            .unwrap_or(Value::Null)
     } else {
         parsed
     };
 
-    let tag = release.get("tag_name").and_then(|t| t.as_str()).unwrap_or("");
+    let tag = release
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
     if tag.is_empty() {
         return Ok(json!({ "success": false, "error": "No release found" }));
     }
@@ -211,7 +230,10 @@ fn validate_agent_web_url(raw: &str) -> Result<tauri::Url, String> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err("web_read does not allow URL credentials".into());
     }
-    let host = url.host_str().ok_or("web_read URL has no host")?.to_ascii_lowercase();
+    let host = url
+        .host_str()
+        .ok_or("web_read URL has no host")?
+        .to_ascii_lowercase();
     if host == "localhost"
         || host.ends_with(".localhost")
         || host.ends_with(".local")
@@ -227,21 +249,31 @@ fn validate_agent_web_url(raw: &str) -> Result<tauri::Url, String> {
     } else if !host.contains('.') {
         return Err("web_read requires a public hostname".into());
     }
-    let port = url.port_or_known_default().ok_or("web_read URL has no valid port")?;
+    let port = url
+        .port_or_known_default()
+        .ok_or("web_read URL has no valid port")?;
     if port != 80 && port != 443 {
         return Err("web_read allows only standard web ports 80 and 443".into());
     }
     Ok(url)
 }
 
-async fn agent_web_client(url: &tauri::Url, proxy: Option<&str>) -> Result<reqwest::Client, String> {
+async fn agent_web_client(
+    url: &tauri::Url,
+    proxy: Option<&str>,
+) -> Result<reqwest::Client, String> {
     let host = url.host_str().ok_or("web_read URL has no host")?;
-    let port = url.port_or_known_default().ok_or("web_read URL has no valid port")?;
+    let port = url
+        .port_or_known_default()
+        .ok_or("web_read URL has no valid port")?;
     let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(12))
         .timeout(Duration::from_secs(20))
-        .user_agent(concat!("ripley-terminal-web-read/", env!("CARGO_PKG_VERSION")));
+        .user_agent(concat!(
+            "ripley-terminal-web-read/",
+            env!("CARGO_PKG_VERSION")
+        ));
     if let Some(proxy) = proxy {
         builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| e.to_string())?);
     } else if host.parse::<IpAddr>().is_err() {
@@ -249,8 +281,9 @@ async fn agent_web_client(url: &tauri::Url, proxy: Option<&str>) -> Result<reqwe
             .as_str()
             .parse::<hyper::Uri>()
             .map_err(|_| "web_read URL could not be matched against the system proxy")?;
-        let uses_system_proxy =
-            hyper_util::client::proxy::matcher::Matcher::from_system().intercept(&uri).is_some();
+        let uses_system_proxy = hyper_util::client::proxy::matcher::Matcher::from_system()
+            .intercept(&uri)
+            .is_some();
         if !uses_system_proxy {
             // For a direct connection, resolve once, reject any private answer,
             // then pin the public address so DNS rebinding cannot swap in
@@ -262,7 +295,10 @@ async fn agent_web_client(url: &tauri::Url, proxy: Option<&str>) -> Result<reqwe
             if addresses.is_empty() {
                 return Err("web_read DNS returned no addresses".into());
             }
-            if addresses.iter().any(|address| !is_public_web_ip(address.ip())) {
+            if addresses
+                .iter()
+                .any(|address| !is_public_web_ip(address.ip()))
+            {
                 return Err("web_read DNS resolved to a local or private-network address".into());
             }
             builder = builder.resolve(host, addresses[0]);
@@ -275,11 +311,18 @@ async fn agent_web_client(url: &tauri::Url, proxy: Option<&str>) -> Result<reqwe
     builder.build().map_err(|e| e.to_string())
 }
 
-async fn agent_web_read_reqwest(url: tauri::Url, proxy: Option<&str>) -> Result<AgentWebReadResponse, String> {
+async fn agent_web_read_reqwest(
+    url: tauri::Url,
+    proxy: Option<&str>,
+) -> Result<AgentWebReadResponse, String> {
     let mut current = url;
     for redirects in 0..=AGENT_WEB_READ_MAX_REDIRECTS {
         let client = agent_web_client(&current, proxy).await?;
-        let mut response = client.get(current.clone()).send().await.map_err(|e| e.to_string())?;
+        let mut response = client
+            .get(current.clone())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         if response.status().is_redirection() {
             if redirects == AGENT_WEB_READ_MAX_REDIRECTS {
                 return Err("web_read exceeded its redirect limit".into());
@@ -290,7 +333,10 @@ async fn agent_web_read_reqwest(url: tauri::Url, proxy: Option<&str>) -> Result<
                 .and_then(|value| value.to_str().ok())
                 .ok_or("web_read redirect omitted Location")?;
             current = validate_agent_web_url(
-                current.join(location).map_err(|_| "web_read returned an invalid redirect")?.as_str(),
+                current
+                    .join(location)
+                    .map_err(|_| "web_read returned an invalid redirect")?
+                    .as_str(),
             )?;
             continue;
         }
@@ -376,10 +422,16 @@ pub async fn proxied_get_bytes(
     // Route first-party hosts through their onion when not on clearnet (no exit node, no
     // IP leak): api.kyc.rip, and ros.rip for OTA updates.
     let target = if mode != "clearnet" {
-        url.replace("https://api.kyc.rip", &format!("http://{KYC_API_ONION}/api"))
-            // Trailing slash anchors the host so `ros.rip.evil.com` can't match; our OTA
-            // URLs are pinned to `https://ros.rip/ota/…` so they always carry a path.
-            .replace("https://ros.rip/", &format!("http://{}/", crate::updater::ota::OTA_ONION_HOST))
+        url.replace(
+            "https://api.kyc.rip",
+            &format!("http://{KYC_API_ONION}/api"),
+        )
+        // Trailing slash anchors the host so `ros.rip.evil.com` can't match; our OTA
+        // URLs are pinned to `https://ros.rip/ota/…` so they always carry a path.
+        .replace(
+            "https://ros.rip/",
+            &format!("http://{}/", crate::updater::ota::OTA_ONION_HOST),
+        )
     } else {
         url.to_string()
     };
@@ -387,7 +439,11 @@ pub async fn proxied_get_bytes(
     // A .onion is only reachable over Tor — force it through Tor regardless of the
     // configured mode, and REFUSE (never fall back to clearnet) if Tor isn't up, so
     // an onion target can never leak to the system resolver / a direct connection.
-    let route = if is_onion(&target) { "tor" } else { mode.as_str() };
+    let route = if is_onion(&target) {
+        "tor"
+    } else {
+        mode.as_str()
+    };
     // The cap is enforced DURING body collection on every route (Limited for Tor/SOCKS,
     // a chunk loop for clearnet), so an oversized/hostile response is aborted mid-stream
     // rather than fully buffered first.
@@ -415,7 +471,10 @@ pub async fn proxied_get_bytes(
             async {
                 let resp = reqwest::Client::new()
                     .get(&target)
-                    .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
+                    .header(
+                        "User-Agent",
+                        concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")),
+                    )
                     .timeout(timeout)
                     .send()
                     .await
@@ -471,7 +530,10 @@ async fn route_fetch(app: &AppHandle, req: &RosFetchReq) -> Result<(u16, Vec<u8>
     let body = req.body.clone().unwrap_or_default().into_bytes();
     let has_body = !body.is_empty();
     let target = if mode != "clearnet" {
-        req.url.replace("https://api.kyc.rip", &format!("http://{KYC_API_ONION}/api"))
+        req.url.replace(
+            "https://api.kyc.rip",
+            &format!("http://{KYC_API_ONION}/api"),
+        )
     } else {
         req.url.clone()
     };
@@ -479,22 +541,33 @@ async fn route_fetch(app: &AppHandle, req: &RosFetchReq) -> Result<(u16, Vec<u8>
     // A .onion is only reachable over Tor — force it through Tor regardless of the
     // routing mode (so first-party api.kyc.rip → onion, and any explicit .onion, stay
     // on Tor even in clearnet mode; general clearnet traffic still goes direct).
-    let route = if is_onion(&target) { "tor" } else { mode.as_str() };
+    let route = if is_onion(&target) {
+        "tor"
+    } else {
+        mode.as_str()
+    };
     let outcome: Result<(u16, Vec<u8>), String> = match route {
         "tor" => match app.state::<crate::tor::TorState>().get_client().await {
             Some(tor) => {
                 if method == "GET" && !has_body {
-                    crate::tor::tor_get(&tor, &target).await.map(|b| (200u16, b))
+                    crate::tor::tor_get(&tor, &target)
+                        .await
+                        .map(|b| (200u16, b))
                 } else {
                     let (https, host, port, path) = crate::tor::parse_url(&target)?;
                     if https {
                         // POST-over-Tor+TLS isn't in the arti transport yet; ROS's
                         // writes go to api.kyc.rip → onion (plain HTTP), so this only
                         // bites non-kyc.rip https POSTs.
-                        Err(format!("{method} to https over Tor not supported yet: {host}"))
+                        Err(format!(
+                            "{method} to https over Tor not supported yet: {host}"
+                        ))
                     } else {
-                        let m = hyper::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
-                        crate::tor::tor_http(&tor, m, &host, port, &path, body, None).await.map(|b| (200u16, b))
+                        let m = hyper::Method::from_bytes(method.as_bytes())
+                            .map_err(|e| e.to_string())?;
+                        crate::tor::tor_http(&tor, m, &host, port, &path, body, None)
+                            .await
+                            .map(|b| (200u16, b))
                     }
                 }
             }
@@ -507,12 +580,32 @@ async fn route_fetch(app: &AppHandle, req: &RosFetchReq) -> Result<(u16, Vec<u8>
             } else {
                 // reqwest's `socks` feature routes any method through the SOCKS5 proxy.
                 match reqwest::Proxy::all(&proxy) {
-                    Ok(px) => ros_reqwest(reqwest::Client::builder().proxy(px), &method, &target, &req.headers, &body, has_body).await,
+                    Ok(px) => {
+                        ros_reqwest(
+                            reqwest::Client::builder().proxy(px),
+                            &method,
+                            &target,
+                            &req.headers,
+                            &body,
+                            has_body,
+                        )
+                        .await
+                    }
                     Err(e) => Err(e.to_string()),
                 }
             }
         }
-        _ => ros_reqwest(reqwest::Client::builder(), &method, &target, &req.headers, &body, has_body).await,
+        _ => {
+            ros_reqwest(
+                reqwest::Client::builder(),
+                &method,
+                &target,
+                &req.headers,
+                &body,
+                has_body,
+            )
+            .await
+        }
     };
 
     outcome
@@ -525,7 +618,9 @@ async fn route_fetch(app: &AppHandle, req: &RosFetchReq) -> Result<(u16, Vec<u8>
 #[tauri::command]
 pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value, String> {
     match route_fetch(&app, &req).await {
-        Ok((status, bytes)) => Ok(json!({ "ok": status < 400, "status": status, "body": String::from_utf8_lossy(&bytes) })),
+        Ok((status, bytes)) => Ok(
+            json!({ "ok": status < 400, "status": status, "body": String::from_utf8_lossy(&bytes) }),
+        ),
         Err(e) => Ok(json!({ "ok": false, "status": 502, "body": e })),
     }
 }
@@ -535,7 +630,10 @@ pub async fn ros_native_fetch(app: AppHandle, req: RosFetchReq) -> Result<Value,
 /// Carries no status field by design (ipc::Response is bytes only): a non-2xx or transport failure
 /// is surfaced as an Err, which reaches JS as a rejected invoke.
 #[tauri::command]
-pub async fn ros_native_fetch_bytes(app: AppHandle, req: RosFetchReq) -> Result<tauri::ipc::Response, String> {
+pub async fn ros_native_fetch_bytes(
+    app: AppHandle,
+    req: RosFetchReq,
+) -> Result<tauri::ipc::Response, String> {
     let (status, bytes) = route_fetch(&app, &req).await?;
     if status >= 400 {
         return Err(format!("upstream {status}"));
@@ -552,11 +650,15 @@ async fn ros_reqwest(
     body: &[u8],
     has_body: bool,
 ) -> Result<(u16, Vec<u8>), String> {
-    let client = builder.timeout(Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
+    let client = builder
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
     let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
-    let mut rb = client
-        .request(m, url)
-        .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")));
+    let mut rb = client.request(m, url).header(
+        "User-Agent",
+        concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")),
+    );
     if let Some(hs) = headers {
         for (k, v) in hs {
             rb = rb.header(k, v);
@@ -598,13 +700,27 @@ pub async fn open_native_browser(
     // target is an onion outside Tor mode — see resolve_browser_proxy.
     let proxy_url = resolve_browser_proxy(&parsed, &mode, &proxy)?;
     // Surface what routing the browser actually got — so "not using Tor" is diagnosable.
-    let via = proxy_url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "direct".into());
-    crate::emit_log(&app, "BROWSER", "info",
-        &format!("open {} · mode={} · via {}", parsed.host_str().unwrap_or("?"), mode.as_deref().unwrap_or("?"), via));
+    let via = proxy_url
+        .as_ref()
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "direct".into());
+    crate::emit_log(
+        &app,
+        "BROWSER",
+        "info",
+        &format!(
+            "open {} · mode={} · via {}",
+            parsed.host_str().unwrap_or("?"),
+            mode.as_deref().unwrap_or("?"),
+            via
+        ),
+    );
 
     // Close any previous browser window so the fresh one takes the current proxy.
     for (label, win) in app.webview_windows() {
-        if label.starts_with("ros-browser") { let _ = win.destroy(); }
+        if label.starts_with("ros-browser") {
+            let _ = win.destroy();
+        }
     }
     let seq = BROWSER_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let label = format!("ros-browser-{seq}");
@@ -676,12 +792,18 @@ fn resolve_browser_proxy(
             if raw.is_empty() {
                 return Err("Custom routing is selected but no SOCKS proxy is configured.".into());
             }
-            let with_scheme = if raw.contains("://") { raw.clone() } else { format!("socks5://{raw}") };
+            let with_scheme = if raw.contains("://") {
+                raw.clone()
+            } else {
+                format!("socks5://{raw}")
+            };
             let parsed: tauri::Url = with_scheme
                 .parse()
                 .map_err(|_| format!("Invalid proxy address \"{raw}\" — expected host:port."))?;
             if parsed.host_str().is_none() || parsed.port().is_none() {
-                return Err(format!("Invalid proxy address \"{raw}\" — expected host:port (e.g. 127.0.0.1:9050)."));
+                return Err(format!(
+                    "Invalid proxy address \"{raw}\" — expected host:port (e.g. 127.0.0.1:9050)."
+                ));
             }
             Ok(Some(parsed))
         }
@@ -715,7 +837,10 @@ fn guard_browser_target(app: &AppHandle, url: &tauri::Url) -> Result<(), String>
     // webview under the current mode).
     if let Some(created) = EMBED_MODE.lock().ok().and_then(|g| g.clone()) {
         if created != mode {
-            return Err("Routing mode changed since this page was opened — reopen the browser to apply it.".into());
+            return Err(
+                "Routing mode changed since this page was opened — reopen the browser to apply it."
+                    .into(),
+            );
         }
     }
     Ok(())
@@ -725,7 +850,11 @@ fn guard_browser_target(app: &AppHandle, url: &tauri::Url) -> Result<(), String>
 /// so the embed matches the theme instead of flashing white before the page paints.
 fn parse_rgb(s: &str) -> Option<tauri::webview::Color> {
     let p: Vec<u8> = s.split(',').filter_map(|v| v.trim().parse().ok()).collect();
-    if p.len() >= 3 { Some(tauri::webview::Color(p[0], p[1], p[2], 255)) } else { None }
+    if p.len() >= 3 {
+        Some(tauri::webview::Color(p[0], p[1], p[2], 255))
+    } else {
+        None
+    }
 }
 
 /// Pin the embed's zoom to `z` (the OS text-scale factor from ROS; 1.0 = 100%).
@@ -744,8 +873,12 @@ fn embed_pin_zoom(app: &AppHandle, wv: &tauri::Webview, z: f64) {
         // Touch the view ONLY when a value is actually off-target: re-setting zoom on an
         // already-correct, live page is a needless repaint (and the blank-page suspect).
         if (mag - 1.0).abs() > 0.001 || (pz - z).abs() > 0.001 {
-            crate::emit_log(&app2, "BROWSER", "info", &format!(
-                "embed zoom pin: magnification {mag:.2}→1.00 · pageZoom {pz:.2}→{z:.2}"));
+            crate::emit_log(
+                &app2,
+                "BROWSER",
+                "info",
+                &format!("embed zoom pin: magnification {mag:.2}→1.00 · pageZoom {pz:.2}→{z:.2}"),
+            );
             unsafe {
                 view.setMagnification(1.0);
                 view.setPageZoom(z);
@@ -775,11 +908,25 @@ pub async fn browser_embed_open(
     // Refuse (rather than embed a direct/leaky webview) when Tor isn't ready or the
     // target is an onion outside Tor mode — see resolve_browser_proxy.
     let proxy_url = resolve_browser_proxy(&parsed, &mode, &proxy)?;
-    let via = proxy_url.as_ref().map(|u| u.to_string()).unwrap_or_else(|| "direct".into());
-    crate::emit_log(&app, "BROWSER", "info",
-        &format!("embed {} · mode={} · via {}", parsed.host_str().unwrap_or("?"), mode.as_deref().unwrap_or("?"), via));
+    let via = proxy_url
+        .as_ref()
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "direct".into());
+    crate::emit_log(
+        &app,
+        "BROWSER",
+        "info",
+        &format!(
+            "embed {} · mode={} · via {}",
+            parsed.host_str().unwrap_or("?"),
+            mode.as_deref().unwrap_or("?"),
+            via
+        ),
+    );
     // The proxy is fixed at creation → recreate on open (mode may have changed).
-    if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
+    if let Some(wv) = app.get_webview(EMBED_LABEL) {
+        let _ = wv.close();
+    }
     // The primary window is "main" in classic/beta modes but "ros" in OTA mode (distinct
     // label for capability isolation — see lib.rs) — accept either.
     let win = app
@@ -800,43 +947,63 @@ pub async fn browser_embed_open(
     // OS text-scale (os.css zooms .ros; this separate webview can't inherit it) — ROS
     // passes the matching factor, default 100%.
     let z = zoom.unwrap_or(1.0);
-    let mut b = tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed.clone()))
-        // Suppress the webview's native right-click menu (Inspect / Reload / Back) on
-        // every browsed page, matching the rest of the app. Runs in the page at
-        // document-start on each navigation; capture-phase preventDefault wins even if
-        // a page adds its own contextmenu handler.
-        .initialization_script("document.addEventListener('contextmenu',function(e){e.preventDefault();},true);")
-        .on_navigation(move |url| {
-            // Wallet/payment URIs can't render as a web page — an in-page anchor like
-            // <a href="monero:8B…?tx_amount=1.5"> would just dead-end in the webview.
-            // Forward them to ROS (which routes monero: → the wallet Send flow) and
-            // CANCEL the navigation so the webview stays on the current page.
-            if matches!(url.scheme(), "monero" | "bitcoin" | "lightning" | "xmr402" | "ripley") {
-                crate::emit_log(&app_nav, "BROWSER_URI", "info", url.as_str());
-                return false;
-            }
-            true
-        })
-        .on_page_load(move |wv, payload| {
-            let phase = match payload.event() {
-                tauri::webview::PageLoadEvent::Started => "start",
-                _ => "end",
-            };
-            // Re-pin zoom once the page has finished loading: values set at creation are
-            // applied before the first navigation and can be reset when a page actually
-            // loads. Only on "end" — touching zoom mid-load can blank the webview.
-            if phase == "end" {
-                embed_pin_zoom(&app_ev, &wv, z);
-            }
-            // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
-            if let Ok(mut g) = EMBED_URL.lock() {
-                *g = Some(payload.url().to_string());
-            }
-            crate::emit_log(&app_ev, "BROWSER_LOAD", "info", &format!("{}|{}", phase, payload.url()));
-        });
-    if let Some(pu) = proxy_url { b = b.proxy_url(pu); }
-    if let Some(c) = bg.as_deref().and_then(parse_rgb) { b = b.background_color(c); }
-    let wv = win.add_child(b, tauri::LogicalPosition::new(x, y), tauri::LogicalSize::new(w, h))
+    let mut b =
+        tauri::WebviewBuilder::new(EMBED_LABEL, tauri::WebviewUrl::External(parsed.clone()))
+            // Suppress the webview's native right-click menu (Inspect / Reload / Back) on
+            // every browsed page, matching the rest of the app. Runs in the page at
+            // document-start on each navigation; capture-phase preventDefault wins even if
+            // a page adds its own contextmenu handler.
+            .initialization_script(
+                "document.addEventListener('contextmenu',function(e){e.preventDefault();},true);",
+            )
+            .on_navigation(move |url| {
+                // Wallet/payment URIs can't render as a web page — an in-page anchor like
+                // <a href="monero:8B…?tx_amount=1.5"> would just dead-end in the webview.
+                // Forward them to ROS (which routes monero: → the wallet Send flow) and
+                // CANCEL the navigation so the webview stays on the current page.
+                if matches!(
+                    url.scheme(),
+                    "monero" | "bitcoin" | "lightning" | "xmr402" | "ripley"
+                ) {
+                    crate::emit_log(&app_nav, "BROWSER_URI", "info", url.as_str());
+                    return false;
+                }
+                true
+            })
+            .on_page_load(move |wv, payload| {
+                let phase = match payload.event() {
+                    tauri::webview::PageLoadEvent::Started => "start",
+                    _ => "end",
+                };
+                // Re-pin zoom once the page has finished loading: values set at creation are
+                // applied before the first navigation and can be reset when a page actually
+                // loads. Only on "end" — touching zoom mid-load can blank the webview.
+                if phase == "end" {
+                    embed_pin_zoom(&app_ev, &wv, z);
+                }
+                // "phase|url" — the url lets ROS sync its address bar to in-webview navigation.
+                if let Ok(mut g) = EMBED_URL.lock() {
+                    *g = Some(payload.url().to_string());
+                }
+                crate::emit_log(
+                    &app_ev,
+                    "BROWSER_LOAD",
+                    "info",
+                    &format!("{}|{}", phase, payload.url()),
+                );
+            });
+    if let Some(pu) = proxy_url {
+        b = b.proxy_url(pu);
+    }
+    if let Some(c) = bg.as_deref().and_then(parse_rgb) {
+        b = b.background_color(c);
+    }
+    let wv = win
+        .add_child(
+            b,
+            tauri::LogicalPosition::new(x, y),
+            tauri::LogicalSize::new(w, h),
+        )
         .map_err(|e| e.to_string())?;
     // Zoom is deliberately NOT applied here: poking pageZoom before the first
     // navigation commits can break WKWebView's first paint (blank page). The
@@ -844,17 +1011,25 @@ pub async fn browser_embed_open(
     let _ = &wv;
     // Record the mode this embed was created under so a later navigate can refuse if
     // routing has since changed (its proxy is frozen at creation — see guard_browser_target).
-    let created_mode = mode.clone().unwrap_or_else(|| crate::wallet::scanner::read_routing_mode(&app));
-    if let Ok(mut g) = EMBED_MODE.lock() { *g = Some(created_mode); }
-    if let Ok(mut g) = EMBED_URL.lock() { *g = Some(parsed.to_string()); }
+    let created_mode = mode
+        .clone()
+        .unwrap_or_else(|| crate::wallet::scanner::read_routing_mode(&app));
+    if let Ok(mut g) = EMBED_MODE.lock() {
+        *g = Some(created_mode);
+    }
+    if let Ok(mut g) = EMBED_URL.lock() {
+        *g = Some(parsed.to_string());
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub fn browser_embed_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     if let Some(wv) = app.get_webview(EMBED_LABEL) {
-        wv.set_position(tauri::LogicalPosition::new(x, y)).map_err(|e| e.to_string())?;
-        wv.set_size(tauri::LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
+        wv.set_position(tauri::LogicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        wv.set_size(tauri::LogicalSize::new(w, h))
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -867,7 +1042,12 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
     guard_browser_target(&app, &parsed)?;
     match app.get_webview(EMBED_LABEL) {
         Some(wv) => {
-            crate::emit_log(&app, "BROWSER", "info", &format!("embed navigate {}", parsed.host_str().unwrap_or("?")));
+            crate::emit_log(
+                &app,
+                "BROWSER",
+                "info",
+                &format!("embed navigate {}", parsed.host_str().unwrap_or("?")),
+            );
             // A navigation that only changes the QUERY of the current document (same
             // scheme+host+path) is treated as a no-op by WKWebView — so an xmr402 callback
             // like `.../?xmr402_txid=…&xmr402_proof=…` landing back on the challenge page
@@ -896,9 +1076,16 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
             } else {
                 wv.navigate(parsed.clone()).map_err(|e| e.to_string())?;
             }
-            if let Ok(mut g) = EMBED_URL.lock() { *g = Some(parsed.to_string()); }
+            if let Ok(mut g) = EMBED_URL.lock() {
+                *g = Some(parsed.to_string());
+            }
         }
-        None => crate::emit_log(&app, "BROWSER", "warn", "embed navigate: no ros-embed webview"),
+        None => crate::emit_log(
+            &app,
+            "BROWSER",
+            "warn",
+            "embed navigate: no ros-embed webview",
+        ),
     }
     Ok(())
 }
@@ -906,24 +1093,35 @@ pub fn browser_embed_navigate(app: AppHandle, url: String) -> Result<(), String>
 #[tauri::command]
 pub fn browser_embed_zoom(app: AppHandle, zoom: f64) -> Result<(), String> {
     // Live-track the OS text-scale on an already-open embed (no-op if none is open).
-    if let Some(wv) = app.get_webview(EMBED_LABEL) { embed_pin_zoom(&app, &wv, zoom); }
+    if let Some(wv) = app.get_webview(EMBED_LABEL) {
+        embed_pin_zoom(&app, &wv, zoom);
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub fn browser_embed_visible(app: AppHandle, visible: bool) -> Result<(), String> {
     if let Some(wv) = app.get_webview(EMBED_LABEL) {
-        if visible { wv.show().map_err(|e| e.to_string())?; }
-        else { wv.hide().map_err(|e| e.to_string())?; }
+        if visible {
+            wv.show().map_err(|e| e.to_string())?;
+        } else {
+            wv.hide().map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
 
 #[tauri::command]
 pub fn browser_embed_close(app: AppHandle) -> Result<(), String> {
-    if let Some(wv) = app.get_webview(EMBED_LABEL) { let _ = wv.close(); }
-    if let Ok(mut g) = EMBED_MODE.lock() { *g = None; }
-    if let Ok(mut g) = EMBED_URL.lock() { *g = None; }
+    if let Some(wv) = app.get_webview(EMBED_LABEL) {
+        let _ = wv.close();
+    }
+    if let Ok(mut g) = EMBED_MODE.lock() {
+        *g = None;
+    }
+    if let Ok(mut g) = EMBED_URL.lock() {
+        *g = None;
+    }
     Ok(())
 }
 
@@ -936,7 +1134,11 @@ pub fn browser_embed_close(app: AppHandle) -> Result<(), String> {
 /// (send PAYMENT_PROOF over the open socket, or re-fetch the HTTP resource). txid/proof
 /// are JSON-encoded so they can't break out of the JS object literal.
 #[tauri::command]
-pub fn browser_embed_deliver_xmr402(app: AppHandle, txid: String, proof: String) -> Result<(), String> {
+pub fn browser_embed_deliver_xmr402(
+    app: AppHandle,
+    txid: String,
+    proof: String,
+) -> Result<(), String> {
     match app.get_webview(EMBED_LABEL) {
         Some(wv) => {
             let detail = serde_json::json!({ "txid": txid, "proof": proof });
@@ -945,7 +1147,12 @@ pub fn browser_embed_deliver_xmr402(app: AppHandle, txid: String, proof: String)
                 serde_json::to_string(&detail).map_err(|e| e.to_string())?
             );
             wv.eval(&js).map_err(|e| e.to_string())?;
-            crate::emit_log(&app, "BROWSER", "info", "xmr402 proof delivered in-page to embed");
+            crate::emit_log(
+                &app,
+                "BROWSER",
+                "info",
+                "xmr402 proof delivered in-page to embed",
+            );
             Ok(())
         }
         None => Err("no embed webview".to_string()),
@@ -1035,17 +1242,24 @@ mod tests {
         let url: tauri::Url = "https://example.com/".parse().unwrap();
         assert!(resolve_browser_proxy(&url, &Some("torOverVpn".into()), &None).is_err());
         assert!(resolve_browser_proxy(&url, &Some("custom".into()), &Some(" ".into())).is_err());
-        assert_eq!(resolve_browser_proxy(&url, &Some("clearnet".into()), &None).unwrap(), None);
+        assert_eq!(
+            resolve_browser_proxy(&url, &Some("clearnet".into()), &None).unwrap(),
+            None
+        );
     }
 
     #[test]
     fn onion_targets_are_refused_outside_tor_for_every_non_tor_mode() {
         let onion: tauri::Url = "http://exampleexample.onion/".parse().unwrap();
-        for mode in [None, Some("clearnet".into()), Some("custom".into()), Some("future".into())] {
+        for mode in [
+            None,
+            Some("clearnet".into()),
+            Some("custom".into()),
+            Some("future".into()),
+        ] {
             assert!(resolve_browser_proxy(&onion, &mode, &Some("127.0.0.1:9050".into())).is_err());
         }
     }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1088,7 +1302,7 @@ fn normalize_openalias_name(name: &str) -> Result<String, String> {
         return Err("invalid OpenAlias name".into());
     }
     if let Some(at) = s.find('@') {
-        s.replace_range(at ..= at, ".");
+        s.replace_range(at..=at, ".");
     }
     let s = s.trim_end_matches('.').to_string();
     // Require ≥2 non-empty labels — rejects bare handles (`alice`, `@alice`) and
@@ -1119,7 +1333,7 @@ fn oa1_field(record: &str, key: &str) -> Option<String> {
     let rest = record.trim_start().strip_prefix("oa1:")?;
     // Skip the ticker token; fields begin at the first whitespace.
     let after_ticker = match rest.find(char::is_whitespace) {
-        Some(i) => &rest[i ..],
+        Some(i) => &rest[i..],
         None => return None,
     };
     let needle = format!("{key}=");
@@ -1136,12 +1350,18 @@ fn oa1_field(record: &str, key: &str) -> Option<String> {
 /// match, or when multiple records advertise DIFFERENT recipient_address values
 /// (ambiguous → could silently misroute); identical duplicates are accepted.
 fn select_oa1_record(txts: &[String], ticker: &str) -> Result<String, String> {
-    let matches: Vec<&String> = txts.iter().filter(|t| oa1_ticker_matches(t, ticker)).collect();
+    let matches: Vec<&String> = txts
+        .iter()
+        .filter(|t| oa1_ticker_matches(t, ticker))
+        .collect();
     if matches.is_empty() {
         return Err(format!("no OpenAlias oa1:{ticker} record found"));
     }
     let first_addr = oa1_field(matches[0], "recipient_address");
-    if matches.iter().any(|t| oa1_field(t, "recipient_address") != first_addr) {
+    if matches
+        .iter()
+        .any(|t| oa1_field(t, "recipient_address") != first_addr)
+    {
         return Err("ambiguous OpenAlias: multiple records with different addresses".into());
     }
     Ok(matches[0].clone())
@@ -1159,7 +1379,13 @@ fn parse_oa1_record(record: &str) -> Result<(String, Option<String>, Option<Stri
 
 /// Apply the fail-closed gate to a DoH response and select the oa1 record.
 /// Split out from the network path so every rejection branch is unit-testable.
-fn evaluate_response(noerror: bool, authentic: bool, truncated: bool, txts: &[String], ticker: &str) -> Result<String, String> {
+fn evaluate_response(
+    noerror: bool,
+    authentic: bool,
+    truncated: bool,
+    txts: &[String],
+    ticker: &str,
+) -> Result<String, String> {
     if truncated {
         // OpenAlias records fit well under 512 bytes; a TC=1 is anomalous. Reject
         // rather than silently retry over TCP/POST (deliberate v1 non-retry).
@@ -1189,7 +1415,9 @@ fn build_doh_query(fqdn: &str) -> Result<String, String> {
     edns.set_dnssec_ok(true);
     edns.set_max_payload(1232);
     msg.set_edns(edns);
-    let wire = msg.to_bytes().map_err(|e| format!("DNS encode failed: {e}"))?;
+    let wire = msg
+        .to_bytes()
+        .map_err(|e| format!("DNS encode failed: {e}"))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(wire))
 }
 
@@ -1213,7 +1441,11 @@ fn extract_txt_records(msg: &Message) -> Vec<String> {
 /// Resolve an OpenAlias name to a crypto address for `ticker`. Routed over the
 /// configured transport; DNSSEC-gated; XMR addresses re-validated natively.
 #[tauri::command]
-pub async fn resolve_openalias(app: AppHandle, name: String, ticker: String) -> Result<OpenAliasResult, String> {
+pub async fn resolve_openalias(
+    app: AppHandle,
+    name: String,
+    ticker: String,
+) -> Result<OpenAliasResult, String> {
     let ticker = ticker.trim().to_lowercase();
     if ticker.is_empty() {
         return Err("ticker is required".into());
@@ -1224,11 +1456,18 @@ pub async fn resolve_openalias(app: AppHandle, name: String, ticker: String) -> 
     let headers: &[(&str, &str)] = &[("Accept", "application/dns-message")];
 
     let mode = crate::wallet::scanner::read_routing_mode(&app);
-    crate::emit_log(&app, "OPENALIAS", "process", &format!("resolving \"{fqdn}\" ({ticker}) via {mode} → {OPENALIAS_DOH_ENDPOINT}"));
+    crate::emit_log(
+        &app,
+        "OPENALIAS",
+        "process",
+        &format!("resolving \"{fqdn}\" ({ticker}) via {mode} → {OPENALIAS_DOH_ENDPOINT}"),
+    );
     let bytes: Vec<u8> = match mode.as_str() {
         "tor" => match app.state::<crate::tor::TorState>().get_client().await {
             Some(tor) => crate::tor::tor_get_with_headers(&tor, &url, headers).await?,
-            None => return Err("Tor is not connected yet (required for OpenAlias resolution)".into()),
+            None => {
+                return Err("Tor is not connected yet (required for OpenAlias resolution)".into())
+            }
         },
         "custom" => {
             let proxy = crate::wallet::scanner::read_proxy_address(&app);
@@ -1241,7 +1480,10 @@ pub async fn resolve_openalias(app: AppHandle, name: String, ticker: String) -> 
             let resp = reqwest::Client::new()
                 .get(&url)
                 .header("Accept", "application/dns-message")
-                .header("User-Agent", concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")))
+                .header(
+                    "User-Agent",
+                    concat!("ripley-terminal/", env!("CARGO_PKG_VERSION")),
+                )
                 .timeout(Duration::from_secs(15))
                 .send()
                 .await
@@ -1250,12 +1492,39 @@ pub async fn resolve_openalias(app: AppHandle, name: String, ticker: String) -> 
         }
     };
 
-    crate::emit_log(&app, "OPENALIAS", "info", &format!("DoH response: {} bytes", bytes.len()));
-    let msg = Message::from_vec(&bytes).map_err(|e| format!("failed to parse DNS response ({} bytes — is the resolver HTTP/1.1-capable?): {e}", bytes.len()))?;
+    crate::emit_log(
+        &app,
+        "OPENALIAS",
+        "info",
+        &format!("DoH response: {} bytes", bytes.len()),
+    );
+    let msg = Message::from_vec(&bytes).map_err(|e| {
+        format!(
+            "failed to parse DNS response ({} bytes — is the resolver HTTP/1.1-capable?): {e}",
+            bytes.len()
+        )
+    })?;
     let noerror = msg.response_code() == ResponseCode::NoError;
     let txts = extract_txt_records(&msg);
-    crate::emit_log(&app, "OPENALIAS", "info", &format!("rcode={:?} AD={} TC={} txt_records={}", msg.response_code(), msg.authentic_data(), msg.truncated(), txts.len()));
-    let record = evaluate_response(noerror, msg.authentic_data(), msg.truncated(), &txts, &ticker)?;
+    crate::emit_log(
+        &app,
+        "OPENALIAS",
+        "info",
+        &format!(
+            "rcode={:?} AD={} TC={} txt_records={}",
+            msg.response_code(),
+            msg.authentic_data(),
+            msg.truncated(),
+            txts.len()
+        ),
+    );
+    let record = evaluate_response(
+        noerror,
+        msg.authentic_data(),
+        msg.truncated(),
+        &txts,
+        &ticker,
+    )?;
     let (address, recipient_name, tx_description) = parse_oa1_record(&record)?;
 
     // For Monero, re-validate the resolved address against the active network so a
@@ -1267,7 +1536,13 @@ pub async fn resolve_openalias(app: AppHandle, name: String, ticker: String) -> 
     }
 
     crate::emit_log(&app, "OPENALIAS", "success", &format!("{fqdn} → {address}"));
-    Ok(OpenAliasResult { address, recipient_name, tx_description, dnssec: true, ticker })
+    Ok(OpenAliasResult {
+        address,
+        recipient_name,
+        tx_description,
+        dnssec: true,
+        ticker,
+    })
 }
 
 #[cfg(test)]
@@ -1276,11 +1551,17 @@ mod openalias_tests {
 
     #[test]
     fn normalize_email_form() {
-        assert_eq!(normalize_openalias_name("Donate@GetMonero.org").unwrap(), "donate.getmonero.org");
+        assert_eq!(
+            normalize_openalias_name("Donate@GetMonero.org").unwrap(),
+            "donate.getmonero.org"
+        );
     }
     #[test]
     fn normalize_strips_trailing_dot() {
-        assert_eq!(normalize_openalias_name("donate.getmonero.org.").unwrap(), "donate.getmonero.org");
+        assert_eq!(
+            normalize_openalias_name("donate.getmonero.org.").unwrap(),
+            "donate.getmonero.org"
+        );
     }
     #[test]
     fn normalize_rejects_bare_handle() {
@@ -1322,7 +1603,10 @@ mod openalias_tests {
             "oa1:xmr recipient_address=AAA;".to_string(),
             "oa1:xmr recipient_address=AAA;".to_string(),
         ];
-        assert_eq!(select_oa1_record(&txts, "xmr").unwrap(), "oa1:xmr recipient_address=AAA;");
+        assert_eq!(
+            select_oa1_record(&txts, "xmr").unwrap(),
+            "oa1:xmr recipient_address=AAA;"
+        );
     }
     #[test]
     fn select_ignores_non_oa1_txt() {
@@ -1361,7 +1645,10 @@ mod openalias_tests {
     #[test]
     fn evaluate_accepts_valid() {
         let txts = vec!["oa1:xmr recipient_address=AAA;recipient_name=Foo;".to_string()];
-        assert_eq!(evaluate_response(true, true, false, &txts, "xmr").unwrap(), txts[0]);
+        assert_eq!(
+            evaluate_response(true, true, false, &txts, "xmr").unwrap(),
+            txts[0]
+        );
     }
 }
 
@@ -1460,28 +1747,30 @@ pub async fn capture_window_png(
         }
 
         let tx2 = tx.clone();
-        let handler = RcBlock::new(move |image: *mut NSImage, _err: *mut objc2_foundation::NSError| {
-            let out = (|| -> Result<Vec<u8>, String> {
-                if image.is_null() {
-                    return Err("the webview returned no snapshot".into());
-                }
-                // SAFETY: non-null image owned by the callback for its duration.
-                let image: &NSImage = unsafe { &*image };
-                let tiff = unsafe { image.TIFFRepresentation() }
-                    .ok_or_else(|| "snapshot had no bitmap representation".to_string())?;
-                let rep = unsafe { NSBitmapImageRep::imageRepWithData(&tiff) }
-                    .ok_or_else(|| "snapshot could not be read as a bitmap".to_string())?;
-                let png = unsafe {
-                    rep.representationUsingType_properties(
-                        NSBitmapImageFileType::PNG,
-                        &NSDictionary::new(),
-                    )
-                }
-                .ok_or_else(|| "snapshot could not be encoded as PNG".to_string())?;
-                Ok(png.to_vec())
-            })();
-            let _ = tx2.send(out);
-        });
+        let handler = RcBlock::new(
+            move |image: *mut NSImage, _err: *mut objc2_foundation::NSError| {
+                let out = (|| -> Result<Vec<u8>, String> {
+                    if image.is_null() {
+                        return Err("the webview returned no snapshot".into());
+                    }
+                    // SAFETY: non-null image owned by the callback for its duration.
+                    let image: &NSImage = unsafe { &*image };
+                    let tiff = unsafe { image.TIFFRepresentation() }
+                        .ok_or_else(|| "snapshot had no bitmap representation".to_string())?;
+                    let rep = unsafe { NSBitmapImageRep::imageRepWithData(&tiff) }
+                        .ok_or_else(|| "snapshot could not be read as a bitmap".to_string())?;
+                    let png = unsafe {
+                        rep.representationUsingType_properties(
+                            NSBitmapImageFileType::PNG,
+                            &NSDictionary::new(),
+                        )
+                    }
+                    .ok_or_else(|| "snapshot could not be encoded as PNG".to_string())?;
+                    Ok(png.to_vec())
+                })();
+                let _ = tx2.send(out);
+            },
+        );
 
         unsafe {
             view.takeSnapshotWithConfiguration_completionHandler(Some(&cfg), &handler);

@@ -95,14 +95,18 @@ pub fn parse_xmr(s: &str) -> Result<u64, String> {
     let whole: u64 = if whole_str.is_empty() {
         0
     } else {
-        whole_str.parse().map_err(|_| "amount too large".to_string())?
+        whole_str
+            .parse()
+            .map_err(|_| "amount too large".to_string())?
     };
     // Right-pad the fraction to a full 12 digits so "0.5" → 500_000_000_000.
     let mut frac_padded = frac_str.to_string();
     while frac_padded.len() < 12 {
         frac_padded.push('0');
     }
-    let frac: u64 = frac_padded.parse().map_err(|_| "malformed amount".to_string())?;
+    let frac: u64 = frac_padded
+        .parse()
+        .map_err(|_| "malformed amount".to_string())?;
     let whole_atomic = whole
         .checked_mul(PICONERO_PER_XMR)
         .ok_or_else(|| "amount too large".to_string())?;
@@ -127,8 +131,9 @@ impl GrantLedger {
     /// (the feature simply starts with no grants) rather than failing startup.
     pub fn load(path: PathBuf) -> GrantLedger {
         let grants = match std::fs::read_to_string(&path) {
-            Ok(data) => serde_json::from_str::<HashMap<String, TransferGrant>>(&data)
-                .unwrap_or_default(),
+            Ok(data) => {
+                serde_json::from_str::<HashMap<String, TransferGrant>>(&data).unwrap_or_default()
+            }
             Err(_) => HashMap::new(),
         };
         GrantLedger { grants, path }
@@ -301,7 +306,10 @@ impl GrantLedger {
             Ok,
         }
         let outcome = {
-            let g = self.grants.get(id).ok_or_else(|| "unknown grant".to_string())?;
+            let g = self
+                .grants
+                .get(id)
+                .ok_or_else(|| "unknown grant".to_string())?;
             if !g.armed {
                 return Err("grant is not armed".to_string());
             }
@@ -310,7 +318,9 @@ impl GrantLedger {
             if active_identity != Some(g.identity_id.as_str()) {
                 return Err("resident spend key does not belong to this grant's wallet".to_string());
             }
-            let deadline = g.expires_at_ms.min(g.armed_at_ms.saturating_add(g.max_armed_ms));
+            let deadline = g
+                .expires_at_ms
+                .min(g.armed_at_ms.saturating_add(g.max_armed_ms));
             if now_ms >= deadline {
                 Outcome::Expired
             } else if g.fills >= g.max_fills {
@@ -366,7 +376,9 @@ impl GrantLedger {
         if let Some(g) = self.grants.get_mut(id) {
             g.spent_atomic = g.spent_atomic.saturating_add(amount_atomic);
             g.reserved_atomic = g.reserved_atomic.saturating_sub(amount_atomic);
-            let deadline = g.expires_at_ms.min(g.armed_at_ms.saturating_add(g.max_armed_ms));
+            let deadline = g
+                .expires_at_ms
+                .min(g.armed_at_ms.saturating_add(g.max_armed_ms));
             if g.spent_atomic.saturating_add(g.per_tx_atomic) > g.budget_atomic
                 || g.fills >= g.max_fills
                 || now_ms >= deadline
@@ -399,7 +411,9 @@ impl GrantLedger {
         self.clear_stale_reservation(id, now_ms);
         let mut changed = false;
         if let Some(g) = self.grants.get_mut(id) {
-            let deadline = g.expires_at_ms.min(g.armed_at_ms.saturating_add(g.max_armed_ms));
+            let deadline = g
+                .expires_at_ms
+                .min(g.armed_at_ms.saturating_add(g.max_armed_ms));
             if g.armed && now_ms >= deadline {
                 g.armed = false;
                 changed = true;
@@ -444,8 +458,17 @@ mod tests {
 
     /// Arm a standard grant: budget, per_tx, max_fills, expiring far in the future.
     fn arm_std(l: &mut GrantLedger, id: &str, budget: u64, per_tx: u64, max_fills: u32, now: i64) {
-        l.arm(id.into(), "alice".into(), 0, budget, per_tx, max_fills, now + 1_000_000, now)
-            .unwrap();
+        l.arm(
+            id.into(),
+            "alice".into(),
+            0,
+            budget,
+            per_tx,
+            max_fills,
+            now + 1_000_000,
+            now,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -509,8 +532,17 @@ mod tests {
     #[test]
     fn expiry_rejects_and_auto_disarms() {
         let mut l = temp_ledger();
-        l.arm("g".into(), "alice".into(), 0, 10 * XMR, 1 * XMR, 100, 1_000, 0)
-            .unwrap();
+        l.arm(
+            "g".into(),
+            "alice".into(),
+            0,
+            10 * XMR,
+            1 * XMR,
+            100,
+            1_000,
+            0,
+        )
+        .unwrap();
         // At/after expiry the reserve fails AND the grant is disarmed.
         assert!(l.reserve("g", 1 * XMR, Some("alice"), 2_000).is_err());
         assert!(!l.any_armed());
@@ -580,8 +612,17 @@ mod tests {
         l.reserve("g", 1 * XMR, Some("alice"), 1).unwrap();
         l.commit("g", 1 * XMR, 2);
         // Re-arm with a larger budget — spent/fills must survive.
-        l.arm("g".into(), "alice".into(), 0, 20 * XMR, 1 * XMR, 5, 1_000_000, 3)
-            .unwrap();
+        l.arm(
+            "g".into(),
+            "alice".into(),
+            0,
+            20 * XMR,
+            1 * XMR,
+            5,
+            1_000_000,
+            3,
+        )
+        .unwrap();
         let s = l.status("g", 4).unwrap();
         assert_eq!(s.spent_atomic, 1 * XMR);
         assert_eq!(s.fills, 1);
@@ -593,14 +634,41 @@ mod tests {
     fn total_armed_cap_across_two_grants() {
         let mut l = temp_ledger();
         // 40 XMR armed, then a 20 XMR arm would push the total to 60 > 50 cap.
-        l.arm("a".into(), "alice".into(), 0, 40 * XMR, 1 * XMR, 100, 1_000_000, 0)
-            .unwrap();
+        l.arm(
+            "a".into(),
+            "alice".into(),
+            0,
+            40 * XMR,
+            1 * XMR,
+            100,
+            1_000_000,
+            0,
+        )
+        .unwrap();
         assert!(l
-            .arm("b".into(), "alice".into(), 0, 20 * XMR, 1 * XMR, 100, 1_000_000, 0)
+            .arm(
+                "b".into(),
+                "alice".into(),
+                0,
+                20 * XMR,
+                1 * XMR,
+                100,
+                1_000_000,
+                0
+            )
             .is_err());
         // 10 XMR fits (40 + 10 = 50).
         assert!(l
-            .arm("b".into(), "alice".into(), 0, 10 * XMR, 1 * XMR, 100, 1_000_000, 0)
+            .arm(
+                "b".into(),
+                "alice".into(),
+                0,
+                10 * XMR,
+                1 * XMR,
+                100,
+                1_000_000,
+                0
+            )
             .is_ok());
     }
 
@@ -623,8 +691,17 @@ mod tests {
         // Ask for a 100-day expiry; it must clamp to now + MAX_ARMED_MS (7 days).
         let now = 0;
         let far = 100 * 24 * 3600 * 1000;
-        l.arm("g".into(), "alice".into(), 0, 10 * XMR, 1 * XMR, 100, far, now)
-            .unwrap();
+        l.arm(
+            "g".into(),
+            "alice".into(),
+            0,
+            10 * XMR,
+            1 * XMR,
+            100,
+            far,
+            now,
+        )
+        .unwrap();
         let s = l.status("g", 1).unwrap();
         assert_eq!(s.expires_at_ms, now + MAX_ARMED_MS);
     }
@@ -640,8 +717,17 @@ mod tests {
         let per_tx = 1 * XMR;
         let budget = 3 * per_tx;
         let mut base = temp_ledger();
-        base.arm("g".into(), "alice".into(), 0, budget, per_tx, 100, 1_000_000, 0)
-            .unwrap();
+        base.arm(
+            "g".into(),
+            "alice".into(),
+            0,
+            budget,
+            per_tx,
+            100,
+            1_000_000,
+            0,
+        )
+        .unwrap();
         let ledger = Arc::new(Mutex::new(base));
 
         let mut handles = Vec::new();
@@ -661,7 +747,10 @@ mod tests {
         assert_eq!(ok, 3, "exactly 3 reserves should fit the budget");
         let guard = ledger.lock().await;
         let s = guard.grants.get("g").unwrap();
-        assert!(s.reserved_atomic <= budget, "reserved must never exceed budget");
+        assert!(
+            s.reserved_atomic <= budget,
+            "reserved must never exceed budget"
+        );
         assert_eq!(s.reserved_atomic, budget);
     }
 }

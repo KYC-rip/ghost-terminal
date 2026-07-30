@@ -56,7 +56,10 @@ impl SyncPool {
     /// `from_height` is a floor; the loop resumes from the wallet's cache if it's
     /// further along. Also records the view pair for later re-pooling.
     pub async fn start(&self, app: &AppHandle, id: String, view_pair: ViewPair, from_height: u64) {
-        self.known.lock().await.insert(id.clone(), view_pair.clone());
+        self.known
+            .lock()
+            .await
+            .insert(id.clone(), view_pair.clone());
 
         let mut entries = self.entries.lock().await;
         if entries.contains_key(&id) {

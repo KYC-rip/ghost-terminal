@@ -180,7 +180,15 @@ pub fn verify_out_proof_v2_consistency(
 ) -> Result<bool, String> {
     let (d, c, sig_r) = decode_proof(proof)?;
     Ok(verify_consistency_parts(
-        txid, message, &d, &c, &sig_r, big_r, a, &ED25519_BASEPOINT_POINT, &[0u8; 32],
+        txid,
+        message,
+        &d,
+        &c,
+        &sig_r,
+        big_r,
+        a,
+        &ED25519_BASEPOINT_POINT,
+        &[0u8; 32],
     ))
 }
 
@@ -355,7 +363,10 @@ fn scan_output(
 /// were stripped (pruned), making the decode impossible.
 fn received_amount(d: &EdwardsPoint, spend_b: &EdwardsPoint, tx: &Transaction) -> (u64, bool) {
     let base = match tx {
-        Transaction::V2 { proofs: Some(proofs), .. } => Some(&proofs.base),
+        Transaction::V2 {
+            proofs: Some(proofs),
+            ..
+        } => Some(&proofs.base),
         // V1 (pre-RingCT) and prunable-stripped txs carry no amounts to decode here.
         _ => None,
     };
@@ -369,7 +380,9 @@ fn received_amount(d: &EdwardsPoint, spend_b: &EdwardsPoint, tx: &Transaction) -
     for (o, out) in tx.prefix().outputs.iter().enumerate() {
         let out_key = out.key.to_bytes();
         let enc = base.and_then(|b| b.encrypted_amounts.get(o));
-        let commitment = base.and_then(|b| b.commitments.get(o)).map(|c| c.to_bytes());
+        let commitment = base
+            .and_then(|b| b.commitments.get(o))
+            .map(|c| c.to_bytes());
         if out.amount.is_none() && (enc.is_none() || commitment.is_none()) {
             amount_unavailable = true;
         }
@@ -419,18 +432,30 @@ pub fn check_out_proof_v2(
     // point yields a broken derivation and `monero-wallet-cli` (via ge_frombytes)
     // rejects such proofs outright. This never triggers for an honest proof.
     if d == EdwardsPoint::identity() || !d.is_torsion_free() {
-        return Ok(ProofCheck { good: false, received: 0, amount_unavailable: false });
+        return Ok(ProofCheck {
+            good: false,
+            received: 0,
+            amount_unavailable: false,
+        });
     }
 
     if !verify_consistency_parts(txid, message, &d, &c, &sig_r, &big_r, &a, &base, &b_hash) {
-        return Ok(ProofCheck { good: false, received: 0, amount_unavailable: false });
+        return Ok(ProofCheck {
+            good: false,
+            received: 0,
+            amount_unavailable: false,
+        });
     }
 
     // Decode the amount paid to the recipient's spend key B using the verified D.
     let spend_b: EdwardsPoint = address.spend().into();
     let (received, amount_unavailable) = received_amount(&d, &spend_b, tx);
 
-    Ok(ProofCheck { good: true, received, amount_unavailable })
+    Ok(ProofCheck {
+        good: true,
+        received,
+        amount_unavailable,
+    })
 }
 
 /// Verify a transaction SECRET key against the on-chain tx and report the amount it paid
@@ -458,14 +483,22 @@ pub fn check_tx_key_v2(
     let (base, _b_hash, a) = proof_inputs(address);
     let big_r = tx_pubkey_from_extra(&tx.prefix().extra)?;
     if base * r != big_r {
-        return Ok(ProofCheck { good: false, received: 0, amount_unavailable: false });
+        return Ok(ProofCheck {
+            good: false,
+            received: 0,
+            amount_unavailable: false,
+        });
     }
 
     // Shared secret D = r·A — identical to a proof's D, so reuse the validated decode.
     let d = a * r;
     let spend_b: EdwardsPoint = address.spend().into();
     let (received, amount_unavailable) = received_amount(&d, &spend_b, tx);
-    Ok(ProofCheck { good: true, received, amount_unavailable })
+    Ok(ProofCheck {
+        good: true,
+        received,
+        amount_unavailable,
+    })
 }
 
 fn decompress(bytes: &[u8]) -> Result<EdwardsPoint, String> {
@@ -476,7 +509,8 @@ fn decompress(bytes: &[u8]) -> Result<EdwardsPoint, String> {
 
 fn scalar_from(bytes: &[u8]) -> Result<Scalar, String> {
     let arr: [u8; 32] = bytes.try_into().map_err(|_| "bad scalar length")?;
-    Option::from(Scalar::from_canonical_bytes(arr)).ok_or_else(|| "non-canonical scalar".to_string())
+    Option::from(Scalar::from_canonical_bytes(arr))
+        .ok_or_else(|| "non-canonical scalar".to_string())
 }
 
 #[cfg(test)]
@@ -492,7 +526,8 @@ mod tests {
         let spend_sk: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
         let view_pub = monero_oxide::ed25519::Point::from(g * view_sk);
         let spend_pub = monero_oxide::ed25519::Point::from(g * spend_sk);
-        let address = MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_pub, view_pub);
+        let address =
+            MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_pub, view_pub);
 
         // A "tx secret key" r and a fake txid.
         let r: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
@@ -505,8 +540,8 @@ mod tests {
         // Public inputs the verifier would derive: R = r·G, A = recipient view key.
         let big_r = g * r;
         let a: EdwardsPoint = address.view().into();
-        let ok = verify_out_proof_v2_consistency(txid, message, &proof, &big_r, &a)
-            .expect("verify");
+        let ok =
+            verify_out_proof_v2_consistency(txid, message, &proof, &big_r, &a).expect("verify");
         assert!(ok, "Schnorr identity did not hold for generated proof");
     }
 
@@ -520,7 +555,8 @@ mod tests {
         let spend_sk: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
         let view_pub = monero_oxide::ed25519::Point::from(g * view_sk);
         let spend_pub = monero_oxide::ed25519::Point::from(g * spend_sk);
-        let address = MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_pub, view_pub);
+        let address =
+            MoneroAddress::new(Network::Mainnet, AddressType::Legacy, spend_pub, view_pub);
 
         let r: Scalar = monero_oxide::ed25519::Scalar::random(&mut OsRng).into();
         let txid = [9u8; 32];
@@ -531,9 +567,19 @@ mod tests {
         // Baseline: the honest inputs pass.
         assert!(verify_out_proof_v2_consistency(txid, "m", &proof, &big_r, &a).unwrap());
         // Substituted tx pubkey R → reject.
-        assert!(!verify_out_proof_v2_consistency(txid, "m", &proof, &(g * (r + Scalar::ONE)), &a).unwrap());
+        assert!(
+            !verify_out_proof_v2_consistency(txid, "m", &proof, &(g * (r + Scalar::ONE)), &a)
+                .unwrap()
+        );
         // Wrong recipient view key A → reject.
-        assert!(!verify_out_proof_v2_consistency(txid, "m", &proof, &big_r, &(g * (view_sk + Scalar::ONE))).unwrap());
+        assert!(!verify_out_proof_v2_consistency(
+            txid,
+            "m",
+            &proof,
+            &big_r,
+            &(g * (view_sk + Scalar::ONE))
+        )
+        .unwrap());
         // Tampered message → reject.
         assert!(!verify_out_proof_v2_consistency(txid, "m2", &proof, &big_r, &a).unwrap());
         // Tampered txid → reject.
@@ -550,7 +596,10 @@ mod tests {
         // Minimal `extra`: tag 0x01 (tx public key) + the 32-byte compressed point.
         let mut extra = vec![0x01u8];
         extra.extend_from_slice(&big_r.compress().to_bytes());
-        assert_eq!(tx_pubkey_from_extra(&extra).unwrap().compress(), big_r.compress());
+        assert_eq!(
+            tx_pubkey_from_extra(&extra).unwrap().compress(),
+            big_r.compress()
+        );
         // No tx pubkey present → error, not a silent identity point.
         assert!(tx_pubkey_from_extra(&[]).is_err());
     }
@@ -602,21 +651,48 @@ mod tests {
 
         // Honest path: exact amount recovered.
         assert_eq!(
-            scan_output(&d, &b_compressed, o, &out_key, Some(view_tag), None, Some(&enc), Some(&commitment)),
+            scan_output(
+                &d,
+                &b_compressed,
+                o,
+                &out_key,
+                Some(view_tag),
+                None,
+                Some(&enc),
+                Some(&commitment)
+            ),
             Some(amount)
         );
 
         // Wrong recipient spend key B → not ours.
         let wrong_b = (g * (spend_sk + Scalar::ONE)).compress().to_bytes();
         assert_eq!(
-            scan_output(&d, &wrong_b, o, &out_key, Some(view_tag), None, Some(&enc), Some(&commitment)),
+            scan_output(
+                &d,
+                &wrong_b,
+                o,
+                &out_key,
+                Some(view_tag),
+                None,
+                Some(&enc),
+                Some(&commitment)
+            ),
             None
         );
 
         // Wrong shared secret D (different sender key) → ownership fails.
         let wrong_d = a * (r + Scalar::ONE);
         assert_eq!(
-            scan_output(&wrong_d, &b_compressed, o, &out_key, None, None, Some(&enc), Some(&commitment)),
+            scan_output(
+                &wrong_d,
+                &b_compressed,
+                o,
+                &out_key,
+                None,
+                None,
+                Some(&enc),
+                Some(&commitment)
+            ),
             None
         );
 
@@ -624,19 +700,46 @@ mod tests {
         let mut bad_commitment = commitment;
         bad_commitment[0] ^= 0x01;
         assert_eq!(
-            scan_output(&d, &b_compressed, o, &out_key, Some(view_tag), None, Some(&enc), Some(&bad_commitment)),
+            scan_output(
+                &d,
+                &b_compressed,
+                o,
+                &out_key,
+                Some(view_tag),
+                None,
+                Some(&enc),
+                Some(&bad_commitment)
+            ),
             None
         );
 
         // View-tag mismatch → early-out even before ownership.
         assert_eq!(
-            scan_output(&d, &b_compressed, o, &out_key, Some(view_tag ^ 0xff), None, Some(&enc), Some(&commitment)),
+            scan_output(
+                &d,
+                &b_compressed,
+                o,
+                &out_key,
+                Some(view_tag ^ 0xff),
+                None,
+                Some(&enc),
+                Some(&commitment)
+            ),
             None
         );
 
         // Right ownership but wrong output index → different derivation → rejected.
         assert_eq!(
-            scan_output(&d, &b_compressed, 1, &out_key, None, None, Some(&enc), Some(&commitment)),
+            scan_output(
+                &d,
+                &b_compressed,
+                1,
+                &out_key,
+                None,
+                None,
+                Some(&enc),
+                Some(&commitment)
+            ),
             None
         );
     }
@@ -680,14 +783,32 @@ mod tests {
             .to_bytes();
 
         assert_eq!(
-            scan_output(&d, &b_compressed, 0, &out_key, Some(view_tag), None, Some(&enc), Some(&commitment)),
+            scan_output(
+                &d,
+                &b_compressed,
+                0,
+                &out_key,
+                Some(view_tag),
+                None,
+                Some(&enc),
+                Some(&commitment)
+            ),
             Some(amount)
         );
         // Tampered commitment still rejects on the legacy path.
         let mut bad = commitment;
         bad[0] ^= 0x01;
         assert_eq!(
-            scan_output(&d, &b_compressed, 0, &out_key, Some(view_tag), None, Some(&enc), Some(&bad)),
+            scan_output(
+                &d,
+                &b_compressed,
+                0,
+                &out_key,
+                Some(view_tag),
+                None,
+                Some(&enc),
+                Some(&bad)
+            ),
             None
         );
     }
@@ -740,12 +861,23 @@ mod tests {
         // 1) Verdict: extract on-chain R, verify the Schnorr proof (empty message).
         let big_r = tx_pubkey_from_extra(&extra).expect("R from extra");
         let (d, c, sig_r) = decode_proof(PROOF).expect("decode proof");
-        assert!(d != EdwardsPoint::identity() && d.is_torsion_free(), "D must be a valid group element");
+        assert!(
+            d != EdwardsPoint::identity() && d.is_torsion_free(),
+            "D must be a valid group element"
+        );
         let addr = MoneroAddress::from_str(Network::Mainnet, ADDRESS).expect("address");
         let a: EdwardsPoint = addr.view().into();
         assert!(
             verify_consistency_parts(
-                txid, "", &d, &c, &sig_r, &big_r, &a, &ED25519_BASEPOINT_POINT, &[0u8; 32]
+                txid,
+                "",
+                &d,
+                &c,
+                &sig_r,
+                &big_r,
+                &a,
+                &ED25519_BASEPOINT_POINT,
+                &[0u8; 32]
             ),
             "proof failed to verify against the on-chain tx pubkey"
         );
@@ -769,7 +901,10 @@ mod tests {
             }
         }
         // Must match monero-wallet-cli / GUI exactly: 0.000669 XMR = 669_000_000 atomic.
-        assert_eq!(total, 669_000_000, "decoded received amount disagrees with official Monero");
+        assert_eq!(
+            total, 669_000_000,
+            "decoded received amount disagrees with official Monero"
+        );
     }
 
     // Same C1 validation but for a SUBADDRESS recipient (Monero GUI proof, Good/0.32 XMR).
@@ -833,7 +968,10 @@ mod tests {
             }
         }
         // 0.32 XMR = 320_000_000_000 atomic, per the GUI's check_tx_proof.
-        assert_eq!(total, 320_000_000_000, "decoded subaddress amount disagrees with official Monero");
+        assert_eq!(
+            total, 320_000_000_000,
+            "decoded subaddress amount disagrees with official Monero"
+        );
     }
 
     // Coinbase/miner outputs carry a cleartext amount (no commitment) — still gated by
@@ -853,13 +991,31 @@ mod tests {
         let out_key = (g * shared_key + b).compress().to_bytes();
         let reward: u64 = 600_000_000_000;
         assert_eq!(
-            scan_output(&d, &b_compressed, 0, &out_key, Some(view_tag), Some(reward), None, None),
+            scan_output(
+                &d,
+                &b_compressed,
+                0,
+                &out_key,
+                Some(view_tag),
+                Some(reward),
+                None,
+                None
+            ),
             Some(reward)
         );
         // Not our key → no reward attributed.
         let wrong_b = (g * (spend_sk + Scalar::ONE)).compress().to_bytes();
         assert_eq!(
-            scan_output(&d, &wrong_b, 0, &out_key, Some(view_tag), Some(reward), None, None),
+            scan_output(
+                &d,
+                &wrong_b,
+                0,
+                &out_key,
+                Some(view_tag),
+                Some(reward),
+                None,
+                None
+            ),
             None
         );
     }

@@ -100,6 +100,7 @@ const APP_COMMANDS: &[&str] = &[
     // VPN (unprivileged client of the root-owned broker)
     "vpn_status",
     "vpn_probe_endpoints",
+    "vpn_probe_exit_ip",
     "vpn_connect",
     "vpn_disconnect",
     "vpn_set_killswitch",

@@ -82,8 +82,21 @@ struct MacState {
     backend: String,
     #[serde(default)]
     profile_name: Option<String>,
+    /// Unix epoch seconds when the tunnel last reached configured/connected.
+    #[serde(default)]
+    connected_at_unix: Option<u64>,
+    /// Pinned peer `ip:port` while a tunnel is up (for live speed probes).
+    #[serde(default)]
+    endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pf_token: Option<String>,
+}
+
+fn now_unix() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
 }
 
 impl MacState {
@@ -97,6 +110,8 @@ impl MacState {
             cleanup_required: false,
             backend: "wireguard-go · macOS".into(),
             profile_name: None,
+            connected_at_unix: None,
+            endpoint: None,
             pf_token: None,
         }
     }
@@ -111,23 +126,39 @@ impl MacState {
             cleanup_required: false,
             backend: "wireguard-go · macOS".into(),
             profile_name: None,
+            connected_at_unix: None,
+            endpoint: None,
             pf_token: token,
         }
     }
 
     fn public_value(&self) -> Value {
+        let uptime_secs = match (self.connected_at_unix, now_unix()) {
+            (Some(since), Some(now)) if self.interface.is_some() => Some(now.saturating_sub(since)),
+            _ => None,
+        };
         json!({
             "phase": self.phase,
             "egress": self.egress,
             "killswitch_active": self.killswitch_active,
             "interface": self.interface,
             "handshake_age_secs": self.handshake_age_secs,
+            "uptime_secs": uptime_secs,
+            "connected_at_unix": self.connected_at_unix,
+            "endpoint": self.endpoint,
             "received_bytes": Value::Null,
             "sent_bytes": Value::Null,
             "cleanup_required": self.cleanup_required,
             "backend": self.backend,
             "profile_name": self.profile_name,
         })
+    }
+}
+
+fn format_endpoint(ip: IpAddr, port: u16) -> String {
+    match ip {
+        IpAddr::V4(v4) => format!("{v4}:{port}"),
+        IpAddr::V6(v6) => format!("[{v6}]:{port}"),
     }
 }
 
@@ -464,9 +495,20 @@ fn pf_rules(
     );
     if let (Some(interface), Some(ip), Some(port)) = (physical, endpoint, port) {
         let family = if ip.is_ipv4() { "inet" } else { "inet6" };
+        // WireGuard transport (UDP) plus ICMP to the same pinned peer so the
+        // host speed-test can measure the live server (not only tunnel peers).
         rules.push_str(&format!(
             "pass out quick on {interface} {family} proto udp to {ip} port = {port} keep state\n"
         ));
+        if ip.is_ipv4() {
+            rules.push_str(&format!(
+                "pass out quick on {interface} inet proto icmp to {ip} keep state\n"
+            ));
+        } else {
+            rules.push_str(&format!(
+                "pass out quick on {interface} inet6 proto ipv6-icmp to {ip} keep state\n"
+            ));
+        }
     }
     if let Some(interface) = tunnel {
         rules.push_str(&format!("pass out quick on {interface} all\n"));
@@ -697,6 +739,8 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
         cleanup_required: true,
         backend: "wireguard-go · macOS".into(),
         profile_name: None,
+        connected_at_unix: None,
+        endpoint: None,
         pf_token: token.clone(),
     };
     let _ = write_state(&dirty);
@@ -739,6 +783,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         let _ = clear_pf(token.as_deref());
         return Err(error);
     }
+    let endpoint_label = format_endpoint(endpoint, cfg.endpoint().port());
     let connecting = MacState {
         phase: "connecting_blocked".into(),
         egress: "blocked".into(),
@@ -748,6 +793,8 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         cleanup_required: false,
         backend: "wireguard-go · macOS".into(),
         profile_name: profile_name.clone(),
+        connected_at_unix: None,
+        endpoint: Some(endpoint_label.clone()),
         pf_token: token.clone(),
     };
     if let Err(error) = write_state(&connecting) {
@@ -811,6 +858,8 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         cleanup_required: false,
         backend: "wireguard-go · macOS".into(),
         profile_name,
+        connected_at_unix: now_unix(),
+        endpoint: Some(endpoint_label),
         pf_token: token.clone(),
     };
     if let Err(error) = write_state(&connected) {
@@ -1144,6 +1193,25 @@ pub fn status() -> Value {
                     value["received_bytes"] = Value::Number(received.into());
                     value["sent_bytes"] = Value::Number(sent.into());
                 }
+                // Prefer the stamped connect time. Older status files (pre-field)
+                // fall back to the public status file mtime (last written on
+                // connect/state change) so uptime is not reinvented by the UI.
+                let mut since = value.get("connected_at_unix").and_then(Value::as_u64);
+                if since.is_none() {
+                    if let Ok(meta) = std::fs::metadata(PUBLIC_STATUS) {
+                        if let Ok(modified) = meta.modified() {
+                            if let Ok(d) = modified.duration_since(std::time::UNIX_EPOCH) {
+                                since = Some(d.as_secs());
+                                value["connected_at_unix"] =
+                                    Value::Number(d.as_secs().into());
+                            }
+                        }
+                    }
+                }
+                if let (Some(since), Some(now)) = (since, now_unix()) {
+                    value["uptime_secs"] =
+                        Value::Number(now.saturating_sub(since).into());
+                }
             }
         }
     }
@@ -1163,6 +1231,7 @@ mod tests {
             Some("utun9"),
         );
         assert!(rules.contains("pass out quick on en0 inet proto udp to 203.0.113.5 port = 51820"));
+        assert!(rules.contains("pass out quick on en0 inet proto icmp to 203.0.113.5 keep state"));
         assert!(rules.contains("pass out quick on utun9 all"));
         assert!(rules.ends_with("block drop out all\n"));
         assert!(!rules.contains(';'));
