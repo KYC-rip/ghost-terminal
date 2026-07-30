@@ -13,15 +13,6 @@ type VpnStatus = Record<string, unknown>;
 type ConfirmAction = 'connect' | 'disconnect-blocked' | 'restore' | 'disable-killswitch' | 'recover' | 'emergency-restore' | null;
 type Accent = 'ok' | 'warn' | 'danger';
 
-const phaseLabels: Record<string, string> = {
-  disconnected_open: 'Disconnected · clearnet',
-  disconnected_blocked: 'Disconnected · blocked',
-  connecting_blocked: 'Connecting…',
-  connected: 'Connected',
-  degraded_blocked: 'Degraded · blocked',
-  error_blocked: 'Error · blocked',
-};
-
 const regionByCode: Record<string, string> = {
   al: 'Albania', au: 'Australia', br: 'Brazil', ca: 'Canada', ch: 'Switzerland',
   de: 'Germany', fi: 'Finland', fr: 'France', gb: 'United Kingdom', uk: 'United Kingdom', nl: 'Netherlands',
@@ -103,7 +94,7 @@ export function VpnView() {
 
   const refresh = useCallback(async () => {
     if (!window.api.vpnStatus) {
-      setStatusError('VPN controls require the native Tauri shell.');
+      setStatusError(t('mutationsRequired'));
       return;
     }
     try {
@@ -118,7 +109,7 @@ export function VpnView() {
     void refresh();
     const timer = window.setInterval(refresh, 5000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, t]);
 
   useEffect(() => {
     if (!window.api.vpnProfilesLoad) return;
@@ -131,13 +122,13 @@ export function VpnView() {
         setConfigText(selected.configText);
         setProfilesPersisted(true);
       })
-      .catch(e => setError(`Stored profiles could not be unlocked: ${String(e)}`));
+      .catch(e => setError(t('storedProfilesError', { error: String(e) })));
   }, []);
 
   const persistProfiles = async (nextProfiles: VpnProfile[], nextSelectedId: string | null) => {
     if (!window.api.vpnProfilesSave) {
       setProfilesPersisted(false);
-      throw new Error('Encrypted profile storage requires the trusted native host window.');
+      throw new Error(t('mutationsRequired'));
     }
     await window.api.vpnProfilesSave({ v: 1, profiles: nextProfiles, selectedProfileId: nextSelectedId });
     setProfilesPersisted(true);
@@ -183,7 +174,7 @@ export function VpnView() {
     const candidates = profiles.filter(profile => profile.kind === 'wireguard');
     if (!candidates.length) return;
     if (!window.api.vpnProbeEndpoints) {
-      setError('Speed testing requires the current native host build.');
+      setError(t('speedHostError'));
       return;
     }
     setSpeedTesting(true);
@@ -196,7 +187,7 @@ export function VpnView() {
       setLatencies(next);
       setSpeedTestedAt(Date.now());
     } catch (e) {
-      setError(`Could not test server speeds: ${String(e)}`);
+      setError(t('speedError', { error: String(e) }));
     } finally {
       setSpeedTesting(false);
     }
@@ -207,7 +198,7 @@ export function VpnView() {
     setConfigText(profile.configText);
     setError('');
     void persistProfiles(profiles, profile.id)
-      .catch(err => setError(`Profile selection was not persisted: ${String(err)}`));
+      .catch(err => setError(t('removeError', { name: selectedProfile?.name ?? '', error: String(err) })));
   };
 
   const importProfiles = async (file: File) => {
@@ -215,7 +206,7 @@ export function VpnView() {
     const names = new Set(profiles.map(profile => profile.name.toLowerCase()));
     const additions = loaded.filter(profile => !names.has(profile.name.toLowerCase()));
     if (!additions.length) {
-      setNotice('No profiles added — every imported name already exists.');
+      setNotice(t('noProfilesAdded'));
       return;
     }
     const next = [...profiles, ...additions];
@@ -224,13 +215,13 @@ export function VpnView() {
     setProfiles(next);
     setSelectedProfileId(nextSelected.id);
     setConfigText(nextSelected.configText);
-    setNotice(`Imported ${additions.length} profile${additions.length === 1 ? '' : 's'} · existing names were left unchanged.`);
+    setNotice(t('imported', { count: additions.length, plural: additions.length === 1 ? '' : 's' }));
     setError('');
   };
 
   const removeProfile = async (profile: VpnProfile) => {
     if (tunnelActive && activeProfileName === profile.name) {
-      setError('Disconnect the active profile before removing it.');
+      setError(t('disconnectBeforeRemove'));
       return;
     }
     const next = profiles.filter(item => item.id !== profile.id);
@@ -244,10 +235,10 @@ export function VpnView() {
       setProfiles(next);
       setSelectedProfileId(fallback?.id ?? null);
       setConfigText(fallback?.configText ?? '');
-      setNotice(`Removed ${profile.name}.`);
+      setNotice(t('removed', { name: profile.name }));
       setError('');
     } catch (e) {
-      setError(`Could not remove ${profile.name}: ${String(e)}`);
+      setError(t('removeError', { name: profile.name, error: String(e) }));
     }
   };
 
@@ -258,23 +249,23 @@ export function VpnView() {
     setError('');
     try {
       if (action === 'connect') {
-        if (!window.api.vpnConnect) throw new Error('VPN mutations require the trusted native host window.');
-        if (!configText.trim()) throw new Error('Choose or paste a WireGuard configuration first.');
+        if (!window.api.vpnConnect) throw new Error(t('mutationsRequired'));
+        if (!configText.trim()) throw new Error(t('selectConfig'));
         await window.api.vpnConnect(configText, selectedProfile?.name);
       } else if (action === 'disconnect-blocked') {
-        if (!window.api.vpnDisconnect) throw new Error('VPN mutations require the trusted native host window.');
+        if (!window.api.vpnDisconnect) throw new Error(t('mutationsRequired'));
         await window.api.vpnDisconnect(false);
       } else if (action === 'restore') {
-        if (!window.api.vpnDisconnect) throw new Error('VPN mutations require the trusted native host window.');
+        if (!window.api.vpnDisconnect) throw new Error(t('mutationsRequired'));
         await window.api.vpnDisconnect(true);
       } else if (action === 'disable-killswitch') {
-        if (!window.api.vpnSetKillswitch) throw new Error('VPN mutations require the trusted native host window.');
+        if (!window.api.vpnSetKillswitch) throw new Error(t('mutationsRequired'));
         await window.api.vpnSetKillswitch(false);
       } else if (action === 'recover') {
-        if (!window.api.vpnRecover) throw new Error('VPN mutations require the trusted native host window.');
+        if (!window.api.vpnRecover) throw new Error(t('mutationsRequired'));
         await window.api.vpnRecover();
       } else if (action === 'emergency-restore') {
-        if (!window.api.vpnEmergencyRestore) throw new Error('Emergency recovery is unavailable in this native build.');
+        if (!window.api.vpnEmergencyRestore) throw new Error(t('emergencyUnavailable'));
         await window.api.vpnEmergencyRestore();
       }
       await refresh();
@@ -349,24 +340,24 @@ export function VpnView() {
         </div>
 
         <div className="vh__scroll">
-          {pinnedProfiles.length > 0 && <div className="vh__sec">Pinned · {pinnedProfiles.length}</div>}
+          {pinnedProfiles.length > 0 && <div className="vh__sec">{t('pinned')} · {pinnedProfiles.length}</div>}
           {pinnedProfiles.map(profile => (
-            <ProfileRow key={profile.id} profile={profile} latency={latencies[profile.id]} tested={speedTestedAt != null && profile.kind === 'wireguard'} selected={profile.id === selectedProfileId} active={connected && profile.name === activeProfileName} onPick={() => selectProfile(profile)} onRemove={() => void removeProfile(profile)} />
+            <ProfileRow key={profile.id} profile={profile} latency={latencies[profile.id]} tested={speedTestedAt != null && profile.kind === 'wireguard'} selected={profile.id === selectedProfileId} active={connected && profile.name === activeProfileName} onPick={() => selectProfile(profile)} onRemove={() => void removeProfile(profile)} t={t} />
           ))}
-          <div className="vh__sec">Profiles · {otherProfiles.length}</div>
+          <div className="vh__sec">{t('profiles')} · {otherProfiles.length}</div>
           {otherProfiles.map(profile => (
-            <ProfileRow key={profile.id} profile={profile} latency={latencies[profile.id]} tested={speedTestedAt != null && profile.kind === 'wireguard'} selected={profile.id === selectedProfileId} active={connected && profile.name === activeProfileName} onPick={() => selectProfile(profile)} onRemove={() => void removeProfile(profile)} />
+            <ProfileRow key={profile.id} profile={profile} latency={latencies[profile.id]} tested={speedTestedAt != null && profile.kind === 'wireguard'} selected={profile.id === selectedProfileId} active={connected && profile.name === activeProfileName} onPick={() => selectProfile(profile)} onRemove={() => void removeProfile(profile)} t={t} />
           ))}
           {!filteredProfiles.length && (
-            <div className="vh__empty">{profiles.length ? 'No matching profiles.' : 'Import a WireGuard .conf, OpenVPN .ovpn, or ZIP bundle.'}</div>
+            <div className="vh__empty">{profiles.length ? t('noMatching') : t('importProfilesHint')}</div>
           )}
         </div>
 
         <div className="vh__foot">
           <span className="vh__footic" data-on={killSwitch}>{killSwitch ? <Lock size={14} /> : <LockOpen size={14} />}</span>
           <span className="vh__footm">
-            <b>{killSwitch ? 'Kill-switch active' : 'Kill-switch off'}</b>
-            <span>{killSwitch ? 'egress fail-closed · host-wide' : 'traffic can use clearnet'}</span>
+            <b>{killSwitch ? t('killActive') : t('killOff')}</b>
+            <span>{killSwitch ? t('failClosedHost') : t('clearnetTraffic')}</span>
           </span>
         </div>
       </aside>
@@ -377,25 +368,25 @@ export function VpnView() {
             {selectedProfile ? <Server size={20} /> : <Shield size={20} />}
           </span>
           <span className="vh__dhm">
-            <h1>{selectedProfile?.name ?? activeProfileName ?? 'Ripley VPN'}</h1>
+            <h1>{selectedProfile?.name ?? activeProfileName ?? t('appTitle')}</h1>
             <span>
               {selectedProfile && (
                 <>
                   <span className={`vh__chip ${activeProfileName === selectedProfile.name && connected ? 'ok' : 'mut'}`}>
-                    {activeProfileName === selectedProfile.name && connected ? 'CONNECTED' : 'READY'}
+                    {activeProfileName === selectedProfile.name && connected ? t('connectedUpper') : t('ready')}
                   </span>
                   <span className="vh__cc">{selectedMeta?.cc}</span>
-                  <span className="vh__chip mut">{selectedProfile.kind === 'openvpn' ? 'OPENVPN' : 'WIREGUARD'}</span>
+                  <span className="vh__chip mut">{selectedProfile.kind === 'openvpn' ? t('openvpn') : t('wireguard')}</span>
                   {selectedMeta?.region} · {selectedMeta?.endpoint}
                 </>
               )}
-              {!selectedProfile && 'Select or import a profile'}
+              {!selectedProfile && t('selectImport')}
             </span>
           </span>
           <span className="vh__dhacts">
             {tunnelActive
-              ? <button className="vh__btn compact warn" onClick={() => setConfirm('disconnect-blocked')} disabled={busy}><Power size={11} />Disconnect</button>
-              : <button className="vh__btn compact main" onClick={() => setConfirm('connect')} disabled={busy || !canConnect}><PlugZap size={11} />Connect</button>}
+              ? <button className="vh__btn compact warn" onClick={() => setConfirm('disconnect-blocked')} disabled={busy}><Power size={11} />{t('disconnect')}</button>
+              : <button className="vh__btn compact main" onClick={() => setConfirm('connect')} disabled={busy || !canConnect}><PlugZap size={11} />{t('connect')}</button>}
           </span>
         </header>
 
@@ -403,57 +394,57 @@ export function VpnView() {
           <section className={`vh__conn ${accent}`}>
             <span className="vh__shield"><HeroIcon size={26} /></span>
             <span className="vh__connm">
-              <span className="vh__connst">{phaseLabels[phase] ?? phase}</span>
+              <span className="vh__connst">{({ disconnected_open: t('phaseDisconnectedOpen'), disconnected_blocked: t('phaseDisconnectedBlocked'), connecting_blocked: t('phaseConnecting'), connected: t('phaseConnected'), degraded_blocked: t('phaseDegraded'), error_blocked: t('phaseError') } as Record<string, string>)[phase] ?? phase}</span>
               <span className="vh__connsub">
                 {connected
-                  ? `${String(status?.backend ?? 'WireGuard')} · interface ${String(status?.interface ?? 'unknown')}`
-                  : blocked ? 'tunnel down · the kill-switch is holding egress' : 'no tunnel · direct network access is open'}
+                  ? `${String(status?.backend ?? t('wireguard'))} · interface ${String(status?.interface ?? 'unknown')}`
+                  : blocked ? t('tunnelDownBlocked') : t('noTunnelOpen')}
               </span>
             </span>
             <span className="vh__connwhen">
               <b>{connected ? age(status?.handshake_age_secs) : blocked ? '0 B' : 'OPEN'}</b>
-              <span>{connected ? 'handshake' : blocked ? 'egress' : 'clearnet'}</span>
+              <span>{connected ? t('handshake') : blocked ? t('egress') : t('clearnet')}</span>
             </span>
           </section>
 
           <div className="vh__gates">
             <div className={`vh__gate ${blocked ? (connected ? 'ok' : 'warn') : 'danger'}`}>
               <span className="vh__gic">{blocked ? <GlobeLock size={16} /> : <Globe size={16} />}</span>
-              <span className="vh__gm"><span className="k">Clearnet egress</span><span className="v">{blocked ? 'Blocked' : 'Open'}</span></span>
+              <span className="vh__gm"><span className="k">{t('clearnetEgress')}</span><span className="v">{blocked ? t('clearnetBlocked') : t('clearnetOpen')}</span></span>
             </div>
             <div className={`vh__gate ${killSwitch ? 'ok' : 'danger'}`}>
               <span className="vh__gic">{killSwitch ? <Lock size={16} /> : <LockOpen size={16} />}</span>
-              <span className="vh__gm"><span className="k">Kill-switch</span><span className="v">{killSwitch ? 'Active' : 'Off'}</span></span>
+              <span className="vh__gm"><span className="k">{t('killSwitch')}</span><span className="v">{killSwitch ? t('activeStatus') : t('inactiveStatus')}</span></span>
             </div>
           </div>
 
           {connected && (
             <div className="vh__metrics">
-              <div><b className="ok">{age(status?.handshake_age_secs).replace(' ago', '')}</b><span>Last handshake</span></div>
-              <div><b>{bytes(status?.received_bytes)}</b><span>Received</span></div>
-              <div><b>{bytes(status?.sent_bytes)}</b><span>Sent</span></div>
+              <div><b className="ok">{age(status?.handshake_age_secs).replace(' ago', '')}</b><span>{t('lastHandshake')}</span></div>
+              <div><b>{bytes(status?.received_bytes)}</b><span>{t('received')}</span></div>
+              <div><b>{bytes(status?.sent_bytes)}</b><span>{t('sent')}</span></div>
             </div>
           )}
 
           <div className="vh__host">
             <AlertTriangle size={15} />
-            <span><b>HOST-WIDE NETWORK CONTROL</b>WireGuard routes and the kill-switch apply to the whole computer, not just RipleyOS. Other apps and users are routed through the VPN, or blocked, until the tunnel is restored or clearnet is explicitly reopened.</span>
+            <span><b>{t('hostWideTitle')}</b>{t('hostWideBody')}</span>
           </div>
 
           <section className="vh__conf">
             <div className="vh__confh">
               <FileKey2 size={12} />
-              {selectedProfile ? `${selectedProfile.name}.${selectedProfile.kind === 'openvpn' ? 'ovpn' : 'conf'}` : 'profile preview'}
+              {selectedProfile ? `${selectedProfile.name}.${selectedProfile.kind === 'openvpn' ? 'ovpn' : 'conf'}` : t('profilePreview')}
               {selectedProfile && (
-                <button className="vh__ico" title="Copy redacted config" onClick={() => void navigator.clipboard.writeText(redactVpnProfileSecrets(configText))}>
+                <button className="vh__ico" title={t('copyConfig')} onClick={() => void navigator.clipboard.writeText(redactVpnProfileSecrets(configText))}>
                   <Copy size={12} />
                 </button>
               )}
             </div>
             {selectedProfile?.kind === 'openvpn' ? (
               <div className="vh__unsupported">
-                <b>OpenVPN profile loaded</b>
-                <p>It is encrypted and inspectable, but the current broker only connects WireGuard. OpenVPN requires its own fail-closed broker state machine.</p>
+                <b>{t('openvpnLoaded')}</b>
+                <p>{t('openvpnUnsupported')}</p>
               </div>
             ) : selectedProfile ? (
               <pre className="vh__confbody">{redactVpnProfileSecrets(configText)}</pre>
@@ -471,51 +462,51 @@ export function VpnView() {
 
           {selectedProfile && (
             <div className="vh__meta">
-              <div className="r"><Waypoints size={13} /><span>Protocol</span><b>{selectedProfile.kind === 'openvpn' ? 'OpenVPN · preview' : 'WireGuard'}</b></div>
-              <div className="r"><Server size={13} /><span>Endpoint</span><b>{selectedMeta?.endpoint}</b></div>
-              <div className="r"><GlobeLock size={13} /><span>Allowed IPs</span><b>{configLine(configText, 'AllowedIPs')}</b></div>
+              <div className="r"><Waypoints size={13} /><span>{t('protocol')}</span><b>{selectedProfile.kind === 'openvpn' ? `${t('openvpn')} · ${t('preview')}` : t('wireguard')}</b></div>
+              <div className="r"><Server size={13} /><span>{t('endpoint')}</span><b>{selectedMeta?.endpoint}</b></div>
+              <div className="r"><GlobeLock size={13} /><span>{t('allowedIps')}</span><b>{configLine(configText, 'Allowed IPs')}</b></div>
             </div>
           )}
 
           {tunnelActive ? (
             <section className="vh__card">
-              <div className="vh__sech"><Power size={12} />End this session</div>
+              <div className="vh__sech"><Power size={12} />{t('endSession')}</div>
               <div className="vh__btns">
-                <button className="vh__btn session warn wide" onClick={() => setConfirm('disconnect-blocked')} disabled={busy}><Lock size={11} />Disconnect · stay blocked</button>
-                <button className="vh__btn session danger wide" onClick={() => setConfirm('restore')} disabled={busy}><Globe size={11} />Disconnect · restore clearnet</button>
+                <button className="vh__btn session warn wide" onClick={() => setConfirm('disconnect-blocked')} disabled={busy}><Lock size={11} />{t('stayBlocked')}</button>
+                <button className="vh__btn session danger wide" onClick={() => setConfirm('restore')} disabled={busy}><Globe size={11} />{t('restoreClearnet')}</button>
               </div>
-              <p className="vh__p"><b>Stay blocked</b> drops the tunnel but keeps egress fail-closed. <b>Restore clearnet</b> reopens direct traffic and exposes this machine’s real IP.</p>
+              <p className="vh__p"><b>{t('stayBlockedHint')}</b> {t('stayBlockedBody')} <b>{t('restoreHint')}</b> {t('restoreClearnetBody')}</p>
             </section>
           ) : (
             <section className="vh__card">
-              <div className="vh__sech"><Shield size={12} />Recover</div>
+              <div className="vh__sech"><Shield size={12} />{t('recover')}</div>
               <div className="vh__btns">
-                <button className="vh__btn recovery main wide" onClick={() => setConfirm('connect')} disabled={busy || !canConnect}><PlugZap size={11} />Connect {selectedProfile?.name ?? 'selected profile'}</button>
+                <button className="vh__btn recovery main wide" onClick={() => setConfirm('connect')} disabled={busy || !canConnect}><PlugZap size={11} />{t('connect')} {selectedProfile?.name ?? t('selectImport')}</button>
                 {killSwitch
-                  ? <button className="vh__btn recovery danger wide" onClick={() => setConfirm('disable-killswitch')} disabled={busy || !nativeControls}><LockOpen size={11} />Disable kill-switch</button>
-                  : <button className="vh__btn recovery wide" onClick={() => setConfirm('recover')} disabled={busy || !nativeControls}><Lock size={11} />Re-arm blocked state</button>}
+                  ? <button className="vh__btn recovery danger wide" onClick={() => setConfirm('disable-killswitch')} disabled={busy || !nativeControls}><LockOpen size={11} />{t('disableKill')}</button>
+                  : <button className="vh__btn recovery wide" onClick={() => setConfirm('recover')} disabled={busy || !nativeControls}><Lock size={11} />{t('rearm')}</button>}
               </div>
-              <p className="vh__p">{blocked ? 'Fail-closed is holding egress shut. Reconnect or explicitly restore clearnet.' : 'You are on clearnet. Connecting installs the host-wide block before the tunnel comes up.'}</p>
+              <p className="vh__p">{blocked ? t('reconnectOrRestore') : t('clearnetConnecting')}</p>
             </section>
           )}
 
           {cleanupRequired && (
             <button className="vh__emergency" onClick={() => setConfirm('emergency-restore')} disabled={busy || !window.api.vpnEmergencyRestore}>
-              Emergency restore clearnet
+              {t('emergency')}
             </button>
           )}
-          {!nativeControls && <div className="vh__note">VPN mutations require the trusted native Tauri host.</div>}
+          {!nativeControls && <div className="vh__note">{t('nativeRequired')}</div>}
           {notice && <div className="vh__note">{notice}</div>}
           {(statusError || error) && <div className="vh__error">{statusError || error}</div>}
         </div>
       </main>
 
-      {confirm && <Confirm action={confirm} busy={busy} error={error} onCancel={() => !busy && setConfirm(null)} onConfirm={() => void run()} />}
+      {confirm && <Confirm action={confirm} busy={busy} error={error} onCancel={() => !busy && setConfirm(null)} onConfirm={() => void run()} t={t} />}
     </div>
   );
 }
 
-function ProfileRow({ profile, latency, tested, selected, active, onPick, onRemove }: {
+function ProfileRow({ profile, latency, tested, selected, active, onPick, onRemove, t }: {
   profile: VpnProfile;
   latency?: number | null;
   tested: boolean;
@@ -523,6 +514,7 @@ function ProfileRow({ profile, latency, tested, selected, active, onPick, onRemo
   active: boolean;
   onPick: () => void;
   onRemove: () => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   const meta = profileMeta(profile);
   const random = profile.name.toLowerCase() === 'xeovo-random';
@@ -535,7 +527,7 @@ function ProfileRow({ profile, latency, tested, selected, active, onPick, onRemo
       </span>
       <span className="vh__rm">
         <b><span className="vh__cc">{meta.cc}</span>{profile.name}</b>
-        <span>{profile.kind === 'openvpn' ? 'OpenVPN · preview' : 'WireGuard'} · {meta.region}{active ? ' · live' : ''}</span>
+        <span>{profile.kind === 'openvpn' ? `${t('openvpn')} · ${t('preview')}` : t('wireguard')} · {meta.region}{active ? ` · ${t('live')}` : ''}</span>
       </span>
       {(random || tested) && (
         <span className="vh__latency">{random ? 'auto' : latency == null ? '—' : `${latency}ms`}</span>
@@ -544,7 +536,7 @@ function ProfileRow({ profile, latency, tested, selected, active, onPick, onRemo
         role="button"
         tabIndex={0}
         className="vh__del"
-        title="Remove profile"
+        title={t('removeProfile')}
         onClick={event => { event.stopPropagation(); onRemove(); }}
         onKeyDown={event => {
           if (event.key === 'Enter' || event.key === ' ') {
@@ -560,20 +552,18 @@ function ProfileRow({ profile, latency, tested, selected, active, onPick, onRemo
   );
 }
 
-function Confirm({ action, busy, error, onCancel, onConfirm }: {
+function Confirm({ action, busy, error, onCancel, onConfirm, t }: {
   action: Exclude<ConfirmAction, null>;
   busy: boolean;
   error: string;
   onCancel: () => void;
   onConfirm: () => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
   const copy: Record<Exclude<ConfirmAction, null>, [string, string]> = {
-    connect: ['Connect VPN?', 'This changes routing for the whole computer. The broker installs a host-wide fail-closed block before bringing up WireGuard.'],
-    'disconnect-blocked': ['Disconnect and stay blocked?', 'This tears down WireGuard but keeps the host-wide egress block. Other apps remain offline until you restore clearnet or reconnect.'],
-    restore: ['Restore clearnet?', 'This re-opens non-VPN networking for the whole computer after disconnecting the tunnel.'],
-    'disable-killswitch': ['Disable kill-switch?', 'This removes the host-wide block. Traffic from any app may leave over clearnet if the VPN is not connected.'],
-    recover: ['Recover blocked state?', 'The broker will reconcile the whole computer toward an offline, blocked state.'],
-    'emergency-restore': ['Emergency restore clearnet?', 'BREAK GLASS: force teardown and remove the host-wide block despite dirty cleanup state. Other apps may immediately resume clearnet traffic.'],
+    connect: [t('connectQ'), t('connectBody')], 'disconnect-blocked': [t('disconnectQ'), t('disconnectBody')],
+    restore: [t('restoreQ'), t('restoreBody')], 'disable-killswitch': [t('disableQ'), t('disableBody')],
+    recover: [t('recoverQ'), t('recoverBody')], 'emergency-restore': [t('emergencyQ'), t('emergencyBody')],
   };
   const [title, body] = copy[action];
   return (
@@ -586,8 +576,8 @@ function Confirm({ action, busy, error, onCancel, onConfirm }: {
         <p>{body}</p>
         {error && <div className="vh__error">{error}</div>}
         <div className="vh__dialogacts">
-          <button className="vh__btn" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button className="vh__btn main" onClick={onConfirm} disabled={busy}>{busy ? 'Authorizing…' : 'Confirm'}</button>
+          <button className="vh__btn" onClick={onCancel} disabled={busy}>{t('cancel')}</button>
+          <button className="vh__btn main" onClick={onConfirm} disabled={busy}>{busy ? t('authorizing') : t('confirm')}</button>
         </div>
       </div>
     </div>
