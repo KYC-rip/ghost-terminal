@@ -106,6 +106,7 @@ const APP_COMMANDS: &[&str] = &[
     "vpn_recover",
     "vpn_emergency_restore",
     "vpn_open_window",
+    "vpn_set_locale",
     "vpn_profiles_load",
     "vpn_profiles_save",
     "vpn_profiles_clear",

@@ -17,6 +17,7 @@
     "allow-ros-native-fetch",
     "allow-vpn-status",
     "allow-vpn-open-window",
+    "allow-vpn-set-locale",
     "allow-resolve-openalias",
     "allow-get-config",
     "allow-save-config",

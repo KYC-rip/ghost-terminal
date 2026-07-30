@@ -529,6 +529,7 @@ pub fn run() {
             commands::vpn::vpn_recover,
             commands::vpn::vpn_emergency_restore,
             commands::vpn::vpn_open_window,
+            commands::vpn::vpn_set_locale,
             commands::vpn::vpn_profiles_load,
             commands::vpn::vpn_profiles_save,
             commands::vpn::vpn_profiles_clear,

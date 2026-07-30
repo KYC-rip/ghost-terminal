@@ -655,8 +655,8 @@ pub async fn vpn_open_window(
     }
 
     let query = match theme {
-        Some(theme) => format!("index.html?vpn-control=1&theme={theme}"),
-        None => "index.html?vpn-control=1".to_string(),
+        Some(theme) => format!("index.html?vpn-control=1&theme={theme}&locale={locale}"),
+        None => format!("index.html?vpn-control=1&locale={locale}"),
     };
     // In a ROS-mode dev session the app's default dev URL points at the ROS
     // renderer (:5174), which intentionally does not contain the trusted
@@ -679,6 +679,22 @@ pub async fn vpn_open_window(
         .min_inner_size(420.0, 560.0)
         .build()
         .map_err(|e| format!("open VPN controls: {e}"))?;
+    Ok(())
+}
+
+/// Update locale in an already-open VPN control window without revealing or focusing it.
+#[tauri::command]
+pub async fn vpn_set_locale(app: AppHandle, locale: String) -> Result<(), String> {
+    if !matches!(locale.as_str(), "en" | "es" | "ru" | "zh" | "ja" | "fa") {
+        return Err("unsupported VPN locale".into());
+    }
+    if let Some(win) = app.get_webview_window("vpn-control") {
+        let js_locale = serde_json::to_string(&locale).map_err(|e| e.to_string())?;
+        let script = format!(
+            "window.__ripleyVpnLocale={js_locale};window.dispatchEvent(new CustomEvent('ripley-vpn-locale-changed',{{detail:{js_locale}}}));"
+        );
+        win.eval(&script).map_err(|e| format!("update VPN locale: {e}"))?;
+    }
     Ok(())
 }
 

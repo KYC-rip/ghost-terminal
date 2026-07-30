@@ -19,6 +19,7 @@
     "allow-restart-tor",
     "allow-vpn-status",
     "allow-vpn-open-window",
+    "allow-vpn-set-locale",
     "allow-open-native-browser",
     "allow-browser-embed-open",
     "allow-browser-embed-bounds",
