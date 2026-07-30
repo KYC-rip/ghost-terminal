@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, ArrowDown, Maximize2, Minimize2, Copy, Check, Clock, Search } from 'lucide-react';
+import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, ArrowDown, Maximize2, Minimize2, Copy, Check, Clock, Search, Network } from 'lucide-react';
 import { useVault } from './hooks/useVault';
 import { useStats } from './hooks/useStats';
 import { useTheme } from './hooks/useTheme';
@@ -102,6 +102,19 @@ function MainApp() {
   useEffect(() => {
     const off = window.api.onTorStatus?.((s) => setTorStatus({ status: s.status, percent: s.percent }));
     return () => { off?.(); };
+  }, []);
+
+  // VPN is independent from Tor. Keep a small read-only snapshot for the
+  // status affordance; mutations remain inside the dedicated VPN surface.
+  const [vpnStatus, setVpnStatus] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    const read = async () => {
+      if (!window.api.vpnStatus) return;
+      try { setVpnStatus(await window.api.vpnStatus()); } catch { setVpnStatus(null); }
+    };
+    void read();
+    const timer = window.setInterval(read, 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   // The embedded ROS VPN app is read-only. Its "Open VPN controls" action is
@@ -442,7 +455,7 @@ function MainApp() {
           <NavGroup label="Tools" groupKey="tools">
             <NavButton id="agent" label="Agent" icon={Bot} />
             <NavButton id="settings" label="Settings" icon={Settings} />
-            <NavButton id="vpn" label="VPN" icon={Shield} />
+            <NavButton id="vpn" label="VPN" icon={Network} />
           </NavGroup>
           <button
             onClick={() => { setShowFeedbackModal(true); setFeedbackText(''); }}
@@ -466,7 +479,7 @@ function MainApp() {
           </div>
 
           {/* Theme + Skin + Network in one compact grid */}
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-4 gap-1.5">
             <button onClick={cycleTheme} className="flex flex-col items-center gap-0.5 py-1.5 rounded-sm border border-xmr-border/50 hover:bg-xmr-green/10 transition-all cursor-pointer text-xmr-green" title={`Theme: ${mode}`}>
               {mode === 'dark' ? <Moon size={12} /> : mode === 'light' ? <Sun size={12} /> : <Monitor size={12} />}
               <span className="text-[8px] font-black uppercase tracking-wide">{mode === 'system' ? 'SYS' : mode.substring(0, 4).toUpperCase()}</span>
@@ -489,6 +502,20 @@ function MainApp() {
               return (
                 <button onClick={toggleTor} className={`flex flex-col items-center gap-0.5 py-1.5 rounded-sm border cursor-pointer ${appConfig.routingMode !== 'clearnet' ? 'border-xmr-green/50 text-xmr-green' : 'border-xmr-accent/50 text-xmr-accent'}`} title={title}>
                   <Shield size={12} className={bootstrapping ? 'animate-pulse' : ''} />
+                  <span className="text-[8px] font-black uppercase tracking-wide">{label}</span>
+                </button>
+              );
+            })()}
+            {(() => {
+              const phase = String(vpnStatus?.phase ?? 'unknown');
+              const egress = String(vpnStatus?.egress ?? 'unknown');
+              const connected = phase === 'connected';
+              const blocked = egress === 'blocked';
+              const label = connected ? 'VPN' : blocked ? 'LOCK' : 'VPN';
+              const title = connected ? 'VPN connected · open controls' : blocked ? 'VPN blocked · open controls' : 'VPN inactive · open controls';
+              return (
+                <button onClick={() => setView('vpn')} className={`flex flex-col items-center gap-0.5 py-1.5 rounded-sm border cursor-pointer ${connected ? 'border-xmr-green/50 text-xmr-green' : blocked ? 'border-yellow-500/50 text-yellow-400' : 'border-xmr-border/50 text-xmr-dim'}`} title={title}>
+                  <Network size={12} className={connected ? 'animate-pulse' : ''} />
                   <span className="text-[8px] font-black uppercase tracking-wide">{label}</span>
                 </button>
               );
@@ -738,7 +765,7 @@ function VpnControlApp() {
   const theme = rawTheme === 'light' || rawTheme === 'dark' || rawTheme === 'system' ? rawTheme : undefined;
   useTheme(theme);
   return (
-    <div className="min-h-screen bg-xmr-base p-6 text-xmr-text transition-colors duration-300">
+    <div className="h-screen overflow-hidden bg-xmr-base text-xmr-text transition-colors duration-300">
       <VpnView />
     </div>
   );
