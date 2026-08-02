@@ -417,6 +417,56 @@ fn is_synthetic_tunnel_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// Resolve a DNS-named endpoint while the kill-switch is armed. The blackhole
+/// drops clearnet DNS, so we temporarily swap the anchor to permit HTTPS ONLY
+/// to the two pinned DoH resolvers, resolve, and immediately re-seal the
+/// blackhole. The anchor is never empty and the PF reference held by the armed
+/// kill-switch is never touched, so egress stays fail-closed throughout.
+fn resolve_endpoint_while_blocked(
+    host: &str,
+    prev_endpoint: Option<(IpAddr, u16)>,
+) -> Result<IpAddr, String> {
+    load_pf(&pf_rules_doh_only(prev_endpoint))
+        .map_err(|e| format!("open DoH-only window: {e}"))?;
+    let resolved = resolve_doh_ipv4(host);
+    // Re-seal BEFORE inspecting the result — a resolution failure must not
+    // leave the DoH window open.
+    load_pf(&pf_rules(None, None, None, None))
+        .map_err(|e| format!("re-seal kill-switch after endpoint resolution: {e}"))?;
+    resolved
+}
+
+/// Resolve the connect endpoint. When the kill-switch is already armed the
+/// normal system resolver cannot be used (the block drops clearnet DNS), so a
+/// DNS-named endpoint is resolved through a brief, tightly-scoped DoH window
+/// instead. IP endpoints never need DNS and are returned directly.
+fn resolve_connect_endpoint(
+    cfg: &WgConfig,
+    blocked: bool,
+    prev_endpoint: Option<(IpAddr, u16)>,
+) -> Result<IpAddr, String> {
+    match cfg.endpoint().host() {
+        EndpointHost::Ip(ip) => Ok(*ip),
+        EndpointHost::Dns(host) if !blocked => endpoint_ip(cfg),
+        EndpointHost::Dns(host) => {
+            eprintln!("ripley-vpn: kill-switch armed — resolving endpoint via pinned DoH");
+            resolve_endpoint_while_blocked(host, prev_endpoint)
+        }
+    }
+}
+
+fn parse_endpoint_label(label: &str) -> Option<(IpAddr, u16)> {
+    let (host, port) = if let Some(rest) = label.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']')?;
+        (host, rest.strip_prefix(':')?)
+    } else {
+        label.rsplit_once(':')?
+    };
+    let ip: IpAddr = host.parse().ok()?;
+    let port: u16 = port.parse().ok()?;
+    (!ip.is_unspecified() && !ip.is_multicast() && !ip.is_loopback()).then_some((ip, port))
+}
+
 fn route_field(target: &str, field: &str) -> Result<String, String> {
     let output = run_capture(Path::new("/sbin/route"), &["-n", "get", target], None)?;
     output
@@ -512,6 +562,36 @@ fn pf_rules(
     }
     if let Some(interface) = tunnel {
         rules.push_str(&format!("pass out quick on {interface} all\n"));
+    }
+    rules.push_str("block drop out all\n");
+    rules
+}
+
+/// A tight, connect-only ruleset used to resolve a DNS-named endpoint while the
+/// kill-switch is armed. The blackhole drops clearnet DNS, so the ONLY clearnet
+/// egress permitted here is HTTPS to the two hardcoded DoH resolvers the
+/// resolver already pins (`resolve_doh_ipv4`). Everything else stays
+/// fail-closed. The anchor is swapped in, the endpoint resolved, then the
+/// blackhole is re-sealed — never left in this state.
+///
+/// `prev_endpoint` is the peer the armed kill-switch was pinning. A reconnect
+/// while that tunnel is still up routes the DoH query INTO it; the re-encapsulated
+/// WireGuard transport to the previous peer must escape, or the query dies inside
+/// the still-live tunnel and both resolvers time out. It is the same peer the
+/// kill-switch already permits, so no additional egress is opened.
+fn pf_rules_doh_only(prev_endpoint: Option<(IpAddr, u16)>) -> String {
+    let mut rules = String::from(
+        "pass quick on lo0 all\n\
+         pass out quick proto udp from any port 68 to any port 67 keep state\n\
+         pass out quick inet6 proto ipv6-icmp all\n\
+         pass out quick proto tcp to 1.1.1.1 port = 443 keep state\n\
+         pass out quick proto tcp to 8.8.8.8 port = 443 keep state\n",
+    );
+    if let Some((ip, port)) = prev_endpoint {
+        let family = if ip.is_ipv4() { "inet" } else { "inet6" };
+        rules.push_str(&format!(
+            "pass out quick {family} proto udp to {ip} port = {port} keep state\n"
+        ));
     }
     rules.push_str("block drop out all\n");
     rules
@@ -760,7 +840,21 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
     for name in ["bash", "wg-quick", "wireguard-go", "wg"] {
         tool(name)?;
     }
-    let endpoint = endpoint_ip(&cfg)?;
+    let previous = read_private_state();
+    // A tunnel left behind by a failed/partial teardown owns split-default
+    // routes; the DoH resolution would be routed into it and die. Destroy any
+    // stale interface so the query egresses on the physical link.
+    if let Some(iface) = previous.interface.as_deref() {
+        let _ = run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]);
+    }
+    // The kill-switch pins the previous peer. If the previous tunnel is still
+    // up, the DoH query is routed into it and the encapsulated WireGuard
+    // transport to that peer must be permitted inside the window.
+    let prev_endpoint = previous
+        .endpoint
+        .as_deref()
+        .and_then(parse_endpoint_label);
+    let endpoint = resolve_connect_endpoint(&cfg, previous.killswitch_active, prev_endpoint)?;
     // Use the physical default link, not the current route to the peer. A
     // transparent proxy can own split-default routes through another utun;
     // wg-quick will add a host route for this real, DoH-resolved endpoint via
@@ -772,7 +866,15 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
             "the macOS default route is already owned by {physical}; no physical endpoint bypass can be proven, so Ripley refused before any network change"
         ));
     }
-    let token = enable_pf()?;
+    // Reuse the PF reference held by an armed kill-switch instead of bumping
+    // the refcount and orphaning the old token (that would leave PF enabled
+    // after a later restore). Fall back to enabling PF only when there is no
+    // held token (open state, or legacy state without one).
+    let token = if previous.killswitch_active && previous.pf_token.is_some() {
+        previous.pf_token
+    } else {
+        enable_pf()?
+    };
     let initial_rules = pf_rules(
         Some(&physical),
         Some(endpoint),
@@ -878,6 +980,13 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
         write_state(&dirty)?;
         return Err(down.unwrap_err());
     }
+    // macOS wg-quick down only unlinks the UAPI socket and name files; the
+    // wireguard-go process, the utun interface, and its routes survive. A
+    // stale tunnel would swallow the DoH window on the next reconnect, so
+    // destroy the interface explicitly (routes die with it).
+    if let Some(iface) = previous.interface.as_deref() {
+        let _ = run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]);
+    }
     let _ = fs::remove_file(CONFIG_FILE);
     if restore {
         clear_pf(previous.pf_token.as_deref())?;
@@ -891,7 +1000,10 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
             enable_pf()?
         };
         load_pf(&pf_rules(None, None, None, None))?;
-        let blocked = MacState::blocked(token);
+        let mut blocked = MacState::blocked(token);
+        // Keep the last pinned peer so a reconnect's DoH window can re-allow
+        // the encapsulated transport even if the interface teardown failed.
+        blocked.endpoint = previous.endpoint.clone();
         write_state(&blocked)?;
         Ok(blocked)
     }
@@ -1292,6 +1404,63 @@ mod tests {
             Path::new("/sbin/pfctl"),
             &["-nf", "-"],
             Some(rules.as_bytes()),
+        );
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn doh_only_ruleset_permits_only_the_two_pinned_resolvers() {
+        let rules = pf_rules_doh_only(None);
+        assert!(rules.contains("pass out quick proto tcp to 1.1.1.1 port = 443 keep state"));
+        assert!(rules.contains("pass out quick proto tcp to 8.8.8.8 port = 443 keep state"));
+        assert_eq!(rules.matches("port = 443").count(), 2);
+        assert!(rules.ends_with("block drop out all\n"));
+        assert!(!rules.contains("pass out quick on en0"));
+        assert!(!rules.contains("proto tcp to 1.1.1.1 port = 80"));
+        assert!(!rules.contains("proto udp to 1.1.1.1 port = 53"));
+    }
+
+    #[test]
+    fn doh_only_ruleset_also_permits_previous_peer_transport() {
+        let rules = pf_rules_doh_only(Some(("167.88.161.83".parse().unwrap(), 51820)));
+        assert!(rules.contains("pass out quick inet proto udp to 167.88.161.83 port = 51820 keep state"));
+        assert!(rules.contains("pass out quick proto tcp to 1.1.1.1 port = 443 keep state"));
+        assert!(rules.ends_with("block drop out all\n"));
+    }
+
+    #[test]
+    fn endpoint_label_roundtrips_through_parser() {
+        assert_eq!(
+            parse_endpoint_label("167.88.161.83:51820"),
+            Some(("167.88.161.83".parse().unwrap(), 51820))
+        );
+        assert_eq!(
+            parse_endpoint_label("[2001:db8::1]:51820"),
+            Some(("2001:db8::1".parse().unwrap(), 51820))
+        );
+        assert_eq!(parse_endpoint_label("not-an-endpoint"), None);
+        assert_eq!(parse_endpoint_label("0.0.0.0:51820"), None);
+        assert_eq!(parse_endpoint_label("1.1.1.1:notaport"), None);
+    }
+
+    #[test]
+    fn doh_only_rules_parse() {
+        let parsed = run_capture(
+            Path::new("/sbin/pfctl"),
+            &["-nf", "-"],
+            Some(pf_rules_doh_only(None).as_bytes()),
+        );
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn doh_only_rules_with_prev_peer_parse() {
+        let parsed = run_capture(
+            Path::new("/sbin/pfctl"),
+            &["-nf", "-"],
+            Some(
+                pf_rules_doh_only(Some(("167.88.161.83".parse().unwrap(), 51820))).as_bytes(),
+            ),
         );
         assert!(parsed.is_ok(), "{parsed:?}");
     }

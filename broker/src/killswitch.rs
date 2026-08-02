@@ -83,6 +83,14 @@ pub fn install(
 /// when we don't know (or no longer trust) which endpoint/dev was pinned.
 /// Permits only loopback and the minimum DHCP/NDP link housekeeping.
 pub fn block_all() -> Result<(), NetError> {
+    run_stdin("nft", &["-f", "-"], blocked_ruleset(&[]).as_bytes())
+}
+
+/// Build the maximally fail-closed blackhole ruleset, optionally opening DNS
+/// (UDP/TCP 53) to a fixed list of resolvers so the broker can resolve a
+/// DNS-named endpoint while the kill-switch is armed. Permits only loopback,
+/// DHCP/NDP link housekeeping, and the DNS exceptions.
+fn blocked_ruleset(dns_exceptions: &[IpAddr]) -> String {
     let mut s = header();
     s.push_str(&format!("table inet {TABLE} {{\n"));
     s.push_str("    chain output {\n");
@@ -90,8 +98,27 @@ pub fn block_all() -> Result<(), NetError> {
     s.push_str("        oifname \"lo\" accept\n");
     s.push_str("        udp dport 67 udp sport 68 accept\n");
     s.push_str("        icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n");
+    for ip in dns_exceptions {
+        match ip {
+            IpAddr::V4(v4) => {
+                s.push_str(&format!("        ip daddr {v4} udp dport 53 accept\n"));
+                s.push_str(&format!("        ip daddr {v4} tcp dport 53 accept\n"));
+            }
+            IpAddr::V6(v6) => {
+                s.push_str(&format!("        ip6 daddr {v6} udp dport 53 accept\n"));
+                s.push_str(&format!("        ip6 daddr {v6} tcp dport 53 accept\n"));
+            }
+        }
+    }
     s.push_str("    }\n}\n");
-    run_stdin("nft", &["-f", "-"], s.as_bytes())
+    s
+}
+
+/// Install the fail-closed blackhole with DNS exceptions for `resolvers` — used
+/// only to resolve a DNS-named endpoint while the kill-switch is armed. The
+/// caller MUST re-seal (`block_all`) immediately afterwards.
+pub fn block_with_dns(resolvers: &[IpAddr]) -> Result<(), NetError> {
+    run_stdin("nft", &["-f", "-"], blocked_ruleset(resolvers).as_bytes())
 }
 
 /// Remove the kill-switch, re-opening clearnet. Idempotent (add-then-delete).
@@ -141,5 +168,17 @@ mod tests {
         assert!(header().starts_with(&format!(
             "add table inet {TABLE}\ndelete table inet {TABLE}"
         )));
+    }
+
+    #[test]
+    fn blocked_ruleset_opens_dns_only_to_named_resolvers() {
+        let rs = blocked_ruleset(&["1.1.1.1".parse().unwrap(), "::1".parse().unwrap()]);
+        assert!(rs.contains("ip daddr 1.1.1.1 udp dport 53 accept"));
+        assert!(rs.contains("ip daddr 1.1.1.1 tcp dport 53 accept"));
+        assert!(rs.contains("ip6 daddr ::1 udp dport 53 accept"));
+        assert!(rs.contains("policy drop;"));
+        assert!(!rs.contains("dport 443"));
+        assert!(!rs.contains("meta mark"));
+        assert_eq!(blocked_ruleset(&[]).matches("dport 53 accept").count(), 0);
     }
 }

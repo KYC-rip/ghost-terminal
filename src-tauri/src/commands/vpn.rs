@@ -940,6 +940,7 @@ mod capability_tests {
                 source_path: "fi.conf".into(),
                 kind: "wireguard".into(),
                 config_text: "[Interface]\nPrivateKey = secret\n[Peer]\nPublicKey = public".into(),
+                bundle: None,
             }],
         }
     }

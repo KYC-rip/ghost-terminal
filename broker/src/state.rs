@@ -300,16 +300,20 @@ impl Manager {
         }
 
         // Resolution needs clearnet DNS. If the kill-switch is already armed
-        // (blackhole), a DNS-name endpoint cannot resolve — say so actionably.
-        let endpoint_ip = match netops::resolve_endpoint(cfg) {
-            Ok(ip) => ip,
-            Err(e) if self.egress == Egress::Blocked => {
-                return Err(format!(
-                    "cannot resolve endpoint while the kill-switch is armed ({e}); use an IP endpoint or disable the kill-switch first"
-                ));
-            }
-            Err(e) => return Err(e.to_string()),
-        };
+        // (blackhole), a DNS-name endpoint cannot resolve through the normal
+        // resolver — `resolve_endpoint_handling_blocked` retries through a
+        // scoped DNS hole and re-seals, so a reconnect never forces the user
+        // to disable the kill-switch first.
+        let endpoint_ip =
+            match netops::resolve_endpoint_handling_blocked(cfg, self.egress == Egress::Blocked) {
+                Ok(ip) => ip,
+                Err(e) if self.egress == Egress::Blocked => {
+                    return Err(format!(
+                        "cannot resolve endpoint while the kill-switch is armed ({e}); use an IP endpoint or disable the kill-switch first"
+                    ));
+                }
+                Err(e) => return Err(e.to_string()),
+            };
         let phys = netops::physical_egress_dev(endpoint_ip).map_err(|e| e.to_string())?;
 
         // The pre-attempt durable marker, so a CLEAN install failure restores the

@@ -227,6 +227,64 @@ pub fn resolve_endpoint(cfg: &WgConfig) -> Result<IpAddr, NetError> {
     }
 }
 
+/// Nameservers from /etc/resolv.conf, used to open a scoped DNS hole while the
+/// kill-switch is armed (remote resolvers would otherwise be dropped by the
+/// blackhole). Loopback stubs (systemd-resolved) are harmless to include — the
+/// blackhole already permits loopback.
+pub fn resolvconf_nameservers() -> Vec<IpAddr> {
+    std::fs::read_to_string("/etc/resolv.conf")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            if fields.next() != Some("nameserver") {
+                return None;
+            }
+            fields.next().and_then(|value| value.parse::<IpAddr>().ok())
+        })
+        .collect()
+}
+
+/// Resolve the peer endpoint, retrying through a scoped DNS hole when the
+/// kill-switch is armed and the normal resolver is unreachable (its traffic is
+/// dropped by the blackhole). The blackhole is re-sealed immediately after the
+/// retry, so egress never leaves the fail-closed state.
+pub fn resolve_endpoint_handling_blocked(
+    cfg: &WgConfig,
+    blocked: bool,
+) -> Result<IpAddr, NetError> {
+    match cfg.endpoint().host() {
+        EndpointHost::Ip(ip) => Ok(*ip),
+        EndpointHost::Dns(_) if !blocked => resolve_endpoint(cfg),
+        EndpointHost::Dns(_) => {
+            // A local stub resolver (e.g. systemd-resolved on 127.0.0.53) is
+            // already reachable through the loopback allowance — only open the
+            // DNS hole if the first attempt was actually blocked.
+            let first = resolve_endpoint(cfg);
+            if first.is_ok() {
+                return first;
+            }
+            let resolvers = resolvconf_nameservers();
+            if !resolvers.is_empty() {
+                match crate::killswitch::block_with_dns(&resolvers) {
+                    Ok(()) => {
+                        let retried = resolve_endpoint(cfg);
+                        let _ = crate::killswitch::block_all();
+                        if retried.is_ok() {
+                            return retried;
+                        }
+                        eprintln!("ripley-vpn-broker: endpoint resolution failed even with a scoped DNS hole");
+                    }
+                    Err(e) => {
+                        eprintln!("ripley-vpn-broker: could not install scoped DNS hole: {e}");
+                    }
+                }
+            }
+            first
+        }
+    }
+}
+
 /// The physical interface that routes to the endpoint — captured BEFORE we seal
 /// egress. Parses `ip route get <ip>`: "<ip> [via <gw>] dev <dev> ...".
 pub fn physical_egress_dev(endpoint_ip: IpAddr) -> Result<String, NetError> {
