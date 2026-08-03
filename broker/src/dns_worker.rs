@@ -107,14 +107,26 @@ fn run_loop(upstreams: Vec<SocketAddr>, rules: Vec<String>, stop: Arc<AtomicBool
 /// a per-query socket stamped with the kill-switch fwmark so the redirect chain
 /// (`meta mark != FWMARK ... redirect`) passes our own upstream traffic.
 fn forward(upstream: &SocketAddr, pkt: &[u8], stop: &Arc<AtomicBool>) -> Option<Vec<u8>> {
-    let sock = UdpSocket::bind("127.0.0.1:0").ok()?;
+    // Bind to ANY interface (0.0.0.0), NOT loopback: a socket bound to
+    // 127.0.0.1 cannot send to a non-loopback destination (EINVAL), and the
+    // filter forwards to real resolvers. The redirect chain exempts the
+    // marked forward regardless of source.
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.set_read_timeout(Some(std::time::Duration::from_secs(3))).ok()?;
     // fwmark is a 32-bit value; FWMARK is the hex string used in nft rules.
     let mark: u32 = u32::from_str_radix(FWMARK.trim_start_matches("0x"), 16).ok()?;
     // SO_MARK: only the root broker may set it; the redirect chain
     // (`meta mark != FWMARK ... redirect`) passes our marked upstream traffic.
-    let _ = setsockopt(&sock, Mark, &mark);
-    sock.send_to(pkt, upstream).ok()?;
+    // A failure here is fatal — an unmarked forward would be redirected back
+    // into the filter, looping forever. Do NOT swallow it.
+    if let Err(e) = setsockopt(&sock, Mark, &mark) {
+        eprintln!("ripley-vpn-broker: dns filter forward SO_MARK failed: {e}");
+        return None;
+    }
+    if let Err(e) = sock.send_to(pkt, upstream) {
+        eprintln!("ripley-vpn-broker: dns filter send_to {upstream}: {e}");
+        return None;
+    }
     let mut buf = [0_u8; 4096];
     loop {
         if stop.load(Ordering::SeqCst) {
@@ -127,8 +139,12 @@ fn forward(upstream: &SocketAddr, pkt: &[u8], stop: &Arc<AtomicBool>) -> Option<
                 if resp.len() >= 12 && resp[..2] == pkt[..2] {
                     return Some(resp.to_vec());
                 }
+                eprintln!("ripley-vpn-broker: dns filter ignored mismatched id from {upstream}");
             }
-            Err(_) => return None,
+            Err(e) => {
+                eprintln!("ripley-vpn-broker: dns filter recv {upstream}: {e}");
+                return None;
+            }
         }
     }
 }

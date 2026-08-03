@@ -603,8 +603,8 @@ fn pf_rules_doh_only(prev_endpoint: Option<(IpAddr, u16)>) -> String {
 /// app process; this ruleset is installed by the helper when DNS filtering is
 /// enabled and removed on disable.
 fn pf_rules_dns_filter() -> String {
-    "rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5353\n\
-     rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5353\n"
+    "rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5300\n\
+     rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5300\n"
         .to_string()
 }
 
@@ -1530,8 +1530,8 @@ mod tests {
     #[test]
     fn dns_filter_rdr_rules_redirect_both_transports_to_loopback() {
         let rules = pf_rules_dns_filter();
-        assert!(rules.contains("rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5353"));
-        assert!(rules.contains("rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5353"));
+        assert!(rules.contains("rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5300"));
+        assert!(rules.contains("rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5300"));
         assert!(!rules.contains("block"));
     }
 

@@ -541,7 +541,7 @@ impl Manager {
         journal_persist("blocked").map_err(|e| format!("cannot persist intent: {e}"))?;
         self.teardown_marking_dirty();
         if self.egress != Egress::Blocked || !self.ks_active {
-            killswitch::block_all().map_err(|e| {
+            self.seal().map_err(|e| {
                 self.errored = true;
                 format!("block: {e}")
             })?;
@@ -580,6 +580,15 @@ impl Manager {
         self.ipv6 = None;
         self.profile_name = None;
         self.connected_since_unix = None;
+        // If the DNS filter is active, restoring clearnet must ALSO reinstall
+        // the open-egress redirect so ad-blocking keeps working (the block
+        // removal above dropped the redirect chain along with the table).
+        if self.dns_filter {
+            killswitch::redirect_only().map_err(|e| {
+                self.errored = true;
+                format!("dns filter redirect: {e}")
+            })?;
+        }
         journal_best("open");
         Ok(())
     }
@@ -590,7 +599,7 @@ impl Manager {
             return Ok(());
         }
         journal_persist("blocked").map_err(|e| format!("cannot persist intent: {e}"))?;
-        killswitch::block_all().map_err(|e| {
+        self.seal().map_err(|e| {
             self.errored = true;
             format!("block: {e}")
         })?;
@@ -622,7 +631,7 @@ impl Manager {
     pub fn reconcile_blocked(&mut self) -> Result<(), String> {
         journal_persist("blocked").map_err(|e| format!("cannot persist intent: {e}"))?;
         self.teardown_marking_dirty();
-        killswitch::block_all().map_err(|e| {
+        self.seal().map_err(|e| {
             self.errored = true;
             format!("block: {e}")
         })?;
@@ -637,6 +646,19 @@ impl Manager {
         Ok(())
     }
 
+    /// Install the fail-closed blackhole, choosing the DNS-filtering variant
+    /// when the on-device filter is active so the port-53 redirect chain stays
+    /// installed. This is the ONE place a block is sealed, so the filter flag
+    /// and the armed kill-switch can never disagree about which ruleset is live.
+    fn seal(&mut self) -> Result<(), String> {
+        if self.dns_filter {
+            let resolvers = netops::resolvconf_nameservers();
+            killswitch::block_with_dns_filter(&resolvers).map_err(|e| e.to_string())
+        } else {
+            killswitch::block_all().map_err(|e| e.to_string())
+        }
+    }
+
     /// Toggle the on-device DNS blocklist. Enabling redirects ALL port-53
     /// traffic through the loopback filter (hardcoded-resolver bypasses
     /// included) and spawns the filter thread; disabling reverts to the plain
@@ -645,13 +667,18 @@ impl Manager {
         if enabled == self.dns_filter {
             return Ok(());
         }
+        // The kill-switch's DNS hole must reach the system stub (loopback is
+        // permitted by the blackhole); the filter's forward needs a REAL
+        // resolver — the stub drops queries from the filter's loopback socket.
         let resolvers = netops::resolvconf_nameservers();
-        if enabled && resolvers.is_empty() {
+        let filter_upstreams = netops::upstream_nameservers();
+        if enabled && filter_upstreams.is_empty() {
             return Err("no upstream resolvers found; DNS filter needs a resolver to forward to".into());
         }
-        // Re-seal with the DNS-filtering ruleset (redirect + marked holes) when
-        // the kill-switch is armed, so the filter's own upstream queries are
-        // permitted while every other port-53 packet is redirected.
+        // Install the redirect that forces port-53 through the loopback filter.
+        // When the kill-switch is armed the full DNS-filtering blackhole is
+        // used (redirect + marked holes); when egress is open the redirect-only
+        // ruleset applies so ad-blocking works without dropping any traffic.
         if self.egress == Egress::Blocked {
             if enabled {
                 killswitch::block_with_dns_filter(&resolvers).map_err(|e| {
@@ -664,10 +691,19 @@ impl Manager {
                     format!("block: {e}")
                 })?;
             }
+        } else if enabled {
+            killswitch::redirect_only().map_err(|e| {
+                self.errored = true;
+                format!("dns filter redirect: {e}")
+            })?;
+        } else {
+            // Open egress + filter off: nothing to remove (the redirect table
+            // lives in the same ripley_vpn table, removed by block_all/remove).
+            let _ = killswitch::remove();
         }
         if enabled {
             let rules = dnsfilter::parse_blocklist(DEFAULT_BLOCKLIST);
-            let upstreams: Vec<_> = resolvers
+            let upstreams: Vec<_> = filter_upstreams
                 .iter()
                 .filter_map(|ip| dnsfilter::upstream_from(&format!("{ip}:53")))
                 .collect();

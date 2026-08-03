@@ -122,19 +122,21 @@ pub fn block_with_dns(resolvers: &[IpAddr]) -> Result<(), NetError> {
 }
 
 /// Build the DNS-filtering blackhole: same fail-closed output chain as
-/// `blocked_ruleset`, plus a `dnat` output chain that redirects ALL locally
-/// generated port-53 traffic (UDP and TCP) to the loopback filter socket
+/// `blocked_ruleset`, plus a `dnat` output chain that redirects ALL port-53
+/// traffic leaving the host (UDP and TCP) to the loopback filter socket
 /// (`dnsfilter::FILTER_ADDR`). Redirecting — not just blocking — means an app
-/// hardcoding a resolver IP still hits the blocklist; only the filter's own
-/// outbound queries to `resolvers` are permitted, and they must carry the
-/// fwmark so the redirect does not loop them back.
+/// hardcoding a resolver IP still hits the blocklist. Only the filter's own
+/// outbound queries to `resolvers` are permitted (marked), and loopback-bound
+/// DNS (the system stub resolver, the filter's forward) is exempt from the
+/// redirect so the filter never loops into itself.
 pub fn blocked_ruleset_with_dns_filter(dns_exceptions: &[IpAddr]) -> String {
     let mut s = header();
     s.push_str(&format!("table inet {TABLE} {{\n"));
     s.push_str("    chain dns_redirect {\n");
     s.push_str("        type nat hook output priority -10; policy accept;\n");
-    s.push_str(&format!("        meta mark != {FWMARK} udp dport 53 redirect to 127.0.0.1:5353\n"));
-    s.push_str(&format!("        meta mark != {FWMARK} tcp dport 53 redirect to 127.0.0.1:5353\n"));
+    s.push_str("        oifname \"lo\" accept\n");
+    s.push_str(&format!("        meta mark != {FWMARK} udp dport 53 redirect to :5300\n"));
+    s.push_str(&format!("        meta mark != {FWMARK} tcp dport 53 redirect to :5300\n"));
     s.push_str("    }\n");
     s.push_str("    chain output {\n");
     s.push_str("        type filter hook output priority -100; policy drop;\n");
@@ -165,6 +167,28 @@ pub fn block_with_dns_filter(resolvers: &[IpAddr]) -> Result<(), NetError> {
         &["-f", "-"],
         blocked_ruleset_with_dns_filter(resolvers).as_bytes(),
     )
+}
+
+/// Build the DNS-redirect-only ruleset for OPEN egress: no traffic is dropped,
+/// but every port-53 packet leaving the host (UDP/TCP) is redirected to the
+/// loopback filter so ad-blocking still applies while clearnet is allowed.
+/// Loopback-destined DNS (system stub resolvers, the filter's own forward) is
+/// exempt — redirecting it would loop the filter back into itself.
+pub fn redirect_only_ruleset() -> String {
+    let mut s = header();
+    s.push_str(&format!("table inet {TABLE} {{\n"));
+    s.push_str("    chain dns_redirect {\n");
+    s.push_str("        type nat hook output priority -10; policy accept;\n");
+    s.push_str("        oifname \"lo\" accept\n");
+    s.push_str(&format!("        meta mark != {FWMARK} udp dport 53 redirect to :5300\n"));
+    s.push_str(&format!("        meta mark != {FWMARK} tcp dport 53 redirect to :5300\n"));
+    s.push_str("    }\n}\n");
+    s
+}
+
+/// Install the DNS-redirect-only ruleset for open egress.
+pub fn redirect_only() -> Result<(), NetError> {
+    run_stdin("nft", &["-f", "-"], redirect_only_ruleset().as_bytes())
 }
 
 /// Remove the kill-switch, re-opening clearnet. Idempotent (add-then-delete).
@@ -232,8 +256,8 @@ mod tests {
     fn dns_filter_ruleset_redirects_all_dns_and_marks_the_filter_hole() {
         let rs = blocked_ruleset_with_dns_filter(&["1.1.1.1".parse().unwrap()]);
         assert!(rs.contains("type nat hook output"));
-        assert!(rs.contains(&format!("meta mark != {FWMARK} udp dport 53 redirect to 127.0.0.1:5353")));
-        assert!(rs.contains(&format!("meta mark != {FWMARK} tcp dport 53 redirect to 127.0.0.1:5353")));
+        assert!(rs.contains(&format!("meta mark != {FWMARK} udp dport 53 redirect to :5300")));
+        assert!(rs.contains(&format!("meta mark != {FWMARK} tcp dport 53 redirect to :5300")));
         // Only the fwmark-carrying filter socket may reach the resolver.
         assert!(rs.contains(&format!("meta mark {FWMARK} ip daddr 1.1.1.1 udp dport 53 accept")));
         // A plain (unmarked) DNS packet to a resolver must NOT be accepted —
@@ -246,6 +270,15 @@ mod tests {
     fn dns_filter_ruleset_never_opens_unmarked_resolver_egress() {
         let rs = blocked_ruleset_with_dns_filter(&[]);
         assert_eq!(rs.matches("dport 53 accept").count(), 0);
-        assert!(rs.contains("redirect to 127.0.0.1:5353"));
+        assert!(rs.contains("redirect to :5300"));
+    }
+
+    #[test]
+    fn redirect_only_ruleset_has_no_drop_and_redirects_both_transports() {
+        let rs = redirect_only_ruleset();
+        assert!(!rs.contains("policy drop"));
+        assert!(rs.contains("meta mark != 0xca6c udp dport 53 redirect to :5300"));
+        assert!(rs.contains("meta mark != 0xca6c tcp dport 53 redirect to :5300"));
+        assert!(rs.contains("type nat hook output"));
     }
 }

@@ -14,8 +14,9 @@
 use std::net::SocketAddr;
 
 /// Loopback address the filter binds. Must match the nft `redirect to`
-/// target in `killswitch::blocked_ruleset_with_dns_filter`.
-pub const FILTER_ADDR: &str = "127.0.0.1:5353";
+/// target in `killswitch::blocked_ruleset_with_dns_filter`. Deliberately NOT
+/// 5353 — that is the mDNS port, which systemd-resolved/avahi already hold.
+pub const FILTER_ADDR: &str = "127.0.0.1:5300";
 
 /// DNS header is 12 bytes; qname labels are `<len><bytes>` terminated by a 0
 /// length byte, followed by 4 bytes of QTYPE+QCLASS.

@@ -245,6 +245,23 @@ pub fn resolvconf_nameservers() -> Vec<IpAddr> {
         .collect()
 }
 
+/// Real (non-loopback) nameservers — the resolvers the DNS filter should
+/// forward to. Loopback entries like 127.0.0.53 are the systemd-resolved stub,
+/// which answers queries from normal sockets but drops ones originating on the
+/// filter's loopback socket, so they are excluded. Falls back to well-known
+/// public resolvers when the config only lists a stub.
+pub fn upstream_nameservers() -> Vec<IpAddr> {
+    let real: Vec<IpAddr> = resolvconf_nameservers()
+        .into_iter()
+        .filter(|ip| !ip.is_loopback())
+        .collect();
+    if real.is_empty() {
+        vec!["1.1.1.1".parse().unwrap(), "8.8.8.8".parse().unwrap()]
+    } else {
+        real
+    }
+}
+
 /// Resolve the peer endpoint, retrying through a scoped DNS hole when the
 /// kill-switch is armed and the normal resolver is unreachable (its traffic is
 /// dropped by the blackhole). The blackhole is re-sealed immediately after the
