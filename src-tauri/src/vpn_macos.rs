@@ -821,6 +821,19 @@ fn destroy_tunnel_interface(iface: &str) -> Result<(), String> {
     }
 }
 
+/// Destroy whichever utun owns the route to `ip`, if any. A tunnel left behind
+/// by a failed/partial teardown keeps its split-default routes (`0/1`,
+/// `128/1`), which capture the DoH resolver addresses even after the default
+/// route has returned to the physical link — routing the DoH window into a
+/// dead interface. Keyed on the live route, not stale state, so it catches
+/// tunnels whose interface name state no longer records.
+fn destroy_tunnel_owning(ip: &str) {
+    let Some(iface) = route_field(ip, "interface").ok().filter(|i| i.starts_with("utun")) else {
+        return;
+    };
+    let _ = destroy_tunnel_interface(&iface);
+}
+
 fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String) -> String {
     // wg-quick down can refuse ("'ripley0' is not a WireGuard interface") even
     // when the utun is up; destroying the interface is the authoritative
@@ -880,11 +893,12 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
     }
     let previous = read_private_state();
     // A tunnel left behind by a failed/partial teardown owns split-default
-    // routes; the DoH resolution would be routed into it and die. Destroy any
-    // stale interface so the query egresses on the physical link.
-    if let Some(iface) = previous.interface.as_deref() {
-        let _ = run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]);
-    }
+    // routes that capture the DoH resolver addresses; the resolution would be
+    // routed into it and die. Destroy whatever utun owns those routes — keyed
+    // on the live route table, NOT stale state (a prior buggy teardown left
+    // interface: None while the tunnel survived).
+    destroy_tunnel_owning("1.1.1.1");
+    destroy_tunnel_owning("8.8.8.8");
     // The kill-switch pins the previous peer. If the previous tunnel is still
     // up, the DoH query is routed into it and the encapsulated WireGuard
     // transport to that peer must be permitted inside the window.
@@ -1016,12 +1030,18 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
     // name files. Destroying the interface is the authoritative teardown —
     // routes die with it — so a wg-quick refusal must not block it.
     let down = wg_quick("down");
+    // Prefer the interface named in state; fall back to whichever utun owns
+    // the resolver routes (a stale tunnel may survive with interface: None).
     let interface_gone = previous
         .interface
         .as_deref()
         .map(destroy_tunnel_interface)
         .map(|result| result.is_ok())
         .unwrap_or(false);
+    if !interface_gone {
+        destroy_tunnel_owning("1.1.1.1");
+        destroy_tunnel_owning("8.8.8.8");
+    }
     if down.is_err() && !interface_gone && !emergency && previous.interface.is_some() {
         let mut dirty = previous;
         dirty.phase = "error_blocked".into();
