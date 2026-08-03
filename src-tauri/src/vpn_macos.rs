@@ -794,6 +794,22 @@ fn pin_endpoint_route(endpoint: IpAddr, gateway: &str, physical: &str) -> Result
     Ok(())
 }
 
+/// Authoritative tunnel teardown: destroy the utun interface. Returns Ok when
+/// the interface is verifiably gone — either destroyed just now, or already
+/// absent (e.g. a dropped connection that the kernel cleaned up). wg-quick
+/// down alone is unreliable here (its stale-file heuristic can refuse), and a
+/// dropped tunnel may leave nothing to destroy, so "already gone" must not be
+/// treated as a teardown failure.
+fn destroy_tunnel_interface(iface: &str) -> Result<(), String> {
+    let _ = run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]);
+    // ifconfig <iface> exits non-zero when the interface does not exist.
+    if run(Path::new("/sbin/ifconfig"), &[iface]).is_err() {
+        Ok(())
+    } else {
+        Err(format!("WireGuard interface {iface} still present after destroy"))
+    }
+}
+
 fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String) -> String {
     // wg-quick down can refuse ("'ripley0' is not a WireGuard interface") even
     // when the utun is up; destroying the interface is the authoritative
@@ -803,7 +819,7 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
         let _ = wg_quick("down");
         read_tunnel_name()
             .ok()
-            .map(|iface| run(Path::new("/sbin/ifconfig"), &[iface.as_str(), "destroy"]))
+            .map(|iface| destroy_tunnel_interface(&iface))
             .and_then(|result| result.err())
     } else {
         None
@@ -989,12 +1005,13 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
     // name files. Destroying the interface is the authoritative teardown —
     // routes die with it — so a wg-quick refusal must not block it.
     let down = wg_quick("down");
-    let interface_destroyed = previous
+    let interface_gone = previous
         .interface
         .as_deref()
-        .map(|iface| run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]).is_ok())
+        .map(destroy_tunnel_interface)
+        .map(|result| result.is_ok())
         .unwrap_or(false);
-    if down.is_err() && !interface_destroyed && !emergency && previous.interface.is_some() {
+    if down.is_err() && !interface_gone && !emergency && previous.interface.is_some() {
         let mut dirty = previous;
         dirty.phase = "error_blocked".into();
         dirty.cleanup_required = true;
