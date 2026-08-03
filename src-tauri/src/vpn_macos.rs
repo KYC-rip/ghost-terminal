@@ -795,8 +795,19 @@ fn pin_endpoint_route(endpoint: IpAddr, gateway: &str, physical: &str) -> Result
 }
 
 fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String) -> String {
+    // wg-quick down can refuse ("'ripley0' is not a WireGuard interface") even
+    // when the utun is up; destroying the interface is the authoritative
+    // teardown, so attempt both.
     let had_interface = Path::new(WG_NAME_FILE).is_file();
-    let down = had_interface.then(|| wg_quick("down").err()).flatten();
+    let down = if had_interface {
+        let _ = wg_quick("down");
+        read_tunnel_name()
+            .ok()
+            .map(|iface| run(Path::new("/sbin/ifconfig"), &[iface.as_str(), "destroy"]))
+            .and_then(|result| result.err())
+    } else {
+        None
+    };
     if let Some(endpoint) = endpoint {
         // wg-quick normally removes this direct route. This explicit,
         // idempotent cleanup also covers failures before it acquired the
@@ -972,20 +983,23 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
 
 fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
     let previous = read_private_state();
+    // wg-quick down is best-effort on macOS: cmd_down() refuses with "'ripley0'
+    // is not a WireGuard interface" when its stale-file heuristic trips even
+    // though the utun is up, and on success it only unlinks the UAPI socket and
+    // name files. Destroying the interface is the authoritative teardown —
+    // routes die with it — so a wg-quick refusal must not block it.
     let down = wg_quick("down");
-    if down.is_err() && !emergency && previous.interface.is_some() {
+    let interface_destroyed = previous
+        .interface
+        .as_deref()
+        .map(|iface| run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]).is_ok())
+        .unwrap_or(false);
+    if down.is_err() && !interface_destroyed && !emergency && previous.interface.is_some() {
         let mut dirty = previous;
         dirty.phase = "error_blocked".into();
         dirty.cleanup_required = true;
         write_state(&dirty)?;
         return Err(down.unwrap_err());
-    }
-    // macOS wg-quick down only unlinks the UAPI socket and name files; the
-    // wireguard-go process, the utun interface, and its routes survive. A
-    // stale tunnel would swallow the DoH window on the next reconnect, so
-    // destroy the interface explicitly (routes die with it).
-    if let Some(iface) = previous.interface.as_deref() {
-        let _ = run(Path::new("/sbin/ifconfig"), &[iface, "destroy"]);
     }
     let _ = fs::remove_file(CONFIG_FILE);
     if restore {
