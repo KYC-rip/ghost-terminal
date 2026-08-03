@@ -77,6 +77,7 @@ const APP_COMMANDS: &[&str] = &[
     "resolve_openalias",
     "ros_native_fetch",
     "open_native_browser",
+    "open_external_url",
     "browser_embed_open",
     "browser_embed_bounds",
     "browser_embed_navigate",

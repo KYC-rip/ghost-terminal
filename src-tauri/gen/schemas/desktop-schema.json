@@ -2505,6 +2505,12 @@
           "markdownDescription": "Enables the local_ai_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-external-url",
+          "markdownDescription": "Enables the open_external_url command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_native_browser command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-native-browser",
@@ -3157,6 +3163,12 @@
           "type": "string",
           "const": "deny-local-ai-status",
           "markdownDescription": "Denies the local_ai_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-external-url",
+          "markdownDescription": "Denies the open_external_url command without any pre-configured scope."
         },
         {
           "description": "Denies the open_native_browser command without any pre-configured scope.",

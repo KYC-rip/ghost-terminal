@@ -21,6 +21,7 @@
     "allow-vpn-open-window",
     "allow-vpn-set-locale",
     "allow-open-native-browser",
+    "allow-open-external-url",
     "allow-browser-embed-open",
     "allow-browser-embed-bounds",
     "allow-browser-embed-navigate",

@@ -500,6 +500,7 @@ pub fn run() {
             commands::wallpaper::wallpaper_url,
             commands::wallpaper::wallpaper_clear,
             commands::system::open_native_browser,
+            commands::system::open_external_url,
             commands::system::browser_embed_open,
             commands::system::browser_embed_bounds,
             commands::system::browser_embed_navigate,

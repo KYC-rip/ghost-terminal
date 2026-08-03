@@ -118,6 +118,9 @@ const rosNative = {
     ipcRenderer.on('core-log', h)
     return () => ipcRenderer.removeListener('core-log', h)
   },
+  // OS default browser (Telegram t.me, etc.) — not the in-app ROS browser.
+  openExternal: (url: string) =>
+    ipcRenderer.invoke('open-external', url).then(() => undefined),
 }
 
 if (process.contextIsolated) {

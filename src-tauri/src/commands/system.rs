@@ -734,6 +734,46 @@ pub async fn open_native_browser(
     Ok(())
 }
 
+/// Open a URL in the OS default browser / handler (not the in-app ROS browser).
+/// Used for deep-links that need a real client — Telegram (t.me), mailto, etc.
+/// Only http(s) are allowed so a compromised ROS page can't hand `file:`/`cmd:` to open.
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    let parsed: tauri::Url = url.parse().map_err(|e| format!("invalid url: {e}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("refusing non-http(s) url ({scheme})"));
+    }
+    // Reject credentials-in-URL openers (rare phishing vector for OS handlers).
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("refusing url with embedded credentials".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open external url: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `start` is a cmd builtin; empty title arg so URLs with & aren't mangled.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("Failed to open external url: {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open external url: {e}"))?;
+    }
+    Ok(())
+}
+
 // ---- Embedded browser (child webview positioned over the ROS Browser frame) ----
 // Unlike open_native_browser (a separate window), this is a child webview of the
 // main window, positioned by the ROS Browser app over its content frame in logical
