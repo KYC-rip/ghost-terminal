@@ -18,11 +18,168 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{Ipv6Policy, WgConfig};
-use crate::{killswitch, netops, Egress, VpnPhase};
+use crate::{dnsfilter, killswitch, netops, Egress, VpnPhase};
 
 fn now_unix() -> Option<u64> {
     SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
+
+/// Built-in default blocklist: a small, self-contained ad/tracker list so the
+/// filter works with zero external dependencies. Overridable later via a
+/// persisted file; these are the always-on baseline.
+const DEFAULT_BLOCKLIST: &str = "\
+0.0.0.0 doubleclick.net\n\
+0.0.0.0 google-analytics.com\n\
+0.0.0.0 googletagmanager.com\n\
+0.0.0.0 facebook.com\n\
+0.0.0.0 fbcdn.net\n\
+0.0.0.0 ads.facebook.com\n\
+0.0.0.0 analytics.twitter.com\n\
+0.0.0.0 ads-twitter.com\n\
+0.0.0.0 scorecardresearch.com\n\
+0.0.0.0 criteo.com\n\
+0.0.0.0 taboola.com\n\
+0.0.0.0 outbrain.com\n\
+0.0.0.0 adnxs.com\n\
+0.0.0.0 adsrvr.org\n\
+0.0.0.0 bidswitch.net\n\
+0.0.0.0 openx.net\n\
+0.0.0.0 rubiconproject.com\n\
+0.0.0.0 pubmatic.com\n\
+0.0.0.0 moatads.com\n\
+0.0.0.0 2mdn.net\n\
+0.0.0.0 adservice.google.com\n\
+0.0.0.0 pagead2.googlesyndication.com\n\
+0.0.0.0 googlesyndication.com\n\
+0.0.0.0 googleadservices.com\n\
+0.0.0.0 adwords.google.com\n\
+0.0.0.0 quantserve.com\n\
+0.0.0.0 mathtag.com\n\
+0.0.0.0 kontera.com\n\
+0.0.0.0 bluekai.com\n\
+0.0.0.0 demdex.net\n\
+0.0.0.0 everesttech.net\n\
+0.0.0.0 nr-data.net\n\
+0.0.0.0 mixpanel.com\n\
+0.0.0.0 segment.com\n\
+0.0.0.0 amplitude.com\n\
+0.0.0.0 hotjar.com\n\
+0.0.0.0 fullstory.com\n\
+0.0.0.0 brave.com\n\
+0.0.0.0 yandex.ru\n\
+0.0.0.0 mc.yandex.ru\n\
+0.0.0.0 yandex.com\n\
+0.0.0.0 adroll.com\n\
+0.0.0.0 zendesk.com\n\
+0.0.0.0 intercom.io\n\
+0.0.0.0 drift.com\n\
+0.0.0.0 branch.io\n\
+0.0.0.0 appsflyer.com\n\
+0.0.0.0 adjust.com\n\
+0.0.0.0 appsflyer.com\n\
+0.0.0.0 tapjoy.com\n\
+0.0.0.0 vungle.com\n\
+0.0.0.0 unityads.unity3d.com\n\
+0.0.0.0 inmobi.com\n\
+0.0.0.0 smaato.com\n\
+0.0.0.0 inner-active.mobi\n\
+0.0.0.0 startappservice.com\n\
+0.0.0.0 chartboost.com\n\
+0.0.0.0 admob.com\n\
+0.0.0.0 crashlytics.com\n\
+0.0.0.0 fabric.io\n\
+0.0.0.0 firebaseio.com\n\
+0.0.0.0 app-measurement.com\n\
+0.0.0.0 sentry.io\n\
+0.0.0.0 bugsnag.com\n\
+0.0.0.0 rollbar.com\n\
+0.0.0.0 airbrake.io\n\
+0.0.0.0 raygun.io\n\
+0.0.0.0 newrelic.com\n\
+0.0.0.0 dynatrace.com\n\
+0.0.0.0 datadoghq.com\n\
+0.0.0.0 statcounter.com\n\
+0.0.0.0 clickfunnels.com\n\
+0.0.0.0 unbounce.com\n\
+0.0.0.0 optimizely.com\n\
+0.0.0.0 crazyegg.com\n\
+0.0.0.0 mouseflow.com\n\
+0.0.0.0 clarity.ms\n\
+0.0.0.0 clarity.microsoft.com\n\
+0.0.0.0 smartlook.com\n\
+0.0.0.0 luckyorange.com\n\
+0.0.0.0 inspectlet.com\n\
+0.0.0.0 gosquared.com\n\
+0.0.0.0 kissmetrics.com\n\
+0.0.0.0 kxcdn.com\n\
+0.0.0.0 maxcdn.com\n\
+0.0.0.0 jsdelivr.net\n\
+0.0.0.0 unpkg.com\n\
+0.0.0.0 cdnjs.cloudflare.com\n\
+0.0.0.0 cloudflareinsights.com\n\
+0.0.0.0 beacons.gcp.gvt2.com\n\
+0.0.0.0 safebrowsing.googleapis.com\n\
+0.0.0.0 safebrowsing.google.com\n\
+0.0.0.0 fonts.gstatic.com\n\
+0.0.0.0 ajax.googleapis.com\n\
+0.0.0.0 apis.google.com\n\
+0.0.0.0 gstatic.com\n\
+0.0.0.0 ytimg.com\n\
+0.0.0.0 googlevideo.com\n\
+0.0.0.0 doubleverify.com\n\
+0.0.0.0 adsrvr.org\n\
+0.0.0.0 33across.com\n\
+0.0.0.0 sovrn.com\n\
+0.0.0.0 sharethrough.com\n\
+0.0.0.0 rhythmone.com\n\
+0.0.0.0 sonobi.com\n\
+0.0.0.0 districtm.io\n\
+0.0.0.0 casalemedia.com\n\
+0.0.0.0 contextweb.com\n\
+0.0.0.0 spotxchange.com\n\
+0.0.0.0 spotx.tv\n\
+0.0.0.0 tremorhub.com\n\
+0.0.0.0 yldbt.com\n\
+0.0.0.0 adsafeprotected.com\n\
+0.0.0.0 adhigh.net\n\
+0.0.0.0 adxgate.com\n\
+0.0.0.0 aloodo.com\n\
+0.0.0.0 atdmt.com\n\
+0.0.0.0 atwola.com\n\
+0.0.0.0 bfast.com\n\
+0.0.0.0 casalemedia.com\n\
+0.0.0.0 casclick.com\n\
+0.0.0.0 casm.com\n\
+0.0.0.0 contentabc.com\n\
+0.0.0.0 elitedaily.com\n\
+0.0.0.0 exelator.com\n\
+0.0.0.0 eyeota.net\n\
+0.0.0.0 indexexchange.com\n\
+0.0.0.0 intellitxt.com\n\
+0.0.0.0 kargo.com\n\
+0.0.0.0 media6degrees.com\n\
+0.0.0.0 nxtck.com\n\
+0.0.0.0 onscroll.com\n\
+0.0.0.0 pixanalytics.com\n\
+0.0.0.0 proclivitysystems.com\n\
+0.0.0.0 propellerads.com\n\
+0.0.0.0 pulsepoint.com\n\
+0.0.0.0 pubgrub.com\n\
+0.0.0.0 skimlinks.com\n\
+0.0.0.0 smartadserver.com\n\
+0.0.0.0 taboolasyndication.com\n\
+0.0.0.0 teads.tv\n\
+0.0.0.0 trackjs.com\n\
+0.0.0.0 tubemogul.com\n\
+0.0.0.0 turn.com\n\
+0.0.0.0 underdogmedia.com\n\
+0.0.0.0 usemax.de\n\
+0.0.0.0 viglink.com\n\
+0.0.0.0 wikia.com\n\
+0.0.0.0 yieldmanager.com\n\
+0.0.0.0 yieldmo.com\n\
+0.0.0.0 zedo.com\n\
+";
 
 const JOURNAL_DIR: &str = "/var/lib/ripley-vpn";
 const JOURNAL: &str = "/var/lib/ripley-vpn/state";
@@ -45,6 +202,8 @@ pub struct View {
     /// A prior teardown left possibly-stale routes/DNS/iface — a normal restore
     /// will refuse to open until it verifies a clean teardown (emergency forces).
     pub cleanup_required: bool,
+    /// The on-device DNS blocklist filter is active.
+    pub dns_filter: bool,
 }
 
 /// The in-memory state captured UNDER the lock. Deliberately IO-free — the
@@ -62,6 +221,7 @@ pub struct Base {
     profile_name: Option<String>,
     /// Process-local epoch seconds when the tunnel last became configured.
     connected_since_unix: Option<u64>,
+    dns_filter: bool,
 }
 
 /// Finalize a snapshot: probe the handshake (bounded, outside the lock) and
@@ -122,6 +282,7 @@ pub fn finalize(b: Base) -> View {
         received_bytes: transfer.map(|value| value.0),
         sent_bytes: transfer.map(|value| value.1),
         cleanup_required: b.dirty,
+        dns_filter: b.dns_filter,
     }
 }
 
@@ -136,6 +297,7 @@ pub struct Manager {
     dirty: bool,      // a teardown left (possibly) stale routes/DNS/iface
     profile_name: Option<String>, // display-only; cleared when tunnel is down
     connected_since_unix: Option<u64>, // session start for uptime (process-local)
+    dns_filter: bool, // loopback DNS blocklist filter is running
 }
 
 /// Atomic, durable journal write. tmp → fsync → rename → fsync(dir).
@@ -208,6 +370,7 @@ impl Manager {
             dirty: false,
             profile_name: None,
             connected_since_unix: None,
+            dns_filter: false,
         }
     }
 
@@ -285,6 +448,7 @@ impl Manager {
             dirty: self.dirty,
             profile_name: self.profile_name.clone(),
             connected_since_unix: self.connected_since_unix,
+            dns_filter: self.dns_filter,
         }
     }
 
@@ -472,6 +636,52 @@ impl Manager {
         self.connected_since_unix = None;
         Ok(())
     }
+
+    /// Toggle the on-device DNS blocklist. Enabling redirects ALL port-53
+    /// traffic through the loopback filter (hardcoded-resolver bypasses
+    /// included) and spawns the filter thread; disabling reverts to the plain
+    /// block. The flag is process-local and defaults OFF after a restart.
+    pub fn set_dns_filter(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled == self.dns_filter {
+            return Ok(());
+        }
+        let resolvers = netops::resolvconf_nameservers();
+        if enabled && resolvers.is_empty() {
+            return Err("no upstream resolvers found; DNS filter needs a resolver to forward to".into());
+        }
+        // Re-seal with the DNS-filtering ruleset (redirect + marked holes) when
+        // the kill-switch is armed, so the filter's own upstream queries are
+        // permitted while every other port-53 packet is redirected.
+        if self.egress == Egress::Blocked {
+            if enabled {
+                killswitch::block_with_dns_filter(&resolvers).map_err(|e| {
+                    self.errored = true;
+                    format!("dns filter block: {e}")
+                })?;
+            } else {
+                killswitch::block_all().map_err(|e| {
+                    self.errored = true;
+                    format!("block: {e}")
+                })?;
+            }
+        }
+        if enabled {
+            let rules = dnsfilter::parse_blocklist(DEFAULT_BLOCKLIST);
+            let upstreams: Vec<_> = resolvers
+                .iter()
+                .filter_map(|ip| dnsfilter::upstream_from(&format!("{ip}:53")))
+                .collect();
+            crate::dns_worker::start(upstreams, rules).map_err(|e| {
+                self.errored = true;
+                format!("start dns filter: {e}")
+            })?;
+        } else {
+            crate::dns_worker::stop();
+        }
+        self.dns_filter = enabled;
+        self.errored = false;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -490,6 +700,7 @@ mod tests {
             dirty: false,
             profile_name: None,
             connected_since_unix: None,
+            dns_filter: false,
         }
     }
 

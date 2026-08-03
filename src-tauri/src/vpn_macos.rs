@@ -597,6 +597,17 @@ fn pf_rules_doh_only(prev_endpoint: Option<(IpAddr, u16)>) -> String {
     rules
 }
 
+/// DNS-filter rdr rules for the loopback filter (`dnsfilter::FILTER_ADDR`).
+/// Redirects ALL outbound port-53 (UDP and TCP) to the on-device filter so
+/// hardcoded-resolver bypasses still hit the blocklist. The filter runs in the
+/// app process; this ruleset is installed by the helper when DNS filtering is
+/// enabled and removed on disable.
+fn pf_rules_dns_filter() -> String {
+    "rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5353\n\
+     rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5353\n"
+        .to_string()
+}
+
 fn enable_pf() -> Result<Option<String>, String> {
     // Darwin's pfctl writes its reference-count token to stderr on some OS
     // releases even when the command succeeds. Preserve both streams so we
@@ -1494,6 +1505,37 @@ mod tests {
             ),
         );
         assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn dns_filter_rdr_rules_redirect_both_transports_to_loopback() {
+        let rules = pf_rules_dns_filter();
+        assert!(rules.contains("rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5353"));
+        assert!(rules.contains("rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5353"));
+        assert!(!rules.contains("block"));
+    }
+
+    #[test]
+    fn dns_filter_rdr_rules_parse() {
+        let parsed = run_capture(
+            Path::new("/sbin/pfctl"),
+            &["-nf", "-"],
+            Some(pf_rules_dns_filter().as_bytes()),
+        );
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn destroy_of_an_interface_that_never_existed_is_not_a_failure() {
+        // A dropped tunnel leaves nothing to destroy; the helper must report the
+        // interface as gone, not as a teardown failure (this is what made a
+        // reconnect after a drop throw "'ripley0' is not a WireGuard interface").
+        let probe = format!("ripley-dne-{}", std::process::id());
+        assert_eq!(destroy_tunnel_interface(&probe), Ok(()));
+        assert!(
+            run(Path::new("/sbin/ifconfig"), &[probe.as_str()]).is_err(),
+            "probe interface unexpectedly exists"
+        );
     }
 
     #[test]

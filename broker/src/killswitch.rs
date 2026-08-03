@@ -121,6 +121,52 @@ pub fn block_with_dns(resolvers: &[IpAddr]) -> Result<(), NetError> {
     run_stdin("nft", &["-f", "-"], blocked_ruleset(resolvers).as_bytes())
 }
 
+/// Build the DNS-filtering blackhole: same fail-closed output chain as
+/// `blocked_ruleset`, plus a `dnat` output chain that redirects ALL locally
+/// generated port-53 traffic (UDP and TCP) to the loopback filter socket
+/// (`dnsfilter::FILTER_ADDR`). Redirecting — not just blocking — means an app
+/// hardcoding a resolver IP still hits the blocklist; only the filter's own
+/// outbound queries to `resolvers` are permitted, and they must carry the
+/// fwmark so the redirect does not loop them back.
+pub fn blocked_ruleset_with_dns_filter(dns_exceptions: &[IpAddr]) -> String {
+    let mut s = header();
+    s.push_str(&format!("table inet {TABLE} {{\n"));
+    s.push_str("    chain dns_redirect {\n");
+    s.push_str("        type nat hook output priority -10; policy accept;\n");
+    s.push_str(&format!("        meta mark != {FWMARK} udp dport 53 redirect to 127.0.0.1:5353\n"));
+    s.push_str(&format!("        meta mark != {FWMARK} tcp dport 53 redirect to 127.0.0.1:5353\n"));
+    s.push_str("    }\n");
+    s.push_str("    chain output {\n");
+    s.push_str("        type filter hook output priority -100; policy drop;\n");
+    s.push_str("        oifname \"lo\" accept\n");
+    s.push_str("        udp dport 67 udp sport 68 accept\n");
+    s.push_str("        icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept\n");
+    for ip in dns_exceptions {
+        match ip {
+            IpAddr::V4(v4) => {
+                s.push_str(&format!("        meta mark {FWMARK} ip daddr {v4} udp dport 53 accept\n"));
+                s.push_str(&format!("        meta mark {FWMARK} ip daddr {v4} tcp dport 53 accept\n"));
+            }
+            IpAddr::V6(v6) => {
+                s.push_str(&format!("        meta mark {FWMARK} ip6 daddr {v6} udp dport 53 accept\n"));
+                s.push_str(&format!("        meta mark {FWMARK} ip6 daddr {v6} tcp dport 53 accept\n"));
+            }
+        }
+    }
+    s.push_str("    }\n}\n");
+    s
+}
+
+/// Install the DNS-filtering blackhole. The caller MUST start the loopback
+/// filter (`dnsfilter::run`) and re-seal (`block_all`) when done.
+pub fn block_with_dns_filter(resolvers: &[IpAddr]) -> Result<(), NetError> {
+    run_stdin(
+        "nft",
+        &["-f", "-"],
+        blocked_ruleset_with_dns_filter(resolvers).as_bytes(),
+    )
+}
+
 /// Remove the kill-switch, re-opening clearnet. Idempotent (add-then-delete).
 pub fn remove() -> Result<(), NetError> {
     run_stdin("nft", &["-f", "-"], header().as_bytes())
@@ -180,5 +226,26 @@ mod tests {
         assert!(!rs.contains("dport 443"));
         assert!(!rs.contains("meta mark"));
         assert_eq!(blocked_ruleset(&[]).matches("dport 53 accept").count(), 0);
+    }
+
+    #[test]
+    fn dns_filter_ruleset_redirects_all_dns_and_marks_the_filter_hole() {
+        let rs = blocked_ruleset_with_dns_filter(&["1.1.1.1".parse().unwrap()]);
+        assert!(rs.contains("type nat hook output"));
+        assert!(rs.contains(&format!("meta mark != {FWMARK} udp dport 53 redirect to 127.0.0.1:5353")));
+        assert!(rs.contains(&format!("meta mark != {FWMARK} tcp dport 53 redirect to 127.0.0.1:5353")));
+        // Only the fwmark-carrying filter socket may reach the resolver.
+        assert!(rs.contains(&format!("meta mark {FWMARK} ip daddr 1.1.1.1 udp dport 53 accept")));
+        // A plain (unmarked) DNS packet to a resolver must NOT be accepted —
+        // it is redirected instead, never allowed through directly.
+        assert!(!rs.contains("ip daddr 1.1.1.1 udp dport 53 accept"));
+        assert!(rs.contains("policy drop;"));
+    }
+
+    #[test]
+    fn dns_filter_ruleset_never_opens_unmarked_resolver_egress() {
+        let rs = blocked_ruleset_with_dns_filter(&[]);
+        assert_eq!(rs.matches("dport 53 accept").count(), 0);
+        assert!(rs.contains("redirect to 127.0.0.1:5353"));
     }
 }

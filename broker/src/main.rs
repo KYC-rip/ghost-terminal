@@ -33,6 +33,8 @@ use nix::unistd::{chown, Gid, Group, Pid, Uid};
 use serde::{Deserialize, Deserializer, Serialize};
 use zeroize::Zeroizing;
 
+mod dns_worker;
+mod dnsfilter;
 mod killswitch;
 mod netops;
 mod parser;
@@ -139,6 +141,8 @@ struct StatusSnapshot {
     /// A prior teardown left possibly-stale state; a normal restore stays blocked
     /// until it verifies a clean teardown (emergency forces).
     cleanup_required: bool,
+    /// The on-device DNS blocklist filter is active.
+    dns_filter: bool,
     error_code: Option<ErrCode>,
 }
 
@@ -160,6 +164,7 @@ impl StatusSnapshot {
             received_bytes: None,
             sent_bytes: None,
             cleanup_required: false,
+            dns_filter: false,
             error_code: None,
         }
     }
@@ -208,6 +213,10 @@ enum Request {
     /// Reconcile toward the fail-closed blocked state after a crash (clears stale
     /// rules WITHOUT re-opening egress). Safe by construction, so not strong-auth.
     ReconcileBlockedState,
+    /// Toggle the on-device DNS blocklist. Tightens egress (never opens it), so
+    /// it needs no strong authorization: enabling filters + redirects port 53,
+    /// disabling reverts to the pre-toggle ruleset. Fail-safe default: OFF.
+    SetDnsFilter { enabled: bool },
 }
 
 #[derive(Debug, Serialize)]
@@ -610,6 +619,8 @@ fn dispatch(env: Envelope, uid: Uid, pid: Option<Pid>) -> Response {
         },
         // Fail-closed by construction → no strong-auth gate.
         Request::ReconcileBlockedState => run_op(id, |m| m.reconcile_blocked()),
+        // Tightens egress (never opens it) → no strong-auth gate.
+        Request::SetDnsFilter { enabled } => run_op(id, |m| m.set_dns_filter(enabled)),
     }
 }
 
@@ -645,6 +656,7 @@ fn snapshot_from(view: state::View) -> StatusSnapshot {
         received_bytes: view.received_bytes,
         sent_bytes: view.sent_bytes,
         cleanup_required: view.cleanup_required,
+        dns_filter: view.dns_filter,
         error_code: None,
     }
 }
