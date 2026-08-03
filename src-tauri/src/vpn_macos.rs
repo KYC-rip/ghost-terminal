@@ -45,6 +45,15 @@ const PUBLIC_STATUS: &str = "/var/run/ripley-vpn/status.json";
 const CONFIG_FILE: &str = "/var/run/ripley-vpn/ripley0.conf";
 const WG_NAME_FILE: &str = "/var/run/wireguard/ripley0.name";
 const PF_ANCHOR: &str = "com.apple/ripley-vpn";
+/// Separate anchor for the DNS-filter rdr rules so they never clobber the
+/// kill-switch anchor (pfctl -f replaces an anchor's contents wholesale).
+const PF_ANCHOR_DNS: &str = "com.apple/ripley-dns";
+/// Port the app-side DNS filter proxy listens on. The rdr rules redirect
+/// port-53 here; the filter's OWN upstream queries use a fixed source port
+/// (`DNS_FILTER_FWD_PORT`) that a `no rdr` rule exempts, so the filter never
+/// redirects itself into a loop.
+pub const DNS_FILTER_ADDR: &str = "127.0.0.1:5300";
+pub const DNS_FILTER_FWD_PORT: &str = "5301";
 
 struct SecretText(Zeroizing<String>);
 
@@ -69,6 +78,10 @@ enum HelperRequest {
     DisableKillSwitch,
     ReconcileBlockedState,
     EmergencyRestoreClearnet,
+    /// Toggle the DNS-filter rdr rules in the dedicated anchor. Tightening-only
+    /// (redirects port-53 to the loopback filter; never opens egress), so no
+    /// strong-auth gate. The app process runs the filter proxy.
+    SetDnsFilter { enabled: bool },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -88,6 +101,10 @@ struct MacState {
     /// Pinned peer `ip:port` while a tunnel is up (for live speed probes).
     #[serde(default)]
     endpoint: Option<String>,
+    /// The DNS-filter rdr rules are installed (loopback filter proxy running
+    /// in the app process).
+    #[serde(default)]
+    dns_filter: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pf_token: Option<String>,
 }
@@ -112,6 +129,7 @@ impl MacState {
             profile_name: None,
             connected_at_unix: None,
             endpoint: None,
+            dns_filter: false,
             pf_token: None,
         }
     }
@@ -128,6 +146,7 @@ impl MacState {
             profile_name: None,
             connected_at_unix: None,
             endpoint: None,
+            dns_filter: false,
             pf_token: token,
         }
     }
@@ -146,6 +165,7 @@ impl MacState {
             "uptime_secs": uptime_secs,
             "connected_at_unix": self.connected_at_unix,
             "endpoint": self.endpoint,
+            "dns_filter": self.dns_filter,
             "received_bytes": Value::Null,
             "sent_bytes": Value::Null,
             "cleanup_required": self.cleanup_required,
@@ -597,15 +617,34 @@ fn pf_rules_doh_only(prev_endpoint: Option<(IpAddr, u16)>) -> String {
     rules
 }
 
-/// DNS-filter rdr rules for the loopback filter (`dnsfilter::FILTER_ADDR`).
+/// DNS-filter rdr rules for the loopback filter (`DNS_FILTER_ADDR`).
 /// Redirects ALL outbound port-53 (UDP and TCP) to the on-device filter so
-/// hardcoded-resolver bypasses still hit the blocklist. The filter runs in the
-/// app process; this ruleset is installed by the helper when DNS filtering is
-/// enabled and removed on disable.
+/// hardcoded-resolver bypasses still hit the blocklist. The filter's OWN
+/// upstream queries use source port `DNS_FILTER_FWD_PORT`, exempted by the
+/// `no rdr` rules, so the filter never redirects itself into a loop.
 fn pf_rules_dns_filter() -> String {
-    "rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5300\n\
-     rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5300\n"
-        .to_string()
+    format!(
+        "no rdr proto udp from any port = {fwd} to any\n\
+         no rdr proto tcp from any port = {fwd} to any\n\
+         rdr pass proto udp from any to any port = 53 -> 127.0.0.1 port 5300\n\
+         rdr pass proto tcp from any to any port = 53 -> 127.0.0.1 port 5300\n",
+        fwd = DNS_FILTER_FWD_PORT
+    )
+}
+
+/// Install the DNS-filter rdr rules into the dedicated anchor (never the
+/// kill-switch anchor, which pfctl -f would replace wholesale).
+fn load_pf_dns(rules: &str) -> Result<(), String> {
+    run_capture(
+        Path::new("/sbin/pfctl"),
+        &["-a", PF_ANCHOR_DNS, "-f", "-"],
+        Some(rules.as_bytes()),
+    )
+    .map(|_| ())
+}
+
+fn clear_pf_dns() -> Result<(), String> {
+    run(Path::new("/sbin/pfctl"), &["-a", PF_ANCHOR_DNS, "-F", "all"])
 }
 
 fn enable_pf() -> Result<Option<String>, String> {
@@ -827,10 +866,19 @@ fn destroy_tunnel_interface(iface: &str) -> Result<(), String> {
 /// route has returned to the physical link — routing the DoH window into a
 /// dead interface. Keyed on the live route, not stale state, so it catches
 /// tunnels whose interface name state no longer records.
+///
+/// NEVER destroys the interface named in `/var/run/wireguard/ripley0.name`:
+/// that is the LIVE WireGuard tunnel. A transparent proxy (Clash/Mihomo) can
+/// also own split-default routes through a utun that shares the same number
+/// (e.g. both on utun7), so the route owner must not be assumed to be stale.
 fn destroy_tunnel_owning(ip: &str) {
     let Some(iface) = route_field(ip, "interface").ok().filter(|i| i.starts_with("utun")) else {
         return;
     };
+    let live = fs::read_to_string(WG_NAME_FILE).unwrap_or_default();
+    if live.trim() == iface {
+        return;
+    }
     let _ = destroy_tunnel_interface(&iface);
 }
 
@@ -872,6 +920,7 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
         profile_name: None,
         connected_at_unix: None,
         endpoint: None,
+        dns_filter: false,
         pf_token: token.clone(),
     };
     let _ = write_state(&dirty);
@@ -949,6 +998,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         profile_name: profile_name.clone(),
         connected_at_unix: None,
         endpoint: Some(endpoint_label.clone()),
+        dns_filter: false,
         pf_token: token.clone(),
     };
     if let Err(error) = write_state(&connecting) {
@@ -1014,6 +1064,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         profile_name,
         connected_at_unix: now_unix(),
         endpoint: Some(endpoint_label),
+        dns_filter: false,
         pf_token: token.clone(),
     };
     if let Err(error) = write_state(&connected) {
@@ -1103,6 +1154,32 @@ fn handle(request: HelperRequest) -> Result<MacState, String> {
             let open = MacState::open();
             write_state(&open)?;
             Ok(open)
+        }
+        // Tightening-only (redirects port-53 to the loopback filter), so no
+        // strong-auth gate. Enabling PF when inactive; disabling flushes the
+        // dedicated anchor. The filter proxy itself runs in the app process.
+        HelperRequest::SetDnsFilter { enabled } => {
+            let mut state = read_private_state();
+            let token = if enabled {
+                if state.killswitch_active {
+                    state.pf_token.clone()
+                } else {
+                    Some(enable_pf()?.unwrap_or_default())
+                }
+            } else {
+                state.pf_token.clone()
+            };
+            if enabled {
+                load_pf_dns(&pf_rules_dns_filter())?;
+            } else {
+                clear_pf_dns()?;
+            }
+            state.dns_filter = enabled;
+            if enabled && state.pf_token.is_none() {
+                state.pf_token = token;
+            }
+            write_state(&state)?;
+            Ok(state)
         }
         HelperRequest::EmergencyRestoreClearnet => disconnect(true, true),
     }
