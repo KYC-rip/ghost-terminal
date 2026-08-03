@@ -8,10 +8,10 @@
 In an era of pervasive financial surveillance and the rise of autonomous intelligence, `ripley-terminal` provides a local, hardware-agnostic encryption layer. It is built for those who demand absolute control over their digital assets, identity, and the ability to delegate financial agency to AI.
 
 ## 🛠 Tech Stack
-- **Framework**: Electron + Vite
+- **Framework**: Tauri 2 (Rust core + system webview)
 - **Frontend**: React 19 + Vanilla CSS (Tactical UI)
 - **Engine**: High-availability Monero RPC Wrapper (Replaces `monero-ts` for multi-platform stability)
-- **Networking**: Mandatory Tor routing via integrated Tor Expert Bundle
+- **Networking**: Mandatory Tor routing via embedded Arti (Rust `arti-client`, `.onion` node support)
 - **Reliability**: SWR caching and real-time state synchronization
 - **Intelligence**: Built-in AI Agent Gateway (Secure RPC Uplink)
 - **CI/CD**: Multi-platform automated builds (macOS arm64/x64, Linux x64)
