@@ -882,6 +882,35 @@ fn destroy_tunnel_owning(ip: &str) {
     let _ = destroy_tunnel_interface(&iface);
 }
 
+/// Kill orphaned `wg-quick up` / `route -n monitor` processes. wg-quick's
+/// `monitor_daemon` runs `route -n monitor` forever and re-adds endpoint routes
+/// on every RTM event; a teardown that skips `del_if`/`del_routes` leaves it
+/// alive as an orphan (PPID 1). During a reconnect it reacts to the connect's
+/// route changes and re-adds routes into stale interface state at the exact
+/// moment the DoH window is active — swallowing the resolver SYN. Reap any
+/// such process before bringing a tunnel up.
+///
+/// Only PPID-1 (reparented/orphaned) wg-quick processes are killed — a live
+/// `wg_quick("up")` under our own helper is a child, not an orphan, and must
+/// not be reaped mid-flight. pkill's `-P 1 -f` combination matches unrelated
+/// root daemons on macOS, so the PPID check is done in-shell on a match
+/// scoped to our own config path (unique to Ripley, can't hit other daemons).
+fn reap_orphan_wgquick() {
+    let bash = tool("bash").ok();
+    if let Some(bash) = bash {
+        let _ = run(
+            &bash,
+            &[
+                "-c",
+                &format!(
+                    "for pid in $(pgrep -f '{marker}' 2>/dev/null); do [ \"$(ps -o ppid= -p $pid 2>/dev/null | tr -d ' ')\" = 1 ] && kill $pid 2>/dev/null; done; true",
+                    marker = format!("wg-quick up {}", CONFIG_FILE)
+                ),
+            ],
+        );
+    }
+}
+
 fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String) -> String {
     // wg-quick down can refuse ("'ripley0' is not a WireGuard interface") even
     // when the utun is up; destroying the interface is the authoritative
@@ -895,8 +924,7 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
             .and_then(|result| result.err())
     } else {
         None
-    };
-    if let Some(endpoint) = endpoint {
+    };    if let Some(endpoint) = endpoint {
         // wg-quick normally removes this direct route. This explicit,
         // idempotent cleanup also covers failures before it acquired the
         // interface.
@@ -946,6 +974,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
     // routed into it and die. Destroy whatever utun owns those routes — keyed
     // on the live route table, NOT stale state (a prior buggy teardown left
     // interface: None while the tunnel survived).
+    reap_orphan_wgquick();
     destroy_tunnel_owning("1.1.1.1");
     destroy_tunnel_owning("8.8.8.8");
     // The kill-switch pins the previous peer. If the previous tunnel is still
@@ -1083,6 +1112,7 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
     let down = wg_quick("down");
     // Prefer the interface named in state; fall back to whichever utun owns
     // the resolver routes (a stale tunnel may survive with interface: None).
+    reap_orphan_wgquick();
     let interface_gone = previous
         .interface
         .as_deref()
