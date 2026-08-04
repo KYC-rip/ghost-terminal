@@ -101,10 +101,12 @@ struct MacState {
     /// Pinned peer `ip:port` while a tunnel is up (for live speed probes).
     #[serde(default)]
     endpoint: Option<String>,
-    /// Last successful DNS resolution: `hostname ip` so a reconnect can reuse
-    /// the IP without touching DNS. Critical on networks where the DoH window
-    /// (direct 1.1.1.1:443) is blocked by the ISP while the kill-switch is
-    /// armed — the tunnel's own DNS (10.0.0.20) is unreachable when down.
+    /// Last successful DNS resolutions: newline-separated `hostname ip` entries
+    /// for EVERY hostname we've ever connected to, so reconnecting to ANY
+    /// previously-used node (e.g. switching when one is down) skips DNS. Critical
+    /// on networks where the DoH window (direct 1.1.1.1:443) is blocked by the
+    /// ISP while the kill-switch is armed — the tunnel's own DNS (10.0.0.20) is
+    /// unreachable when down.
     #[serde(default)]
     resolved_endpoint: Option<String>,
     /// The DNS-filter rdr rules are installed (loopback filter proxy running
@@ -477,15 +479,16 @@ fn resolve_connect_endpoint(
         EndpointHost::Ip(ip) => Ok(*ip),
         EndpointHost::Dns(host) if !blocked => endpoint_ip(cfg),
         EndpointHost::Dns(host) => {
-            // If we resolved this exact hostname before, reuse the IP — the DoH
+            // Reuse the IP if we've ever resolved this exact hostname — the DoH
             // window is blocked on some networks (direct 1.1.1.1:443 dropped by
-            // the ISP), so reconnect must not depend on DNS.
-            let cached = read_private_state()
-                .resolved_endpoint
-                .and_then(|entry| {
+            // the ISP), so reconnect to ANY previously-used node must not depend
+            // on DNS. The cache is a newline map: "host ip" per line.
+            let cached = read_private_state().resolved_endpoint.and_then(|entries| {
+                entries.lines().find_map(|entry| {
                     let (cached_host, cached_ip) = entry.split_once(' ')?;
                     (cached_host == host).then(|| cached_ip.parse::<IpAddr>().ok())?
-                });
+                })
+            });
             if let Some(ip) = cached {
                 eprintln!("ripley-vpn: reusing cached endpoint {ip} for {host}");
                 return Ok(ip);
@@ -1146,11 +1149,32 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         profile_name,
         connected_at_unix: now_unix(),
         endpoint: Some(endpoint_label),
-        // Remember hostname → IP so a reconnect with the kill-switch armed can
-        // skip DNS entirely (the DoH window may be ISP-blocked).
-        resolved_endpoint: match cfg.endpoint().host() {
-            EndpointHost::Dns(host) => Some(format!("{host} {endpoint}")),
-            EndpointHost::Ip(_) => None,
+        // Remember hostname → IP for EVERY node we connect to, so switching
+        // nodes later (e.g. one is down) can skip DNS (the DoH window may be
+        // ISP-blocked). Append/replace in the newline map.
+        resolved_endpoint: {
+            let entry = match cfg.endpoint().host() {
+                EndpointHost::Dns(host) => Some(format!("{host} {endpoint}")),
+                EndpointHost::Ip(_) => None,
+            };
+            let existing = previous.resolved_endpoint.unwrap_or_default();
+            let kept: Vec<&str> = entry
+                .as_ref()
+                .map(|new| {
+                    existing
+                        .lines()
+                        .filter(|line| line.split_once(' ').map(|(h, _)| h) != Some(new.split_once(' ').unwrap().0))
+                        .collect()
+                })
+                .unwrap_or_else(|| existing.lines().collect());
+            let mut merged = kept.join("\n");
+            if let Some(new) = entry {
+                if !merged.is_empty() {
+                    merged.push('\n');
+                }
+                merged.push_str(&new);
+            }
+            (!merged.is_empty()).then_some(merged)
         },
         dns_filter: false,
         pf_token: token.clone(),
@@ -1678,14 +1702,24 @@ mod tests {
 
     #[test]
     fn resolved_endpoint_cache_roundtrips() {
-        // The cache is "hostname ip" — stored on connect, reused on reconnect
-        // so the DoH window (ISP-blocked on some networks) is never needed.
+        // The cache is a newline map "host ip" — stored on connect, reused on
+        // reconnect so the DoH window (ISP-blocked on some networks) is never
+        // needed, and multiple nodes accumulate so switching works.
         let mut s = MacState::open();
-        s.resolved_endpoint = Some("gw.example.com 91.239.6.194".into());
-        let entry = s.resolved_endpoint.clone().unwrap();
-        let (host, ip) = entry.split_once(' ').unwrap();
-        assert_eq!(host, "gw.example.com");
-        assert_eq!(ip.parse::<std::net::IpAddr>().unwrap().to_string(), "91.239.6.194");
+        s.resolved_endpoint = Some("al.gw.example.com 91.239.6.194\nfr.gw.example.com 31.41.33.156".into());
+        let entries = s.resolved_endpoint.clone().unwrap();
+        let mut lines: Vec<(&str, &str)> = entries
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .collect();
+        lines.sort();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], ("al.gw.example.com", "91.239.6.194"));
+        assert_eq!(lines[1], ("fr.gw.example.com", "31.41.33.156"));
+        // Each line parses as a real IP (the reconnect path does exactly this).
+        for (_, ip) in lines {
+            assert!(ip.parse::<std::net::IpAddr>().is_ok());
+        }
     }
 
     #[test]
