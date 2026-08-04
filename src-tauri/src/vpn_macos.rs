@@ -867,16 +867,24 @@ fn destroy_tunnel_interface(iface: &str) -> Result<(), String> {
 /// dead interface. Keyed on the live route, not stale state, so it catches
 /// tunnels whose interface name state no longer records.
 ///
-/// NEVER destroys the interface named in `/var/run/wireguard/ripley0.name`:
-/// that is the LIVE WireGuard tunnel. A transparent proxy (Clash/Mihomo) can
-/// also own split-default routes through a utun that shares the same number
-/// (e.g. both on utun7), so the route owner must not be assumed to be stale.
+/// Liveness is verified by asking wireguard-go (`wg show <iface>`) — NOT by
+/// `/var/run/wireguard/ripley0.name`, which wg-quick never removes on teardown
+/// and is therefore a stale artifact even when the tunnel is dead. A
+/// transparent proxy (Clash/Mihomo) can own a utun with the same number, but
+/// it is not a WireGuard interface, so `wg show` refuses it — protecting it
+/// from destruction without mistaking a stale .name file for a live tunnel.
 fn destroy_tunnel_owning(ip: &str) {
     let Some(iface) = route_field(ip, "interface").ok().filter(|i| i.starts_with("utun")) else {
         return;
     };
-    let live = fs::read_to_string(WG_NAME_FILE).unwrap_or_default();
-    if live.trim() == iface {
+    // A live WireGuard tunnel answers `wg show <iface>`; a dead leftover
+    // (or a foreign utun like Mihomo's) does not. Only skip destruction when
+    // the interface is a genuinely working WireGuard peer.
+    let is_live_wg = tool("wg")
+        .ok()
+        .and_then(|wg| run_capture(&wg, &["show", &iface], None).ok())
+        .is_some();
+    if is_live_wg {
         return;
     }
     let _ = destroy_tunnel_interface(&iface);
@@ -905,6 +913,27 @@ fn reap_orphan_wgquick() {
                 &format!(
                     "for pid in $(pgrep -f '{marker}' 2>/dev/null); do [ \"$(ps -o ppid= -p $pid 2>/dev/null | tr -d ' ')\" = 1 ] && kill $pid 2>/dev/null; done; true",
                     marker = format!("wg-quick up {}", CONFIG_FILE)
+                ),
+            ],
+        );
+    }
+}
+
+/// Kill a leftover `wireguard-go` daemon. On macOS the userspace daemon is what
+/// owns the utun interface and its routes; a disconnect that failed to tear it
+/// down leaves wireguard-go alive (PPID 1) holding `utunN` with the split-
+/// default routes that swallow the DoH window. At connect time ANY such daemon
+/// is stale — connect is about to spawn a fresh one — so kill it (killing the
+/// daemon destroys its utun and routes with it). Scoped to our own binary path.
+fn reap_stale_wireguard() {
+    let bash = tool("bash").ok();
+    if let Some(bash) = bash {
+        let _ = run(
+            &bash,
+            &[
+                "-c",
+                &format!(
+                    "for pid in $(pgrep -f 'wireguard-go' 2>/dev/null); do [ \"$(ps -o ppid= -p $pid 2>/dev/null | tr -d ' ')\" = 1 ] && kill $pid 2>/dev/null; done; true"
                 ),
             ],
         );
@@ -975,6 +1004,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
     // on the live route table, NOT stale state (a prior buggy teardown left
     // interface: None while the tunnel survived).
     reap_orphan_wgquick();
+    reap_stale_wireguard();
     destroy_tunnel_owning("1.1.1.1");
     destroy_tunnel_owning("8.8.8.8");
     // The kill-switch pins the previous peer. If the previous tunnel is still
@@ -1122,6 +1152,9 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
     if !interface_gone {
         destroy_tunnel_owning("1.1.1.1");
         destroy_tunnel_owning("8.8.8.8");
+        // A stale wireguard-go daemon keeps the utun + routes alive even after
+        // the interface is gone; kill it so the next connect starts clean.
+        reap_stale_wireguard();
     }
     if down.is_err() && !interface_gone && !emergency && previous.interface.is_some() {
         let mut dirty = previous;
