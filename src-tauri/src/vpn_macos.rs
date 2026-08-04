@@ -101,6 +101,12 @@ struct MacState {
     /// Pinned peer `ip:port` while a tunnel is up (for live speed probes).
     #[serde(default)]
     endpoint: Option<String>,
+    /// Last successful DNS resolution: `hostname ip` so a reconnect can reuse
+    /// the IP without touching DNS. Critical on networks where the DoH window
+    /// (direct 1.1.1.1:443) is blocked by the ISP while the kill-switch is
+    /// armed — the tunnel's own DNS (10.0.0.20) is unreachable when down.
+    #[serde(default)]
+    resolved_endpoint: Option<String>,
     /// The DNS-filter rdr rules are installed (loopback filter proxy running
     /// in the app process).
     #[serde(default)]
@@ -129,6 +135,7 @@ impl MacState {
             profile_name: None,
             connected_at_unix: None,
             endpoint: None,
+            resolved_endpoint: None,
             dns_filter: false,
             pf_token: None,
         }
@@ -146,6 +153,7 @@ impl MacState {
             profile_name: None,
             connected_at_unix: None,
             endpoint: None,
+            resolved_endpoint: None,
             dns_filter: false,
             pf_token: token,
         }
@@ -469,6 +477,19 @@ fn resolve_connect_endpoint(
         EndpointHost::Ip(ip) => Ok(*ip),
         EndpointHost::Dns(host) if !blocked => endpoint_ip(cfg),
         EndpointHost::Dns(host) => {
+            // If we resolved this exact hostname before, reuse the IP — the DoH
+            // window is blocked on some networks (direct 1.1.1.1:443 dropped by
+            // the ISP), so reconnect must not depend on DNS.
+            let cached = read_private_state()
+                .resolved_endpoint
+                .and_then(|entry| {
+                    let (cached_host, cached_ip) = entry.split_once(' ')?;
+                    (cached_host == host).then(|| cached_ip.parse::<IpAddr>().ok())?
+                });
+            if let Some(ip) = cached {
+                eprintln!("ripley-vpn: reusing cached endpoint {ip} for {host}");
+                return Ok(ip);
+            }
             eprintln!("ripley-vpn: kill-switch armed — resolving endpoint via pinned DoH");
             resolve_endpoint_while_blocked(host, prev_endpoint)
         }
@@ -977,6 +998,7 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
         profile_name: None,
         connected_at_unix: None,
         endpoint: None,
+        resolved_endpoint: None,
         dns_filter: false,
         pf_token: token.clone(),
     };
@@ -1057,6 +1079,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         profile_name: profile_name.clone(),
         connected_at_unix: None,
         endpoint: Some(endpoint_label.clone()),
+        resolved_endpoint: previous.resolved_endpoint.clone(),
         dns_filter: false,
         pf_token: token.clone(),
     };
@@ -1123,6 +1146,12 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         profile_name,
         connected_at_unix: now_unix(),
         endpoint: Some(endpoint_label),
+        // Remember hostname → IP so a reconnect with the kill-switch armed can
+        // skip DNS entirely (the DoH window may be ISP-blocked).
+        resolved_endpoint: match cfg.endpoint().host() {
+            EndpointHost::Dns(host) => Some(format!("{host} {endpoint}")),
+            EndpointHost::Ip(_) => None,
+        },
         dns_filter: false,
         pf_token: token.clone(),
     };
@@ -1178,8 +1207,10 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
         load_pf(&pf_rules(None, None, None, None))?;
         let mut blocked = MacState::blocked(token);
         // Keep the last pinned peer so a reconnect's DoH window can re-allow
-        // the encapsulated transport even if the interface teardown failed.
+        // the encapsulated transport even if the interface teardown failed,
+        // and the resolved hostname→IP so reconnect can skip DNS entirely.
         blocked.endpoint = previous.endpoint.clone();
+        blocked.resolved_endpoint = previous.resolved_endpoint.clone();
         write_state(&blocked)?;
         Ok(blocked)
     }
@@ -1643,6 +1674,18 @@ mod tests {
         assert_eq!(parse_endpoint_label("not-an-endpoint"), None);
         assert_eq!(parse_endpoint_label("0.0.0.0:51820"), None);
         assert_eq!(parse_endpoint_label("1.1.1.1:notaport"), None);
+    }
+
+    #[test]
+    fn resolved_endpoint_cache_roundtrips() {
+        // The cache is "hostname ip" — stored on connect, reused on reconnect
+        // so the DoH window (ISP-blocked on some networks) is never needed.
+        let mut s = MacState::open();
+        s.resolved_endpoint = Some("gw.example.com 91.239.6.194".into());
+        let entry = s.resolved_endpoint.clone().unwrap();
+        let (host, ip) = entry.split_once(' ').unwrap();
+        assert_eq!(host, "gw.example.com");
+        assert_eq!(ip.parse::<std::net::IpAddr>().unwrap().to_string(), "91.239.6.194");
     }
 
     #[test]
