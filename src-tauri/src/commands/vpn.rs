@@ -656,6 +656,19 @@ pub async fn vpn_set_killswitch(app: AppHandle, on: bool) -> Result<Value, Strin
     .await
 }
 
+/// Pre-resolve every profile's endpoint and cache the IPs so reconnect to any
+/// node (with the kill-switch armed) skips DNS. Call after a successful connect
+/// when DNS works through the tunnel. Host-window only.
+#[tauri::command]
+pub async fn vpn_cache_endpoints(app: AppHandle, configs: Vec<String>) -> Result<Value, String> {
+    logged_mutation(
+        &app,
+        "Cache VPN endpoints",
+        json!({ "op": "cache_endpoints", "configs": configs }),
+    )
+    .await
+}
+
 /// Reconcile toward the fail-closed blocked state (clears stale rules WITHOUT
 /// re-opening egress). Host-window only.
 #[tauri::command]
@@ -664,6 +677,30 @@ pub async fn vpn_recover(app: AppHandle) -> Result<Value, String> {
         &app,
         "Recover blocked state",
         json!({ "op": "reconcile_blocked_state" }),
+    )
+    .await
+}
+
+/// Toggle the on-device DNS blocklist. Enabling starts the app-side loopback
+/// filter proxy and installs the helper's PF rdr rules; disabling stops both.
+/// Tightening-only (never opens egress). Host-window only.
+#[tauri::command]
+pub async fn vpn_set_dns_filter(app: AppHandle, on: bool) -> Result<Value, String> {
+    // Start/stop the persistent proxy in THIS process (the helper is one-shot
+    // and cannot host it); the PF rdr rules are installed by the helper.
+    if on {
+        crate::dns_filter::start(None)?;
+    } else {
+        crate::dns_filter::stop();
+    }
+    logged_mutation(
+        &app,
+        if on {
+            "Enable DNS filter"
+        } else {
+            "Disable DNS filter"
+        },
+        json!({ "op": "set_dns_filter", "enabled": on }),
     )
     .await
 }

@@ -100,6 +100,8 @@
     "allow-vpn-connect",
     "allow-vpn-disconnect",
     "allow-vpn-set-killswitch",
+    "allow-vpn-set-dns-filter",
+    "allow-vpn-cache-endpoints",
     "allow-vpn-recover",
     "allow-vpn-emergency-restore",
     "allow-vpn-open-window",

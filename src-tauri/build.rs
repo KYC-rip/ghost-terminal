@@ -106,6 +106,8 @@ const APP_COMMANDS: &[&str] = &[
     "vpn_disconnect",
     "vpn_set_killswitch",
     "vpn_recover",
+    "vpn_set_dns_filter",
+    "vpn_cache_endpoints",
     "vpn_emergency_restore",
     "vpn_open_window",
     "vpn_set_locale",

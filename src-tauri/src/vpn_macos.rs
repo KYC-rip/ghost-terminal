@@ -20,7 +20,10 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     os::{
         fd::AsRawFd,
-        unix::{fs::PermissionsExt, net::UnixListener},
+        unix::{
+            fs::{FileTypeExt, PermissionsExt},
+            net::UnixListener,
+        },
     },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -82,6 +85,10 @@ enum HelperRequest {
     /// (redirects port-53 to the loopback filter; never opens egress), so no
     /// strong-auth gate. The app process runs the filter proxy.
     SetDnsFilter { enabled: bool },
+    /// Pre-resolve every profile's endpoint hostname and cache the IPs, so a
+    /// later reconnect to any node (while the kill-switch is armed) skips DNS.
+    /// Called after a successful connect, when DNS works through the tunnel.
+    CacheEndpoints { configs: Vec<SecretText> },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1300,6 +1307,32 @@ fn handle(request: HelperRequest) -> Result<MacState, String> {
             Ok(state)
         }
         HelperRequest::EmergencyRestoreClearnet => disconnect(true, true),
+        // Pre-cache every profile's endpoint IP. Resolution uses the system
+        // resolver — safe here because the caller invokes this only AFTER a
+        // successful connect, when DNS works through the tunnel.
+        HelperRequest::CacheEndpoints { configs } => {
+            let mut state = read_private_state();
+            let mut entries: Vec<String> = state
+                .resolved_endpoint
+                .take()
+                .map(|s| s.lines().map(str::to_string).collect())
+                .unwrap_or_default();
+            for config in configs {
+                let Ok(cfg) = parse_wg_config(config.0.as_str()) else {
+                    continue;
+                };
+                if let EndpointHost::Dns(host) = cfg.endpoint().host() {
+                    if let Ok(ip) = endpoint_ip(&cfg) {
+                        let line = format!("{host} {ip}");
+                        entries.retain(|e| !e.starts_with(&format!("{host} ")));
+                        entries.push(line);
+                    }
+                }
+            }
+            state.resolved_endpoint = Some(entries.join("\n"));
+            write_state(&state)?;
+            Ok(state)
+        }
     }
 }
 
@@ -1332,12 +1365,73 @@ fn helper(socket: &Path, expected_uid: u32) -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
-    let (mut stream, _) = listener
+    let (stream, _) = listener
         .accept()
         .map_err(|e| format!("accept helper request: {e}"))?;
     if peer_uid(&stream)? != expected_uid {
         return Err("VPN helper rejected a different local user".into());
     }
+    handle_connection(stream)?;
+    let _ = fs::remove_file(socket);
+    Ok(())
+}
+
+/// Persistent helper daemon: binds the well-known socket ONCE (after the single
+/// admin authorization) and serves requests in a loop, so the app never needs a
+/// second password prompt. Each connection is peer-uid-checked; a bad peer is
+/// dropped without terminating the daemon (so one mistake doesn't force a new
+/// admin prompt).
+fn helper_daemon(socket: &Path, expected_uid: u32) -> Result<(), String> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("macOS VPN helper daemon must run as root".into());
+    }
+    if expected_uid == 0 {
+        return Err("invalid macOS VPN helper uid".into());
+    }
+    // The daemon reuses a well-known socket: replace a stale one from a prior
+    // daemon (only if it's a root-owned socket, never a random file).
+    match fs::symlink_metadata(socket) {
+        Ok(meta) if meta.file_type().is_socket() => {
+            let _ = fs::remove_file(socket);
+        }
+        Ok(_) => return Err(format!("refusing to remove non-socket at {}", socket.display())),
+        Err(_) => {}
+    }
+    let listener = UnixListener::bind(socket).map_err(|e| format!("bind helper socket: {e}"))?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("secure helper socket: {e}"))?;
+    let path = CString::new(socket.as_os_str().as_encoded_bytes())
+        .map_err(|_| "helper socket contains NUL".to_string())?;
+    if unsafe { libc::chown(path.as_ptr(), expected_uid, u32::MAX) } != 0 {
+        return Err(format!(
+            "chown helper socket: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    loop {
+        let (stream, _) = match listener.accept() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Err(e) = peer_uid(&stream) {
+            eprintln!("ripley-vpn-helper: peer check failed: {e}");
+            continue;
+        }
+        if peer_uid(&stream).ok() != Some(expected_uid) {
+            eprintln!("ripley-vpn-helper: rejected unauthorized peer");
+            continue;
+        }
+        // Handle each request on its own thread so a slow/hung client cannot
+        // block subsequent (e.g. auto-retry) requests.
+        std::thread::spawn(move || {
+            let _ = handle_connection(stream);
+        });
+    }
+}
+
+/// Read one request frame, run it, write the response. Shared by the one-shot
+/// helper and the persistent daemon.
+fn handle_connection(mut stream: std::os::unix::net::UnixStream) -> Result<(), String> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
     let mut frame = Zeroizing::new(Vec::with_capacity(2048));
@@ -1364,7 +1458,6 @@ fn helper(socket: &Path, expected_uid: u32) -> Result<(), String> {
     stream
         .write_all(&body)
         .map_err(|e| format!("write helper response: {e}"))?;
-    let _ = fs::remove_file(socket);
     Ok(())
 }
 
@@ -1372,26 +1465,47 @@ fn helper(socket: &Path, expected_uid: u32) -> Result<(), String> {
 /// privileged helper and should exit immediately.
 pub fn run_helper_from_args() -> bool {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) != Some("--vpn-macos-helper") {
-        return false;
+    match args.get(1).map(String::as_str) {
+        Some("--vpn-macos-helper") => {
+            let result = (|| {
+                let socket = args
+                    .get(2)
+                    .map(PathBuf::from)
+                    .ok_or_else(|| "missing helper socket".to_string())?;
+                let uid = args
+                    .get(3)
+                    .ok_or_else(|| "missing helper uid".to_string())?
+                    .parse::<u32>()
+                    .map_err(|_| "invalid helper uid".to_string())?;
+                helper(&socket, uid)
+            })();
+            if let Err(error) = result {
+                eprintln!("Ripley VPN helper: {error}");
+                std::process::exit(1);
+            }
+            true
+        }
+        Some("--vpn-macos-helperd") => {
+            let result = (|| {
+                let socket = args
+                    .get(2)
+                    .map(PathBuf::from)
+                    .ok_or_else(|| "missing helper socket".to_string())?;
+                let uid = args
+                    .get(3)
+                    .ok_or_else(|| "missing helper uid".to_string())?
+                    .parse::<u32>()
+                    .map_err(|_| "invalid helper uid".to_string())?;
+                helper_daemon(&socket, uid)
+            })();
+            if let Err(error) = result {
+                eprintln!("Ripley VPN helper daemon: {error}");
+                std::process::exit(1);
+            }
+            true
+        }
+        _ => false,
     }
-    let result = (|| {
-        let socket = args
-            .get(2)
-            .map(PathBuf::from)
-            .ok_or_else(|| "missing helper socket".to_string())?;
-        let uid = args
-            .get(3)
-            .ok_or_else(|| "missing helper uid".to_string())?
-            .parse::<u32>()
-            .map_err(|_| "invalid helper uid".to_string())?;
-        helper(&socket, uid)
-    })();
-    if let Err(error) = result {
-        eprintln!("Ripley VPN helper: {error}");
-        std::process::exit(1);
-    }
-    true
 }
 
 fn random_socket() -> PathBuf {
@@ -1399,6 +1513,11 @@ fn random_socket() -> PathBuf {
     rand::rngs::OsRng.fill_bytes(&mut random);
     std::env::temp_dir().join(format!("ripley-vpn-{}.sock", hex::encode(random)))
 }
+
+/// Well-known socket the persistent helper daemon listens on. Using a fixed
+/// path (not `random_socket`) is what lets the app reuse one authorized daemon
+/// across many operations without re-prompting.
+const HELPERD_SOCKET: &str = "/var/run/ripley-vpn-helperd.sock";
 
 fn spawn_authorized_helper(socket: &Path) -> Result<Child, String> {
     let executable = std::env::current_exe().map_err(|e| format!("locate VPN helper: {e}"))?;
@@ -1411,7 +1530,7 @@ fn spawn_authorized_helper(socket: &Path) -> Result<Child, String> {
 set helperPath to item 1 of argv
 set socketPath to item 2 of argv
 set userId to item 3 of argv
-set commandText to quoted form of helperPath & " --vpn-macos-helper " & quoted form of socketPath & " " & quoted form of userId
+set commandText to quoted form of helperPath & " --vpn-macos-helperd " & quoted form of socketPath & " " & quoted form of userId
 do shell script commandText with administrator privileges
 end run"#;
     #[cfg(not(debug_assertions))]
@@ -1420,7 +1539,7 @@ set helperPath to item 1 of argv
 set socketPath to item 2 of argv
 set userId to item 3 of argv
 set verifyText to "/usr/bin/codesign --verify --strict " & quoted form of helperPath
-set commandText to verifyText & " && exec " & quoted form of helperPath & " --vpn-macos-helper " & quoted form of socketPath & " " & quoted form of userId
+set commandText to verifyText & " && exec " & quoted form of helperPath & " --vpn-macos-helperd " & quoted form of socketPath & " " & quoted form of userId
 do shell script commandText with administrator privileges
 end run"#;
     Command::new("/usr/bin/osascript")
@@ -1461,9 +1580,28 @@ fn connect_when_ready(
 }
 
 pub fn privileged_call(request: Value) -> Result<Value, String> {
-    let socket = random_socket();
+    // Fast path: a persistent daemon is already authorized — reuse it, no
+    // password prompt. Only when the daemon is gone do we re-authorize (one
+    // prompt), which then keeps serving subsequent calls without prompting.
+    let socket = PathBuf::from(HELPERD_SOCKET);
+    if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket) {
+        return call_helper(stream, request);
+    }
     let mut child = spawn_authorized_helper(&socket)?;
-    let mut stream = connect_when_ready(&socket, &mut child)?;
+    let stream = connect_when_ready(&socket, &mut child)?;
+    let result = call_helper(stream, request);
+    // The daemon is a child of this process; keep it alive (don't wait/kill it)
+    // so future privileged_calls reuse it. On failure, reap it so the next call
+    // re-authorizes cleanly.
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+fn call_helper(stream: std::os::unix::net::UnixStream, request: Value) -> Result<Value, String> {
+    let mut stream = stream;
     stream.set_read_timeout(Some(COMMAND_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
     let mut body = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
@@ -1476,8 +1614,6 @@ pub fn privileged_call(request: Value) -> Result<Value, String> {
         .take(MAX_FRAME as u64)
         .read_to_end(&mut response)
         .map_err(|e| format!("read VPN helper response: {e}"))?;
-    let _ = child.wait();
-    let _ = fs::remove_file(&socket);
     let value: Value =
         serde_json::from_slice(&response).map_err(|e| format!("bad VPN helper response: {e}"))?;
     match value.get("result").and_then(Value::as_str) {

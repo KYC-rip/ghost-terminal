@@ -66,6 +66,8 @@ export interface IApi {
   vpnDisconnect?: (restore: boolean) => Promise<Record<string, unknown>>;
   vpnSetKillswitch?: (on: boolean) => Promise<Record<string, unknown>>;
   vpnRecover?: () => Promise<Record<string, unknown>>;
+  vpnSetDnsFilter?: (on: boolean) => Promise<Record<string, unknown>>;
+  vpnCacheEndpoints?: (configs: string[]) => Promise<Record<string, unknown>>;
   vpnEmergencyRestore?: () => Promise<Record<string, unknown>>;
   vpnProfilesLoad?: () => Promise<{
     v: 1;

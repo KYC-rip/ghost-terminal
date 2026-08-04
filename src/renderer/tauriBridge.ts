@@ -149,6 +149,8 @@ function createTauriApi() {
     vpnDisconnect: (restore: boolean) => invoke('vpn_disconnect', { restore }) as Promise<Record<string, unknown>>,
     vpnSetKillswitch: (on: boolean) => invoke('vpn_set_killswitch', { on }) as Promise<Record<string, unknown>>,
     vpnRecover: () => invoke('vpn_recover') as Promise<Record<string, unknown>>,
+    vpnSetDnsFilter: (on: boolean) => invoke('vpn_set_dns_filter', { on }) as Promise<Record<string, unknown>>,
+    vpnCacheEndpoints: (configs: string[]) => invoke('vpn_cache_endpoints', { configs }) as Promise<Record<string, unknown>>,
     vpnEmergencyRestore: () => invoke('vpn_emergency_restore') as Promise<Record<string, unknown>>,
     vpnProfilesLoad: () => invoke('vpn_profiles_load'),
     vpnProfilesSave: (store: unknown) => invoke('vpn_profiles_save', { store }),

@@ -15,7 +15,7 @@ import { createVpnTranslator } from '../vpnLocale';
 import './VpnView.css';
 
 type VpnStatus = Record<string, unknown>;
-type ConfirmAction = 'connect' | 'reconnect' | 'disconnect-blocked' | 'restore' | 'disable-killswitch' | 'enable-killswitch' | 'recover' | 'emergency-restore' | null;
+type ConfirmAction = 'connect' | 'reconnect' | 'disconnect-blocked' | 'restore' | 'disable-killswitch' | 'enable-killswitch' | 'disable-dns-filter' | 'enable-dns-filter' | 'recover' | 'emergency-restore' | null;
 type Accent = 'ok' | 'warn' | 'danger';
 /** Top-level host VPN screens from the redesign: Servers · Network controls · Import. */
 type Screen = 'servers' | 'network' | 'import';
@@ -196,7 +196,7 @@ export function VpnView() {
   const looseFile = useRef<HTMLInputElement | null>(null);
   const nativeControls = Boolean(
     window.api.vpnConnect && window.api.vpnDisconnect &&
-    window.api.vpnSetKillswitch && window.api.vpnRecover,
+    window.api.vpnSetKillswitch && window.api.vpnRecover && window.api.vpnSetDnsFilter,
   );
   /** Stored profiles + optional virtual xeovo-random pin (never persisted). */
   const displayProfiles = useMemo(() => withVirtualRandom(profiles), [profiles]);
@@ -254,10 +254,53 @@ export function VpnView() {
   const tunnelActive = typeof status?.interface === 'string' && status.interface.length > 0;
   const blocked = egress === 'blocked';
   const killSwitch = status?.killswitch_active === true;
+  const dnsFilter = status?.dns_filter === true;
   const cleanupRequired = status?.cleanup_required === true;
   const activeProfileName = typeof status?.profile_name === 'string' && status.profile_name.trim()
     ? status.profile_name.trim()
     : null;
+
+  // Auto-retry: if the tunnel drops on its own (a connected state unexpectedly
+  // becomes disconnected/errored with no user action), reconnect once using the
+  // last-used profile. The persistent helper + cached endpoint IP make this
+  // prompt-free and DNS-free. Only retries after a real drop, never while the
+  // user is actively connecting/disconnecting.
+  const autoRetried = useRef(false);
+  const wasConnected = useRef(false);
+  const lastUsedConfig = useRef<string | null>(null);
+  useEffect(() => {
+    if (busy) {
+      wasConnected.current = phase === 'connected';
+      return;
+    }
+    if (phase === 'connected') {
+      wasConnected.current = true;
+      autoRetried.current = false;
+      return;
+    }
+    const dropped = wasConnected.current
+      && (phase === 'disconnected_blocked' || phase === 'error_blocked')
+      && lastUsedConfig.current
+      && !autoRetried.current;
+    if (!dropped) return;
+    wasConnected.current = false;
+    autoRetried.current = true;
+    const config = lastUsedConfig.current;
+    (async () => {
+      setBusy(true);
+      try {
+        if (!window.api.vpnConnect) throw new Error(t('mutationsRequired'));
+        // dropped above guarantees config is set; profile name is optional.
+        await window.api.vpnConnect(config!, activeProfileName ?? undefined);
+        setError('');
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+        void refresh();
+      }
+    })();
+  }, [phase, busy, activeProfileName, t]);
   const selectedProfile = displayProfiles.find(profile => profile.id === selectedProfileId) ?? null;
   const selectedMeta = selectedProfile && !isVirtualRandomProfile(selectedProfile) ? profileMeta(selectedProfile) : selectedProfile
     ? { cc: 'RND', region: t('virtualRandomHint'), endpoint: 'auto' }
@@ -627,6 +670,19 @@ export function VpnView() {
           await window.api.vpnDisconnect(false);
         }
         await window.api.vpnConnect(target.profile.configText, target.displayName);
+        // Remember the config for prompt-free auto-retry if the tunnel drops.
+        lastUsedConfig.current = target.profile.configText;
+        // Now that DNS works through the tunnel, pre-resolve every profile's
+        // endpoint IP so a later reconnect to ANY node (kill-switch armed) can
+        // skip DNS — even on networks where the DoH window is ISP-blocked.
+        try {
+          const wgConfigs = profiles
+            .filter(p => p.kind === 'wireguard' && !isVirtualRandomProfile(p) && p.configText.trim())
+            .map(p => p.configText);
+          if (wgConfigs.length && window.api.vpnCacheEndpoints) {
+            void window.api.vpnCacheEndpoints(wgConfigs);
+          }
+        } catch { /* cache is best-effort; connect already succeeded */ }
         if (target.notice) setNotice(target.notice);
         // Keep selection on random when user chose it; status still shows real peer.
         if (!isRandomProfile(selectedProfile)) {
@@ -636,15 +692,24 @@ export function VpnView() {
       } else if (action === 'disconnect-blocked') {
         if (!window.api.vpnDisconnect) throw new Error(t('mutationsRequired'));
         await window.api.vpnDisconnect(false);
+        // User-initiated stop — no auto-retry.
+        lastUsedConfig.current = null;
       } else if (action === 'restore') {
         if (!window.api.vpnDisconnect) throw new Error(t('mutationsRequired'));
         await window.api.vpnDisconnect(true);
+        lastUsedConfig.current = null;
       } else if (action === 'disable-killswitch') {
         if (!window.api.vpnSetKillswitch) throw new Error(t('mutationsRequired'));
         await window.api.vpnSetKillswitch(false);
       } else if (action === 'enable-killswitch') {
         if (!window.api.vpnSetKillswitch) throw new Error(t('mutationsRequired'));
         await window.api.vpnSetKillswitch(true);
+      } else if (action === 'disable-dns-filter') {
+        if (!window.api.vpnSetDnsFilter) throw new Error(t('mutationsRequired'));
+        await window.api.vpnSetDnsFilter(false);
+      } else if (action === 'enable-dns-filter') {
+        if (!window.api.vpnSetDnsFilter) throw new Error(t('mutationsRequired'));
+        await window.api.vpnSetDnsFilter(true);
       } else if (action === 'recover') {
         if (!window.api.vpnRecover) throw new Error(t('mutationsRequired'));
         await window.api.vpnRecover();
@@ -893,6 +958,27 @@ export function VpnView() {
                   <span className={`vh__switch${killSwitch ? ' is-on' : ''}`} aria-hidden />
                 </button>
                 <p className="vh__p">{t('ksExplain')}</p>
+              </section>
+
+              <section className={`vh__card vh__ks${dnsFilter ? ' is-on' : ''}`}>
+                <div className="vh__sech">
+                  <span className="vh__sechk"><span>DNS</span></span>
+                  <div className="vh__sechh"><b>{t('dnsFilterTitle')}</b><span>{t('dnsFilterSub')}</span></div>
+                </div>
+                <button
+                  type="button"
+                  className={`vh__kstoggle${dnsFilter ? ' is-on' : ''}`}
+                  disabled={busy || !nativeControls}
+                  onClick={() => setConfirm(dnsFilter ? 'disable-dns-filter' : 'enable-dns-filter')}
+                >
+                  <span className="vh__kstoggleic">{dnsFilter ? <ShieldCheck size={16} /> : <Globe size={16} />}</span>
+                  <span className="vh__kstogglem">
+                    <span className="k">{t('dnsFilterLabel')}</span>
+                    <span className="v">{t('dnsFilterValue', { state: dnsFilter ? 'on' : 'off' })}</span>
+                  </span>
+                  <span className={`vh__switch${dnsFilter ? ' is-on' : ''}`} aria-hidden />
+                </button>
+                <p className="vh__p">{t('dnsFilterExplain')}</p>
               </section>
 
               <section className="vh__card">
@@ -1428,6 +1514,8 @@ function Confirm({ action, busy, error, onCancel, onConfirm, t }: {
     restore: [t('restoreQ'), t('restoreBody')],
     'disable-killswitch': [t('disableQ'), t('disableBody')],
     'enable-killswitch': [t('enableKsQ'), t('enableKsBody')],
+    'disable-dns-filter': [t('dnsFilterOffQ'), t('dnsFilterOffBody')],
+    'enable-dns-filter': [t('dnsFilterOnQ'), t('dnsFilterOnBody')],
     recover: [t('recoverQ'), t('recoverBody')],
     'emergency-restore': [t('emergencyQ'), t('emergencyBody')],
   };

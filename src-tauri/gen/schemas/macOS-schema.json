@@ -2763,6 +2763,12 @@
           "markdownDescription": "Enables the vigil_save_strike_key command without any pre-configured scope."
         },
         {
+          "description": "Enables the vpn_cache_endpoints command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-cache-endpoints",
+          "markdownDescription": "Enables the vpn_cache_endpoints command without any pre-configured scope."
+        },
+        {
           "description": "Enables the vpn_connect command without any pre-configured scope.",
           "type": "string",
           "const": "allow-vpn-connect",
@@ -2821,6 +2827,12 @@
           "type": "string",
           "const": "allow-vpn-recover",
           "markdownDescription": "Enables the vpn_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vpn_set_dns_filter command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-vpn-set-dns-filter",
+          "markdownDescription": "Enables the vpn_set_dns_filter command without any pre-configured scope."
         },
         {
           "description": "Enables the vpn_set_killswitch command without any pre-configured scope.",
@@ -3423,6 +3435,12 @@
           "markdownDescription": "Denies the vigil_save_strike_key command without any pre-configured scope."
         },
         {
+          "description": "Denies the vpn_cache_endpoints command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-cache-endpoints",
+          "markdownDescription": "Denies the vpn_cache_endpoints command without any pre-configured scope."
+        },
+        {
           "description": "Denies the vpn_connect command without any pre-configured scope.",
           "type": "string",
           "const": "deny-vpn-connect",
@@ -3481,6 +3499,12 @@
           "type": "string",
           "const": "deny-vpn-recover",
           "markdownDescription": "Denies the vpn_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vpn_set_dns_filter command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-vpn-set-dns-filter",
+          "markdownDescription": "Denies the vpn_set_dns_filter command without any pre-configured scope."
         },
         {
           "description": "Denies the vpn_set_killswitch command without any pre-configured scope.",

@@ -6,6 +6,7 @@
 
 mod agent;
 mod commands;
+mod dns_filter;
 mod tor;
 mod updater;
 #[cfg(target_os = "macos")]
@@ -529,6 +530,8 @@ pub fn run() {
             commands::vpn::vpn_disconnect,
             commands::vpn::vpn_set_killswitch,
             commands::vpn::vpn_recover,
+            commands::vpn::vpn_set_dns_filter,
+            commands::vpn::vpn_cache_endpoints,
             commands::vpn::vpn_emergency_restore,
             commands::vpn::vpn_open_window,
             commands::vpn::vpn_set_locale,
