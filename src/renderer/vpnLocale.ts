@@ -144,6 +144,15 @@ const en: VpnMessages = {
   disable: 'Disable',
   enableKsQ: 'Enable kill-switch?',
   enableKsBody: 'This installs a host-wide fail-closed block. Non-VPN traffic will not leave this computer until you connect a tunnel or restore clearnet.',
+  dnsFilterTitle: 'DNS filter',
+  dnsFilterSub: 'On-device ad & tracker blocking',
+  dnsFilterLabel: 'DNS blocklist',
+  dnsFilterValue: '{{state}}',
+  dnsFilterExplain: 'Every DNS query is redirected through a local filter that answers blocklisted ad/tracker domains with NXDOMAIN, so they never load — even apps that hardcode a resolver.',
+  dnsFilterOnQ: 'Enable DNS filter?',
+  dnsFilterOnBody: 'This starts the local filter proxy and installs host-wide DNS redirect rules. Ad and tracker domains are blocked system-wide.',
+  dnsFilterOffQ: 'Disable DNS filter?',
+  dnsFilterOffBody: 'This stops the filter and removes the DNS redirect rules. Ad and tracker domains load normally again.',
 };
 
 const translations: Record<VpnLocale, VpnMessages> = { en, es: {

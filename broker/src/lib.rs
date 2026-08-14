@@ -9,6 +9,8 @@ pub mod dnsfilter;
 pub mod parser;
 pub mod types;
 
-pub use dnsfilter::{is_blocked, nxdomain_response, parse_blocklist, parse_query};
+pub use dnsfilter::{
+    is_blocked, nxdomain_response, parse_blocklist, parse_query, DEFAULT_BLOCKLIST,
+};
 pub use parser::{parse_wg_config, ParseError};
 pub use types::{Cidr, Endpoint, EndpointHost, Ipv6Policy, WgConfig};
