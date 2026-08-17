@@ -2349,6 +2349,18 @@
           "markdownDescription": "Enables the estimate_fees command without any pre-configured scope."
         },
         {
+          "description": "Enables the export_unsigned_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-unsigned-transfer",
+          "markdownDescription": "Enables the export_unsigned_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_watch_only command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-watch-only",
+          "markdownDescription": "Enables the export_watch_only command without any pre-configured scope."
+        },
+        {
           "description": "Enables the fetch_price_history command without any pre-configured scope.",
           "type": "string",
           "const": "allow-fetch-price-history",
@@ -2467,6 +2479,18 @@
           "type": "string",
           "const": "allow-get-xmr402-payment",
           "markdownDescription": "Enables the get_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_signed_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-signed-transfer",
+          "markdownDescription": "Enables the import_signed_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_watch_only command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-watch-only",
+          "markdownDescription": "Enables the import_watch_only command without any pre-configured scope."
         },
         {
           "description": "Enables the local_ai_clear_all command without any pre-configured scope.",
@@ -2683,6 +2707,12 @@
           "type": "string",
           "const": "allow-sign-message",
           "markdownDescription": "Enables the sign_message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sign_offline_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sign-offline-transfer",
+          "markdownDescription": "Enables the sign_offline_transfer command without any pre-configured scope."
         },
         {
           "description": "Enables the sweep_all command without any pre-configured scope.",
@@ -3021,6 +3051,18 @@
           "markdownDescription": "Denies the estimate_fees command without any pre-configured scope."
         },
         {
+          "description": "Denies the export_unsigned_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-unsigned-transfer",
+          "markdownDescription": "Denies the export_unsigned_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_watch_only command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-watch-only",
+          "markdownDescription": "Denies the export_watch_only command without any pre-configured scope."
+        },
+        {
           "description": "Denies the fetch_price_history command without any pre-configured scope.",
           "type": "string",
           "const": "deny-fetch-price-history",
@@ -3139,6 +3181,18 @@
           "type": "string",
           "const": "deny-get-xmr402-payment",
           "markdownDescription": "Denies the get_xmr402_payment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_signed_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-signed-transfer",
+          "markdownDescription": "Denies the import_signed_transfer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_watch_only command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-watch-only",
+          "markdownDescription": "Denies the import_watch_only command without any pre-configured scope."
         },
         {
           "description": "Denies the local_ai_clear_all command without any pre-configured scope.",
@@ -3355,6 +3409,12 @@
           "type": "string",
           "const": "deny-sign-message",
           "markdownDescription": "Denies the sign_message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sign_offline_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sign-offline-transfer",
+          "markdownDescription": "Denies the sign_offline_transfer command without any pre-configured scope."
         },
         {
           "description": "Denies the sweep_all command without any pre-configured scope.",

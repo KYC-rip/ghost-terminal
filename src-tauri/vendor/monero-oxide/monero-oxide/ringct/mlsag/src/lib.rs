@@ -1,0 +1,256 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc = include_str!("../README.md")]
+#![cfg_attr(not(feature = "std"), no_std)]
+#![allow(non_snake_case)]
+
+use std_shims::{
+  prelude::*,
+  sync::LazyLock,
+  io::{self, Read, Write},
+};
+
+use zeroize::Zeroize;
+
+use curve25519_dalek::EdwardsPoint;
+
+use monero_io::*;
+use monero_ed25519::{Scalar, Point, CompressedPoint};
+
+// A static for `H` as it's frequently used yet this decompression is expensive.
+static H: LazyLock<EdwardsPoint> = LazyLock::new(|| {
+  CompressedPoint::H.decompress().expect("couldn't decompress `CompressedPoint::H`").into()
+});
+
+/// Errors when working with MLSAGs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
+pub enum MlsagError {
+  /// Invalid ring (such as too small or too large).
+  #[error("invalid ring")]
+  InvalidRing,
+  /// Invalid amount of key images.
+  #[error("invalid amount of key images")]
+  InvalidAmountOfKeyImages,
+  /// Invalid ss matrix.
+  #[error("invalid ss")]
+  InvalidSs,
+  /// Invalid key image.
+  #[error("invalid key image")]
+  InvalidKeyImage,
+  /// Invalid ci vector.
+  #[error("invalid ci")]
+  InvalidCi,
+}
+
+/// A vector of rings, forming a matrix, to verify the MLSAG with.
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
+pub struct RingMatrix {
+  matrix: Vec<Vec<EdwardsPoint>>,
+}
+
+impl RingMatrix {
+  /// Construct a ring matrix from an already formatted series of points.
+  fn new(matrix: Vec<Vec<EdwardsPoint>>) -> Result<Self, MlsagError> {
+    // Monero requires that there is more than one ring member for MLSAG signatures:
+    // https://github.com/monero-project/monero/blob/ac02af92867590ca80b2779a7bbeafa99ff94dcb/
+    // src/ringct/rctSigs.cpp#L462
+    if matrix.len() < 2 {
+      Err(MlsagError::InvalidRing)?;
+    }
+    for member in &matrix {
+      if member.is_empty() || (member.len() != matrix[0].len()) {
+        Err(MlsagError::InvalidRing)?;
+      }
+    }
+
+    Ok(RingMatrix { matrix })
+  }
+
+  /// Construct a ring matrix for an individual output.
+  pub fn individual(
+    ring: &[[CompressedPoint; 2]],
+    pseudo_out: CompressedPoint,
+  ) -> Result<Self, MlsagError> {
+    let mut matrix = Vec::with_capacity(ring.len());
+    for ring_member in ring {
+      let decomp = |p: CompressedPoint| Ok(p.decompress().ok_or(MlsagError::InvalidRing)?.into());
+
+      matrix.push(vec![decomp(ring_member[0])?, decomp(ring_member[1])? - decomp(pseudo_out)?]);
+    }
+    RingMatrix::new(matrix)
+  }
+
+  /// Iterate over the members of the matrix.
+  fn iter(&self) -> impl Iterator<Item = &[EdwardsPoint]> {
+    self.matrix.iter().map(AsRef::as_ref)
+  }
+
+  /// Get the amount of members in the ring.
+  pub fn members(&self) -> usize {
+    self.matrix.len()
+  }
+
+  /// Get the length of a ring member.
+  ///
+  /// A ring member is a vector of points for which the signer knows all of the discrete logarithms
+  /// of.
+  pub fn member_len(&self) -> usize {
+    // this is safe to do as the constructors don't allow empty rings
+    self.matrix[0].len()
+  }
+}
+
+/// The MLSAG linkable ring signature, as used in Monero.
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
+pub struct Mlsag {
+  ss: Vec<Vec<Scalar>>,
+  cc: Scalar,
+}
+
+impl Mlsag {
+  /// Write a MLSAG.
+  pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+    for ss in &self.ss {
+      write_raw_vec(Scalar::write, ss, w)?;
+    }
+    self.cc.write(w)
+  }
+
+  /// Read a MLSAG.
+  pub fn read<R: Read>(decoys: usize, ss_2_elements: usize, r: &mut R) -> io::Result<Mlsag> {
+    Ok(Mlsag {
+      ss: (0 .. decoys)
+        .map(|_| read_raw_vec(Scalar::read, ss_2_elements, r))
+        .collect::<Result<_, _>>()?,
+      cc: Scalar::read(r)?,
+    })
+  }
+
+  /// Verify a MLSAG.
+  ///
+  /// WARNING: This follows the Fiat-Shamir transcript format used by the Monero protocol, which
+  /// makes assumptions on what has already been transcripted and bound to within `msg`. Do not use
+  /// this if you don't know what you're doing.
+  pub fn verify(
+    &self,
+    msg: &[u8; 32],
+    ring: &RingMatrix,
+    key_images: &[CompressedPoint],
+  ) -> Result<(), MlsagError> {
+    // Mlsag allows for layers to not need linkability, hence they don't need key images
+    // Monero requires that there is always only 1 non-linkable layer - the amount commitments.
+    if ring.member_len() != (key_images.len() + 1) {
+      Err(MlsagError::InvalidAmountOfKeyImages)?;
+    }
+
+    let mut buf = Vec::with_capacity(6 * 32);
+    buf.extend_from_slice(msg);
+
+    let mut ci = self.cc.into();
+
+    // This is an iterator over the key images as options with an added entry of `None` at the
+    // end for the non-linkable layer
+    let key_images_iter = key_images.iter().map(Some).chain(core::iter::once(None));
+
+    if ring.matrix.len() != self.ss.len() {
+      Err(MlsagError::InvalidSs)?;
+    }
+
+    for (ring_member, ss) in ring.iter().zip(&self.ss) {
+      if ring_member.len() != ss.len() {
+        Err(MlsagError::InvalidSs)?;
+      }
+
+      for ((ring_member_entry, s), ki) in ring_member.iter().zip(ss).zip(key_images_iter.clone()) {
+        let s = (*s).into();
+        #[allow(non_snake_case)]
+        let L = EdwardsPoint::vartime_double_scalar_mul_basepoint(&ci, ring_member_entry, &s);
+
+        let compressed_ring_member_entry = ring_member_entry.compress();
+        buf.extend_from_slice(compressed_ring_member_entry.as_bytes());
+        buf.extend_from_slice(L.compress().as_bytes());
+
+        // Not all dimensions need to be linkable, e.g. commitments, and only linkable layers need
+        // to have key images.
+        if let Some(ki) = ki {
+          let Some(ki) = ki.decompress() else {
+            return Err(MlsagError::InvalidKeyImage);
+          };
+          let ki = ki.key_image().ok_or(MlsagError::InvalidKeyImage)?;
+
+          // TODO: vartime_double_scalar_mul?
+          #[allow(non_snake_case)]
+          let R =
+            (s * Point::biased_hash(compressed_ring_member_entry.to_bytes()).into()) + (ci * ki);
+          buf.extend_from_slice(R.compress().as_bytes());
+        }
+      }
+
+      ci = Scalar::hash(&buf).into();
+      // keep the msg in the buffer.
+      buf.drain(msg.len() ..);
+    }
+
+    if ci != self.cc.into() {
+      Err(MlsagError::InvalidCi)?;
+    }
+    Ok(())
+  }
+}
+
+/// Builder for a RingMatrix when using an aggregate signature.
+///
+/// This handles the formatting as necessary.
+#[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
+pub struct AggregateRingMatrixBuilder {
+  key_ring: Vec<Vec<EdwardsPoint>>,
+  amounts_ring: Vec<EdwardsPoint>,
+  sum_out: EdwardsPoint,
+}
+
+impl AggregateRingMatrixBuilder {
+  /// Create a new AggregateRingMatrixBuilder.
+  ///
+  /// This takes in the transaction's outputs' commitments and fee used.
+  pub fn new(commitments: &[CompressedPoint], fee: u64) -> Result<Self, MlsagError> {
+    // TODO: Use a short mul for the fee
+    Ok(AggregateRingMatrixBuilder {
+      key_ring: vec![],
+      amounts_ring: vec![],
+      sum_out: commitments
+        .iter()
+        .map(|compressed| compressed.decompress().map(Point::into))
+        .sum::<Option<EdwardsPoint>>()
+        .ok_or(MlsagError::InvalidRing)? +
+        (*H * curve25519_dalek::Scalar::from(fee)),
+    })
+  }
+
+  /// Push a ring of [output key, commitment] to the matrix.
+  pub fn push_ring(&mut self, ring: &[[CompressedPoint; 2]]) -> Result<(), MlsagError> {
+    if self.key_ring.is_empty() {
+      self.key_ring = vec![vec![]; ring.len()];
+      // Now that we know the length of the ring, fill the `amounts_ring`.
+      self.amounts_ring = vec![-self.sum_out; ring.len()];
+    }
+
+    if (self.amounts_ring.len() != ring.len()) || ring.is_empty() {
+      // All the rings in an aggregate matrix must be the same length.
+      return Err(MlsagError::InvalidRing);
+    }
+
+    for (i, ring_member) in ring.iter().enumerate() {
+      self.key_ring[i].push(ring_member[0].decompress().ok_or(MlsagError::InvalidRing)?.into());
+      self.amounts_ring[i] += ring_member[1].decompress().ok_or(MlsagError::InvalidRing)?.into();
+    }
+
+    Ok(())
+  }
+
+  /// Build and return the [`RingMatrix`].
+  pub fn build(mut self) -> Result<RingMatrix, MlsagError> {
+    for (i, amount_commitment) in self.amounts_ring.drain(..).enumerate() {
+      self.key_ring[i].push(amount_commitment);
+    }
+    RingMatrix::new(self.key_ring)
+  }
+}

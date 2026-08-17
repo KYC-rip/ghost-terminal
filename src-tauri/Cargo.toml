@@ -155,6 +155,20 @@ base64 = "0.21"
 # or async runtime features.
 hickory-proto = { version = "0.24", default-features = false }
 
+# Offline-signing accessor patch (offline signing P0): the vendored copy of the
+# fork at the pinned rev adds 4 additive API surface points to monero-wallet —
+# pub `SignableTransaction::real_inputs()` / `payments()` and pub `InternalPayment`
+# / `ChangeEnum` — needed to verify a signed transaction against a prepared one
+# (ring-offset multiset) and to classify change ownership on a cold signer. See
+# vendor/monero-oxide/FORK_DELTA.md; rebase onto upstream = apply the same small
+# delta to a newer rev.
+[patch."https://github.com/KYC-rip/monero-oxide"]
+monero-wallet = { path = "vendor/monero-oxide/monero-oxide/wallet" }
+monero-oxide = { path = "vendor/monero-oxide/monero-oxide" }
+monero-daemon-rpc = { path = "vendor/monero-oxide/monero-oxide/interface/daemon", package = "monero-daemon-rpc" }
+monero-address = { path = "vendor/monero-oxide/monero-oxide/wallet/address", package = "monero-address" }
+monero-simple-request-rpc = { path = "vendor/monero-oxide/monero-oxide/interface/daemon/simple-request", package = "monero-simple-request-rpc" }
+
 # Compile ALL dependencies with full optimization even in dev builds. Block
 # scanning is almost entirely ed25519/curve25519 work, which runs 10-50x slower
 # when unoptimized — so a debug `cargo tauri dev` makes scanning 1000 blocks take

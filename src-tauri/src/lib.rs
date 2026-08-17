@@ -459,6 +459,12 @@ pub fn run() {
             commands::wallet::reselect_node,
             commands::wallet::get_transactions,
             commands::wallet::get_outputs,
+            // Offline (sign-only) spending
+            commands::wallet::export_watch_only,
+            commands::wallet::import_watch_only,
+            commands::wallet::export_unsigned_transfer,
+            commands::wallet::sign_offline_transfer,
+            commands::wallet::import_signed_transfer,
             // Proof operations
             commands::wallet::get_tx_key,
             commands::wallet::get_tx_proof,

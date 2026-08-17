@@ -24,7 +24,7 @@ const KEY_LEN: usize = 32;
 /// Plaintext wallet data that gets encrypted.
 #[derive(Serialize, Deserialize)]
 pub struct WalletFileData {
-    /// Hex-encoded 32-byte seed entropy (the secret)
+    /// Hex-encoded 32-byte seed entropy (the secret). Empty for watch-only vaults.
     pub seed_entropy: String,
     /// Last scanned blockchain height (for fast resume)
     pub scan_height: u64,
@@ -32,6 +32,19 @@ pub struct WalletFileData {
     pub accounts: Vec<AccountLabel>,
     /// Subaddress labels
     pub subaddress_labels: Vec<SubaddressLabel>,
+    /// Watch-only vault: view key scalar + PUBLIC spend point, NO spend material.
+    /// When present the wallet can scan/prepare but never sign.
+    #[serde(default)]
+    pub view_only: Option<WatchOnlyVault>,
+}
+
+/// A watch-only (ViewPair-only) vault: the public spend point and the view key
+/// scalar. Deliberately named `spend_public_hex` — never `spend_key_hex` (one
+/// careless rename away from persisting the private key).
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WatchOnlyVault {
+    pub spend_public_hex: String,
+    pub view_key_hex: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -179,6 +192,35 @@ pub fn wallet_exists(data_dir: &Path, identity_id: &str) -> bool {
     wallet_path(data_dir, identity_id)
         .map(|p| p.exists())
         .unwrap_or(false)
+}
+
+/// Save a watch-only vault: view key scalar + PUBLIC spend point, no spend
+/// material (the `watchonly` envelope's payload, re-persisted under the hot
+/// device's own password). Refuses to overwrite an existing vault.
+pub fn save_watch_only_vault(
+    data_dir: &Path,
+    identity_id: &str,
+    password: &str,
+    spend_public_hex: &str,
+    view_key_hex: &str,
+) -> Result<(), String> {
+    if wallet_exists(data_dir, identity_id) {
+        return Err("A wallet already exists for this identity".into());
+    }
+    let wallet_data = WalletFileData {
+        seed_entropy: String::new(),
+        scan_height: 0,
+        accounts: vec![AccountLabel {
+            index: 0,
+            label: "Primary".into(),
+        }],
+        subaddress_labels: vec![],
+        view_only: Some(WatchOnlyVault {
+            spend_public_hex: spend_public_hex.to_string(),
+            view_key_hex: view_key_hex.to_string(),
+        }),
+    };
+    save_wallet(data_dir, identity_id, &wallet_data, password)
 }
 
 // ── Output Cache (separate from encrypted wallet) ──
@@ -497,6 +539,7 @@ mod tests {
                 label: "Main".into(),
             }],
             subaddress_labels: vec![],
+            view_only: None,
         };
 
         let encrypted = encrypt_wallet(&data, "test_password");
@@ -513,6 +556,7 @@ mod tests {
             scan_height: 0,
             accounts: vec![],
             subaddress_labels: vec![],
+            view_only: None,
         };
 
         let encrypted = encrypt_wallet(&data, "correct_password");

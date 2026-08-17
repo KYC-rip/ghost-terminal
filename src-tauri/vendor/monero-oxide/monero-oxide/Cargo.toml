@@ -1,0 +1,57 @@
+[package]
+name = "monero-oxide"
+version = "0.1.4-alpha"
+description = "A modern Monero transaction library"
+license = "MIT"
+repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
+edition = "2021"
+rust-version = "1.85"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive", "alloc"] }
+
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
+monero-io = { path = "io", version = "0.1", default-features = false }
+monero-ed25519 = { path = "ed25519", version = "0.1", default-features = false }
+monero-primitives = { path = "primitives", version = "0.1", default-features = false }
+monero-mlsag = { path = "ringct/mlsag", version = "0.1", default-features = false }
+monero-clsag = { path = "ringct/clsag", version = "0.1", default-features = false }
+monero-borromean = { path = "ringct/borromean", version = "0.1", default-features = false }
+monero-bulletproofs = { path = "ringct/bulletproofs", version = "0.1", default-features = false }
+
+hex-literal = { version = ">= 0.4, <= 1", default-features = false }
+
+[dev-dependencies]
+hex = { version = "0.4", default-features = false, features = ["std"] }
+rand_core = { version = "0.6", default-features = false, features = ["std", "getrandom"] }
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+
+[features]
+std = [
+  "std-shims/std",
+
+  "zeroize/std",
+
+  "monero-io/std",
+  "monero-ed25519/std",
+  "monero-primitives/std",
+  "monero-mlsag/std",
+  "monero-clsag/std",
+  "monero-borromean/std",
+  "monero-bulletproofs/std",
+]
+
+compile-time-generators = ["curve25519-dalek/precomputed-tables", "monero-bulletproofs/compile-time-generators"]
+default = ["std", "compile-time-generators"]

@@ -491,6 +491,37 @@ pub async fn prepare_transfer(
 ) -> Result<PreparedTx, String> {
     emit_log(&app, "Tx", "info", "🔧 Preparing transaction...");
 
+    let (tx_metadata, _meta_key, prepared) =
+        prepare_and_stage(&app, &state, destinations.clone(), priority, selected_output_ids)
+            .await?;
+
+    Ok(PreparedTx {
+        fee: WalletState::format_xmr(prepared.fee),
+        amount: WalletState::format_xmr(prepared.amount),
+        tx_hash: String::new(), // Hash not known until signed
+        tx_metadata,
+        destinations: prepared
+            .destinations
+            .iter()
+            .map(|(addr, amt)| TxDestination {
+                address: addr.clone(),
+                amount: amt.to_string(),
+            })
+            .collect(),
+    })
+}
+
+/// Shared body of `prepare_transfer` and `export_unsigned_transfer`: connect to
+/// the daemon, select coins (honoring coin control), prepare the transaction via
+/// node failover, and stage the spend. Returns (serialized signable metadata,
+/// its meta key, the full prepared record).
+async fn prepare_and_stage(
+    app: &AppHandle,
+    state: &WalletState,
+    destinations: Vec<TxDestination>,
+    priority: Option<u8>,
+    selected_output_ids: Option<Vec<String>>,
+) -> Result<(Vec<u8>, String, transact::PreparedTransaction), String> {
     // Get daemon connection
     let daemon_url = state
         .get_daemon_url()
@@ -533,7 +564,7 @@ pub async fn prepare_transfer(
         let dropped = want.iter().filter(|id| !matched.contains(**id)).count();
         if dropped > 0 {
             emit_log(
-                &app,
+                app,
                 "Tx",
                 "warn",
                 &format!(
@@ -544,7 +575,7 @@ pub async fn prepare_transfer(
             );
         } else {
             emit_log(
-                &app,
+                app,
                 "Tx",
                 "info",
                 &format!("🎯 Coin control: {} pinned input(s)", outputs.len()),
@@ -569,7 +600,7 @@ pub async fn prepare_transfer(
 
     let total_amount: u64 = payments.iter().map(|(_, a)| a).sum();
     emit_log(
-        &app,
+        app,
         "Tx",
         "info",
         &format!(
@@ -615,7 +646,7 @@ pub async fn prepare_transfer(
     }
     let outputs = selected;
     emit_log(
-        &app,
+        app,
         "Tx",
         "info",
         &format!(
@@ -642,13 +673,13 @@ pub async fn prepare_transfer(
     // then rotate through the pool, abandoning any node that stalls, until one
     // actually serves it. prepare_transaction is generic over the transport.
     emit_log(
-        &app,
+        app,
         "Tx",
         "info",
         "🎲 Selecting decoys and computing fee...",
     );
     let prepared = prepare_with_failover(
-        &app,
+        app,
         &view_pair,
         &outputs,
         &payments,
@@ -660,7 +691,7 @@ pub async fn prepare_transfer(
     let fee_formatted = WalletState::format_xmr(prepared.fee);
     let amount_formatted = WalletState::format_xmr(prepared.amount);
     emit_log(
-        &app,
+        app,
         "Tx",
         "success",
         &format!(
@@ -688,23 +719,10 @@ pub async fn prepare_transfer(
         account: 0,
     };
     state
-        .stage_pending_spend(meta_key, prepared.spent_ids.clone(), staged_sent)
+        .stage_pending_spend(meta_key.clone(), prepared.spent_ids.clone(), staged_sent)
         .await;
 
-    Ok(PreparedTx {
-        fee: fee_formatted,
-        amount: amount_formatted,
-        tx_hash: String::new(), // Hash not known until signed
-        tx_metadata,
-        destinations: prepared
-            .destinations
-            .iter()
-            .map(|(addr, amt)| TxDestination {
-                address: addr.clone(),
-                amount: amt.to_string(),
-            })
-            .collect(),
-    })
+    Ok((tx_metadata, meta_key, prepared))
 }
 
 /// Build the spend-confirmation dialog body from the BACKEND-authoritative staged record
@@ -806,8 +824,6 @@ pub(crate) async fn sign_and_broadcast(
 
     let spend_key = state.get_spend_key().await.ok_or("Wallet is locked")?;
 
-    let daemon_url = state.get_daemon_url().await.ok_or("No daemon connected")?;
-
     // Deserialize the prepared transaction
     let signable = monero_wallet::send::SignableTransaction::read(&mut tx_metadata.as_slice())
         .map_err(|e| format!("Invalid transaction data: {:?}", e))?;
@@ -823,7 +839,23 @@ pub(crate) async fn sign_and_broadcast(
     };
     let signed_tx = transact::sign_transaction(prepared, &spend_key)?;
 
+    let meta_key = crate::wallet::state::tx_meta_key(&tx_metadata);
+    broadcast_and_commit(app, state, signed_tx, meta_key).await
+}
+
+/// Broadcast an already-signed transaction over the configured routing mode and
+/// commit its staged spend. Shared by `relay_transfer` (signs locally) and
+/// `import_signed_transfer` (broadcasts an externally-signed envelope) so both
+/// take the identical IP-hiding relay + commit path.
+async fn broadcast_and_commit(
+    app: &AppHandle,
+    state: &WalletState,
+    signed_tx: monero_oxide::transaction::Transaction,
+    meta_key: String,
+) -> Result<String, String> {
     emit_log(app, "Tx", "info", "📡 Broadcasting to network...");
+
+    let daemon_url = state.get_daemon_url().await.ok_or("No daemon connected")?;
 
     // Broadcast over the configured routing mode so the originating IP for the
     // transaction is never exposed. broadcast_transaction is generic.
@@ -863,7 +895,6 @@ pub(crate) async fn sign_and_broadcast(
 
     // Broadcast succeeded — commit the staged spend so the consumed outputs
     // leave the balance / coin-control immediately (a rescan reconciles later).
-    let meta_key = crate::wallet::state::tx_meta_key(&tx_metadata);
     let tip = state.tip_height().await;
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     state
@@ -1984,6 +2015,364 @@ pub async fn rescan(
         &format!("✅ Rescan started from height {}", height),
     );
     Ok(())
+}
+
+
+// ── Offline (sign-only) spending ──
+// Two-device cold-signing flow (docs/offline-signing-plan.md §5):
+//   hot:  export_watch_only ──(watchonly QR)──> cold: import_watch_only
+//   hot:  export_unsigned_transfer ──(unsigned QR)──> cold: sign_offline_transfer
+//        <──(signed QR)── hot: import_signed_transfer
+// The spend key never leaves the cold device; the hot device holds only the
+// view key + public spend point.
+
+/// Export this wallet's watch-only pair (view key + PUBLIC spend point) as a
+/// `watchonly` envelope for the cold device. Requires an unlocked wallet; the
+/// spend key is never read, derived, or serialized.
+#[tauri::command]
+pub async fn export_watch_only(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+) -> Result<serde_json::Value, String> {
+    let (id, spend_pub, view_sec) = state
+        .watch_parts_from_memory()
+        .await
+        .ok_or("Wallet is locked — unlock before exporting the watch-only pair")?;
+    let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
+    let network = state.get_network().await;
+    let address = view_pair.legacy_address(network).to_string();
+
+    let payload = crate::wallet::offline::WatchOnlyPayload {
+        view_key_hex: hex::encode(&*view_sec),
+        spend_public_key_hex: hex::encode(spend_pub),
+        address: address.clone(),
+    };
+    let envelope = crate::wallet::offline::encode_watch_only_payload(&payload)?;
+    emit_log(
+        &app,
+        "Wallet",
+        "warn",
+        "📤 Watch-only pair exported — it grants VIEW access only; the spend key was never included.",
+    );
+    Ok(serde_json::json!({
+        "envelope": envelope,
+        "identityId": id,
+        "address": address,
+    }))
+}
+
+/// Import a `watchonly` envelope from the cold device as a NEW watch-only vault:
+/// persist it under the hot device's own password, verify the envelope's claimed
+/// address against the keys it actually carries (tamper guard), then unlock and
+/// start scanning from genesis. Signing stays impossible — no spend key exists
+/// anywhere on this device.
+#[tauri::command]
+pub async fn import_watch_only(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    envelope: String,
+    password: String,
+    name: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let env = crate::wallet::offline::decode_envelope(&envelope)?;
+    let payload = crate::wallet::offline::decode_watch_only_payload(&env)?;
+
+    // Tamper guard: the address the payload claims must be the address these
+    // keys actually derive. A swapped spend point yields a different address.
+    let spend_bytes: [u8; 32] = hex::decode(&payload.spend_public_key_hex)
+        .map_err(|e| format!("Invalid public spend point: {}", e))?
+        .try_into()
+        .map_err(|_| "Public spend point must be 32 bytes".to_string())?;
+    let spend_point = monero_oxide::ed25519::CompressedPoint::from(spend_bytes)
+        .decompress()
+        .ok_or("Invalid public spend point")?;
+    let view_bytes: [u8; 32] = hex::decode(&payload.view_key_hex)
+        .map_err(|e| format!("Invalid view key: {}", e))?
+        .try_into()
+        .map_err(|_| "View key must be 32 bytes".to_string())?;
+    let view_key = zeroize::Zeroizing::new(monero_oxide::ed25519::Scalar::from(
+        curve25519_dalek::Scalar::from_bytes_mod_order(view_bytes),
+    ));
+    let network = state.get_network().await;
+    let view_pair = monero_wallet::ViewPair::new(spend_point, view_key)
+        .map_err(|e| format!("Failed to create ViewPair: {:?}", e))?;
+    let derived = view_pair.legacy_address(network).to_string();
+    if !derived.eq_ignore_ascii_case(&payload.address) {
+        return Err(format!(
+            "REFUSED: watch-only envelope address mismatch — payload claims {} but the \
+             keys derive {} (tampered or corrupted envelope)",
+            payload.address, derived
+        ));
+    }
+
+    let identity_id = name.unwrap_or_else(|| format!("wo-{}", &payload.spend_public_key_hex[..12]));
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    crate::wallet::storage::save_watch_only_vault(
+        &data_dir,
+        &identity_id,
+        &password,
+        &payload.spend_public_key_hex,
+        &payload.view_key_hex,
+    )?;
+
+    // Register the new identity so it appears in the wallet switcher and is
+    // discovered for background sync (the create_wallet flow persists the
+    // identity list separately in the renderer — here the import owns it).
+    let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let mut ids = crate::commands::identity::get_identities(app.clone())
+        .await
+        .unwrap_or_default();
+    if !ids.iter().any(|i| i.id == identity_id) {
+        ids.push(crate::wallet::Identity {
+            id: identity_id.clone(),
+            name: identity_id.clone(),
+            created: now,
+        });
+        if let Err(e) = crate::commands::identity::save_identities(app.clone(), ids).await {
+            log::warn!("identity registration for {identity_id} failed: {e}");
+        }
+    }
+
+    state.unlock(&identity_id, &password).await?;
+    emit_log(
+        &app,
+        "Wallet",
+        "success",
+        &format!("✅ Watch-only wallet imported: {}", identity_id),
+    );
+
+    let scan_height = state.get_scan_height().await;
+    crate::wallet::BlockScanner::start(app.clone(), "", "", scan_height).await?;
+
+    // Watch tier: persist the view pair so boot-time watch sync covers this
+    // identity too (best-effort, consent-gated, encrypt-or-don't-write inside).
+    if crate::wallet::scanner::read_config_bool(&app, "watchSync") {
+        let view_sec = zeroize::Zeroizing::new(view_bytes);
+        if let Err(e) =
+            crate::wallet::storage::save_watch(&data_dir, &identity_id, &spend_bytes, &view_sec)
+        {
+            log::warn!("watch store write for {identity_id} failed: {e}");
+        }
+    }
+
+    Ok(serde_json::json!({
+        "identityId": identity_id,
+        "address": derived,
+        "success": true,
+    }))
+}
+
+/// Step 1 of the offline flow (hot device): prepare a transfer (coins, decoys,
+/// fee — all online) and export it as an `unsigned` envelope + join key. The
+/// prepared spend is staged locally so the later import can prove the signed
+/// transaction returned from the cold device is EXACTLY this one.
+#[tauri::command]
+pub async fn export_unsigned_transfer(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    destinations: Vec<TxDestination>,
+    _account_index: u32,
+    priority: Option<u8>,
+    selected_output_ids: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    emit_log(&app, "Tx", "info", "📤 Preparing offline transaction...");
+    let (tx_metadata, meta_key, prepared) =
+        prepare_and_stage(&app, &state, destinations, priority, selected_output_ids).await?;
+
+    let has_change = prepared
+        .signable
+        .payments()
+        .iter()
+        .any(|p| matches!(p, monero_wallet::send::InternalPayment::Change(_)));
+    let staged = crate::wallet::offline::StagedTransferMeta {
+        account: 0,
+        payment_count: prepared.destinations.len(),
+        input_count: prepared.signable.real_inputs().len(),
+        has_change,
+        unsigned_tx_hex: hex::encode(&tx_metadata),
+        amount: prepared.amount.to_string(),
+        fee: prepared.fee.to_string(),
+    };
+    state.stage_offline_meta(&meta_key, staged).await;
+
+    let meta = crate::wallet::offline::EnvelopeMeta {
+        to: prepared
+            .destinations
+            .iter()
+            .map(|(addr, amt)| format!("{} {}", amt, addr))
+            .collect(),
+        amount: WalletState::format_xmr(prepared.amount),
+        fee: WalletState::format_xmr(prepared.fee),
+        account: 0,
+        // Join key: the hot side re-links the signed envelope to its staged
+        // spend through this (keccak of the unsigned signable). Embedded here —
+        // NOT renderer-supplied at import — so the link cannot be redirected.
+        tx_key: meta_key.clone(),
+    };
+    let envelope = crate::wallet::offline::encode_envelope(
+        crate::wallet::offline::KIND_UNSIGNED,
+        hex::encode(&tx_metadata),
+        meta,
+    )?;
+
+    emit_log(
+        &app,
+        "Tx",
+        "success",
+        &format!(
+            "✅ Offline transfer prepared: {} XMR + {} XMR fee — sign it on the cold device",
+            WalletState::format_xmr(prepared.amount),
+            WalletState::format_xmr(prepared.fee)
+        ),
+    );
+    Ok(serde_json::json!({
+        "envelope": envelope,
+        "joinKey": meta_key,
+        "destinations": prepared.destinations,
+        "amount": prepared.amount,
+        "fee": prepared.fee,
+        "inputCount": prepared.signable.real_inputs().len(),
+    }))
+}
+
+/// Step 2 of the offline flow (COLD device, no internet): verify the unsigned
+/// envelope (fail-closed: foreign change output, zero payments, empty inputs)
+/// and sign it with the resident spend key. Purely local — no daemon, no
+/// network. A watch-only vault cannot reach this point (no spend key).
+#[tauri::command]
+pub async fn sign_offline_transfer(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    envelope: String,
+) -> Result<serde_json::Value, String> {
+    let env = crate::wallet::offline::decode_envelope(&envelope)?;
+    if env.k != crate::wallet::offline::KIND_UNSIGNED {
+        return Err(format!("Expected an unsigned envelope, got kind '{}'", env.k));
+    }
+    let payload = crate::wallet::offline::envelope_payload(&env)?;
+    let signable = monero_wallet::send::SignableTransaction::read(&mut payload.as_slice())
+        .map_err(|e| format!("Invalid transaction data: {:?}", e))?;
+
+    let view_pair = state.get_view_pair().await.ok_or("Wallet is locked")?;
+    let summary =
+        crate::wallet::offline::verify_before_sign(&signable, &view_pair.spend().compress())?;
+
+    let spend_key = state
+        .get_spend_key()
+        .await
+        .ok_or("No spend key resident — locked or watch-only wallet cannot sign")?;
+
+    let signed = transact::sign_transaction(
+        transact::PreparedTransaction {
+            signable,
+            fee: summary.fee,
+            amount: summary.destinations.iter().map(|(_, a)| *a).sum(),
+            destinations: summary.destinations.clone(),
+            spent_ids: vec![],
+            tx_key_hex: String::new(),
+        },
+        &spend_key,
+    )?;
+
+    let signed_env = crate::wallet::offline::encode_envelope(
+        crate::wallet::offline::KIND_SIGNED,
+        hex::encode(signed.serialize()),
+        // Echo the join key back so the hot device re-links to its staged spend.
+        crate::wallet::offline::EnvelopeMeta {
+            tx_key: env.meta.tx_key.clone(),
+            ..Default::default()
+        },
+    )?;
+
+    emit_log(
+        &app,
+        "Tx",
+        "success",
+        &format!(
+            "✅ Offline transaction signed: {} XMR to {} destination(s), {} XMR fee — send the QR back",
+            WalletState::format_xmr(summary.destinations.iter().map(|(_, a)| *a).sum()),
+            summary.destinations.len(),
+            WalletState::format_xmr(summary.fee)
+        ),
+    );
+    Ok(serde_json::json!({
+        "envelope": signed_env,
+        "summary": {
+            "destinations": summary.destinations,
+            "change": summary.change,
+            "fee": summary.fee,
+            "inputCount": summary.input_count,
+        },
+    }))
+}
+
+/// Step 3 of the offline flow (hot device): import the `signed` envelope, prove
+/// it is EXACTLY the staged prepared transaction (ring-multiset bijection +
+/// output shape — [R3]), show the backend-authoritative OS confirm dialog, then
+/// broadcast over the configured routing mode and commit the staged spend.
+/// The join key travels INSIDE the envelope (echoed by the cold device), never
+/// from the renderer, so the staged-spend link cannot be redirected.
+#[tauri::command]
+pub async fn import_signed_transfer(
+    app: AppHandle,
+    state: State<'_, WalletState>,
+    envelope: String,
+) -> Result<String, String> {
+    let env = crate::wallet::offline::decode_envelope(&envelope)?;
+    if env.k != crate::wallet::offline::KIND_SIGNED {
+        return Err(format!("Expected a signed envelope, got kind '{}'", env.k));
+    }
+    let join_key = env.meta.tx_key.clone();
+    if join_key.is_empty() {
+        return Err("Signed envelope carries no join key — it was not produced by this flow".into());
+    }
+    let payload = crate::wallet::offline::envelope_payload(&env)?;
+    let signed = monero_oxide::transaction::Transaction::read(&mut payload.as_slice())
+        .map_err(|e| format!("Invalid signed transaction data: {:?}", e))?;
+
+    // Prove the signed tx matches the staged prepared tx — the core [R3] guard.
+    // The comparison uses the HOT-side staged copy of the unsigned transaction
+    // (never the envelope's own), so a swapped envelope cannot masquerade.
+    let staged_meta = state
+        .peek_offline_meta(&join_key)
+        .await
+        .ok_or("No staged transaction for this join key — prepare it first in this session")?;
+    let staged_bytes = hex::decode(&staged_meta.unsigned_tx_hex)
+        .map_err(|e| format!("Corrupt staged record: {}", e))?;
+    let staged_signable =
+        monero_wallet::send::SignableTransaction::read(&mut staged_bytes.as_slice())
+            .map_err(|e| format!("Corrupt staged record: {:?}", e))?;
+    crate::wallet::offline::verify_signed_against_staged(&signed, &staged_signable)?;
+
+    // OS confirmation from the BACKEND-authoritative staged record (never the
+    // renderer-supplied envelope text).
+    {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let staged = state.peek_pending_spend(&join_key).await;
+        let body = format_spend_confirm(staged.as_ref().map(|(d, _a, f)| (d.as_slice(), *f)));
+        let ok = app
+            .dialog()
+            .message(body)
+            .title("Confirm offline transaction")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Send".into(),
+                "Cancel".into(),
+            ))
+            .blocking_show();
+        if !ok {
+            state.discard_pending_spend(&join_key).await;
+            state.clear_offline_meta(&join_key).await;
+            emit_log(&app, "Tx", "warn", "Offline transaction cancelled at confirmation");
+            return Err("Transaction cancelled".into());
+        }
+    }
+
+    let result = broadcast_and_commit(&app, &state, signed, join_key.clone()).await;
+    state.clear_offline_meta(&join_key).await;
+    result
 }
 
 #[cfg(test)]

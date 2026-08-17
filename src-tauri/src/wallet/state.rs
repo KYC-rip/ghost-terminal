@@ -9,12 +9,13 @@ use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
 use monero_address::{MoneroAddress, Network};
-use monero_oxide::ed25519::{Point, Scalar};
+use monero_oxide::ed25519::{CompressedPoint, Point, Scalar};
 use monero_wallet::{Scanner, ViewPair, WalletOutput};
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 
 use super::keys;
+use super::offline;
 use super::storage::{self, AccountLabel, WalletFileData};
 use super::types::*;
 
@@ -171,6 +172,8 @@ struct WalletInner {
     view_pair: Option<ViewPair>,
     mnemonic: Option<Zeroizing<String>>,
     scanner: Option<Scanner>,
+    /// True for watch-only vaults (no spend key exists; signing is impossible).
+    view_only: bool,
 
     // Subaddress tracking
     // Next unused subaddress MINOR index per account (major account index → next minor).
@@ -192,6 +195,10 @@ struct WalletInner {
     /// Spend staged at prepare time (spent ids + partial sent-log entry), keyed
     /// by a hash of the tx metadata; committed only after the broadcast succeeds.
     pending_spends: HashMap<String, (Vec<String>, storage::SentTx)>,
+    /// Offline-flow shape of the staged spend (input/output counts, change flag),
+    /// keyed by the same tx-metadata hash. Kept separate so the hot relay path
+    /// stays untouched; the signed envelope is verified against this.
+    offline_staged: HashMap<String, offline::StagedTransferMeta>,
     /// Optimistic change credit per outgoing txid (atomic). After a send, the
     /// change returns to us but isn't scanned until the tx is mined, so we credit
     /// it here (counted in the TOTAL, as locked) until the real output is scanned —
@@ -241,6 +248,7 @@ impl WalletState {
                 view_pair: None,
                 mnemonic: None,
                 scanner: None,
+                view_only: false,
                 subaddress_next: std::collections::HashMap::from([(0u32, 1u32)]),
                 subaddress_labels: vec![],
                 scanned_outputs: vec![],
@@ -249,6 +257,7 @@ impl WalletState {
                 sent: vec![],
                 pending_spends: HashMap::new(),
                 pending_change: HashMap::new(),
+                offline_staged: HashMap::new(),
                 scan_height: 0,
                 daemon_url: None,
                 data_dir,
@@ -298,6 +307,7 @@ impl WalletState {
                 label: "Primary".into(),
             }],
             subaddress_labels: vec![],
+            view_only: None,
         };
         storage::save_wallet(&inner.data_dir, identity_id, &wallet_data, password)?;
         drop(inner);
@@ -313,22 +323,48 @@ impl WalletState {
         // Load and decrypt wallet file
         let wallet_data = storage::load_wallet(&inner.data_dir, identity_id, password)?;
 
-        // Derive keys from stored entropy
-        let entropy_bytes: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
-            .map_err(|e| format!("Invalid seed entropy: {}", e))?
-            .try_into()
-            .map_err(|_| "Seed entropy must be 32 bytes".to_string())?;
+        // Derive keys from stored entropy — or, for a watch-only vault, from the
+        // stored view key + PUBLIC spend point. Watch-only unlocks with NO spend
+        // key resident, so it can scan/prepare but every signing path fails cleanly
+        // (get_spend_key() → None → "Wallet is locked"-class errors).
+        let (spend_key, view_pair, view_key, mut scanner, view_only) =
+            if let Some(vo) = &wallet_data.view_only {
+                let spend_bytes: [u8; 32] = hex::decode(&vo.spend_public_hex)
+                    .map_err(|e| format!("Invalid public spend point: {}", e))?
+                    .try_into()
+                    .map_err(|_| "Public spend point must be 32 bytes".to_string())?;
+                let spend_point = CompressedPoint::from(spend_bytes)
+                    .decompress()
+                    .ok_or("Invalid public spend point")?;
+                let view_bytes: [u8; 32] = hex::decode(&vo.view_key_hex)
+                    .map_err(|e| format!("Invalid view key: {}", e))?
+                    .try_into()
+                    .map_err(|_| "View key must be 32 bytes".to_string())?;
+                let view_key = Zeroizing::new(Scalar::from(
+                    curve25519_dalek::Scalar::from_bytes_mod_order(view_bytes),
+                ));
+                let view_pair = ViewPair::new(spend_point, view_key.clone())
+                    .map_err(|e| format!("Failed to create ViewPair: {:?}", e))?;
+                let scanner = Scanner::new(view_pair.clone());
+                (None, view_pair, Some(view_key), scanner, true)
+            } else {
+                let entropy_bytes: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
+                    .map_err(|e| format!("Invalid seed entropy: {}", e))?
+                    .try_into()
+                    .map_err(|_| "Seed entropy must be 32 bytes".to_string())?;
 
-        let (spend_key, view_key) = keys::keys_from_entropy(&entropy_bytes)?;
+                let (spend_key, view_key) = keys::keys_from_entropy(&entropy_bytes)?;
 
-        // Derive public spend key: G * spend_key
-        let dalek_scalar: curve25519_dalek::Scalar = (*spend_key).into();
-        let spend_point = Point::from(&dalek_scalar * ED25519_BASEPOINT_POINT);
+                // Derive public spend key: G * spend_key
+                let dalek_scalar: curve25519_dalek::Scalar = (*spend_key).into();
+                let spend_point = Point::from(&dalek_scalar * ED25519_BASEPOINT_POINT);
 
-        // Create ViewPair and Scanner
-        let view_pair = ViewPair::new(spend_point, view_key.clone())
-            .map_err(|e| format!("Failed to create ViewPair: {:?}", e))?;
-        let mut scanner = Scanner::new(view_pair.clone());
+                // Create ViewPair and Scanner
+                let view_pair = ViewPair::new(spend_point, view_key.clone())
+                    .map_err(|e| format!("Failed to create ViewPair: {:?}", e))?;
+                let scanner = Scanner::new(view_pair.clone());
+                (Some(spend_key), view_pair, Some(view_key), scanner, false)
+            };
 
         // Derive primary address for display
         let network = inner.network;
@@ -411,10 +447,11 @@ impl WalletState {
             .map(|s| (s.account, s.index, s.label.clone()))
             .collect();
 
-        inner.spend_key = Some(spend_key);
-        inner.view_key = Some(view_key);
+        inner.spend_key = spend_key;
+        inner.view_key = view_key;
         inner.view_pair = Some(view_pair);
         inner.scanner = Some(scanner);
+        inner.view_only = view_only;
         inner.is_locked = false;
         inner.active_identity = Some(identity_id.to_string());
         inner.password = Some(password.to_string());
@@ -433,6 +470,7 @@ impl WalletState {
         inner.frozen.clear();
         inner.sent.clear();
         inner.pending_spends.clear();
+        inner.offline_staged.clear();
         inner.pending_change.clear();
 
         // Load cached outputs (avoids full rescan on relaunch)
@@ -499,6 +537,9 @@ impl WalletState {
     pub async fn restore_spend_key(&self, identity_id: &str, password: &str) -> Result<(), String> {
         let data_dir = self.inner.read().await.data_dir.clone();
         let wallet_data = storage::load_wallet(&data_dir, identity_id, password)?;
+        if wallet_data.view_only.is_some() {
+            return Err("Watch-only wallet has no spend key".into());
+        }
         let entropy: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
             .map_err(|e| format!("Invalid seed entropy: {}", e))?
             .try_into()
@@ -526,6 +567,9 @@ impl WalletState {
     pub async fn make_hot(&self, identity_id: &str, password: &str) -> Result<(), String> {
         let data_dir = self.inner.read().await.data_dir.clone();
         let wallet_data = storage::load_wallet(&data_dir, identity_id, password)?;
+        if wallet_data.view_only.is_some() {
+            return Err("Watch-only wallet has no spend key".into());
+        }
         let entropy: [u8; 32] = hex::decode(&wallet_data.seed_entropy)
             .map_err(|e| format!("Invalid seed entropy: {}", e))?
             .try_into()
@@ -617,6 +661,7 @@ impl WalletState {
                             label: label.clone(),
                         })
                         .collect(),
+                    view_only: None,
                 };
                 let _ = storage::save_wallet(&inner.data_dir, identity_id, &wallet_data, password);
             }
@@ -957,6 +1002,32 @@ impl WalletState {
         self.save_output_cache().await;
     }
 
+    /// Retain the offline-flow shape (input/output counts, change flag) for a
+    /// staged spend, keyed by its tx-metadata hash. Consumed by
+    /// `import_signed_transfer` to verify a returned envelope matches the
+    /// exact transaction the hot side prepared — no renderer input is trusted.
+    pub async fn stage_offline_meta(
+        &self,
+        meta_key: &str,
+        meta: offline::StagedTransferMeta,
+    ) {
+        self.inner
+            .write()
+            .await
+            .offline_staged
+            .insert(meta_key.to_string(), meta);
+    }
+
+    /// Read-only peek at the staged offline-flow shape.
+    pub async fn peek_offline_meta(&self, meta_key: &str) -> Option<offline::StagedTransferMeta> {
+        self.inner.read().await.offline_staged.get(meta_key).cloned()
+    }
+
+    /// Drop the offline-flow shape when its staged spend is discarded/committed.
+    pub async fn clear_offline_meta(&self, meta_key: &str) {
+        self.inner.write().await.offline_staged.remove(meta_key);
+    }
+
     /// Mark a set of output ids spent directly (used by sweep_all, which knows
     /// its inputs up-front). Records the sent entry and persists. When `credit_self`
     /// (the sweep destination is one of OUR OWN addresses — churn / vanish), the swept
@@ -1262,6 +1333,7 @@ impl WalletState {
         // state and survive. This also clears any stale spent over-count.
         inner.spent.clear();
         inner.pending_spends.clear();
+        inner.offline_staged.clear();
         inner.pending_change.clear();
         inner.sync_status.status = "SYNCING".to_string();
         inner.sync_status.height = from_height;

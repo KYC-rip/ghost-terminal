@@ -3,6 +3,7 @@ pub mod decoy_cache;
 pub mod device_key;
 pub mod keys;
 pub mod msg_sign;
+pub mod offline;
 pub mod reqwest_transport;
 pub mod scanner;
 pub mod state;
