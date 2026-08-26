@@ -163,31 +163,8 @@ pub struct Manager {
     connect_gen: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TunnelKind {
-    WireGuard,
-    OpenVpn,
-}
-
-impl TunnelKind {
-    pub fn journal_token(self) -> &'static str {
-        match self {
-            TunnelKind::WireGuard => "wireguard",
-            TunnelKind::OpenVpn => "ovpn",
-        }
-    }
-
-    /// Legacy bare tokens (`open`/`blocked`) predate kinds and mean WG.
-    fn from_journal_field(field: &str) -> Option<TunnelKind> {
-        match field {
-            "wireguard" | "wg" | "open" | "blocked" | "connecting" | "connected" | "errored" => {
-                Some(TunnelKind::WireGuard)
-            }
-            "ovpn" => Some(TunnelKind::OpenVpn),
-            _ => None,
-        }
-    }
-}
+/// Canonical definition lives in the lib (shared with the macOS helper).
+pub use ripley_vpn_broker::TunnelKind;
 
 /// Atomic, durable journal write. tmp → fsync → rename → fsync(dir).
 fn journal_persist(marker: &str) -> std::io::Result<()> {

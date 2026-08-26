@@ -597,7 +597,7 @@ fn dispatch(env: Envelope, uid: Uid, pid: Option<Pid>) -> Response {
         } => {
             // Kind sniff: content-based (the Up envelope carries no filename).
             // Same regex semantics as the renderer's decodeProfile check.
-            match state::sniff_tunnel_kind(config_text.as_str()) {
+            match ripley_vpn_broker::state_sniff(config_text.as_str()) {
                 Ok(state::TunnelKind::WireGuard) => {
                     match parser::parse_wg_config(config_text.as_str()) {
                         Ok(cfg) => match strong(uid, &id, "org.ripley.vpn.connect") {
@@ -612,7 +612,7 @@ fn dispatch(env: Envelope, uid: Uid, pid: Option<Pid>) -> Response {
                     }
                 }
                 Ok(state::TunnelKind::OpenVpn) => {
-                    match parser_ovpn::parse_ovpn_config(config_text.as_str()) {
+                    match ripley_vpn_broker::parse_ovpn_config(config_text.as_str()) {
                         Ok(cfg) => match strong(uid, &id, "org.ripley.vpn.connect") {
                             Some(deny) => deny,
                             None => run_op(id, |m| m.up_openvpn(&cfg, clean_profile_name(profile_name))),
