@@ -280,6 +280,38 @@ impl MgmtClient {
         }
         Ok(())
     }
+    /// Read one newline-terminated line. A socket read timeout (TimedOut /
+    /// WouldBlock) maps to `Ok(None)` — SOFT, meaning "nothing arrived yet".
+    /// Callers treat None as keep-polling; hard IO errors still surface as Err.
+    fn read_line_soft(&mut self) -> Result<Option<String>, MgmtError> {
+        use std::io::Read;
+        let mut buf = [0u8; 512];
+        let n = match self
+            .stream
+            .as_mut()
+            .ok_or_else(|| MgmtError::Protocol("client closed".into()))?
+            .read(buf.as_mut())
+        {
+            Ok(n) => n,
+            // Timeout/WouldBlock: nothing arrived inside the socket window.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                return Ok(None)
+            }
+            Err(e) => return Err(MgmtError::Io(e.to_string())),
+        };
+        if n == 0 {
+            return Err(MgmtError::Protocol("connection closed by openvpn".into()));
+        }
+        let text = String::from_utf8_lossy(&buf[..n]).trim_end_matches('\n').trim_end().to_string();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(text))
+    }
+
 
     fn read_line(&mut self) -> Result<Option<String>, MgmtError> {
         use std::io::Read;
@@ -380,30 +412,35 @@ impl MgmtState {
 /// protocol signal (EXITING/RECONNECTING) is terminal. The WORKER owns the
 /// real deadline; this function never enforces one itself beyond the per-poll
 /// socket timeout, so TLS negotiation time can never abort bring-up early.
+/// One SOFT snapshot probe against the management socket. Contract:
+///   - `Ok(None)`  = still connecting (mgmt socket not yet bound, no STATE line
+///     within this snapshot's window, socket read timed out, or non-terminal
+///     STATE such as WAIT/AUTH/GET_CONFIG). The worker KEEPS POLLING.
+///   - `Ok(Some(v4))` = CONNECTED,SUCCESS with TUN address present at (d).
+///   - `Err` = terminal: EXITING/RECONNECTING, or CONNECTED without a TUN
+///     address (fail closed — never install a guessed address).
+/// The WORKER owns the total bring-up deadline; nothing here enforces one, so
+/// TLS negotiation can never abort bring-up early. This function contains NO
+/// blocking read beyond one socket-timeout window (~2s via set_read_timeout).
+#[cfg(target_os = "linux")]
 pub fn poll_connected_once() -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
-    // Connect failure is SOFT: the mgmt socket appears only after openvpn
-    // finishes argument parsing and forks its listener — retry until the
-    // worker's outer deadline says otherwise.
+    // Connect failure is SOFT: the mgmt socket exists only after openvpn
+    // finishes argument parsing and creates its listener — keep polling until
+    // the worker's outer deadline says otherwise.
     let mut c = match MgmtClient::connect() {
         Ok(c) => c,
         Err(_) => return Ok(None),
     };
     if let Err(e) = c.send_command("state on") {
-        return Err(e); // stream died before first write — surface hard errors
+        return Err(e); // stream unusable before first write — surface it
     }
-    // Read up to ~2s of lines per poll. CONNECTED terminates immediately.
-    let soft_deadline = Instant::now() + Duration::from_secs(2);
+    // Snapshot loop bounded by the socket read timeout: every read that times
+    // out maps to Ok(None) via read_line_soft; OPEN ended → soft too.
     loop {
-        if Instant::now() >= soft_deadline {
-            return Ok(None); // keep polling — NOT terminal
-        }
-        match c.read_line()? {
+        match c.read_line_soft()? {
             Some(line) if line.starts_with(">STATE:") => {
                 if line.contains(",CONNECTED,SUCCESS,") {
                     let tun = MgmtState::parse(&line).tun_local_v4;
-                    // Missing (d) is Ok(Some) folded into Ok(None)? NO — the
-                    // caller distinguishes "still connecting" (None) from
-                    // "connected without address" — use a sentinel via error.
                     if tun.is_none() {
                         return Err(MgmtError::Protocol(
                             "CONNECTED but TUN address absent — fail closed".into(),
@@ -414,9 +451,12 @@ pub fn poll_connected_once() -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
                 if line.contains(",EXITING,") || line.contains(",RECONNECTING,") {
                     return Err(MgmtError::Protocol(line));
                 }
+                // WAIT / AUTH / GET_CONFIG / RECONNECTING-progress lines:
+                // not terminal — keep polling from the worker.
+                return Ok(None);
             }
             Some(_) => continue,
-            None => return Ok(None), // connection closed w/o CONNECTED → retry
+            None => return Ok(None),
         }
     }
 }
@@ -617,11 +657,11 @@ pub fn spawn_openvpn(conf_body: &Zeroizing<String>) -> Result<Child, OvpnSupErro
 
 /// Post-CONNECTED kernel bring-up: tun address from management field (d),
 /// then policy routing reusing the SAME constants as wg_up.
-#[cfg(target_os = "linux")]
-pub struct IpLinkError(pub NetErrAlias);
+pub type NetErrAlias = String;
 
 #[cfg(target_os = "linux")]
-pub type NetErrAlias = String;
+#[allow(dead_code)]
+pub struct IpLinkError(pub NetErrAlias);
 
 /// Linux apply stage 1+2: addr/link-up + resolvectl DNS (fail-closed).
 /// Policy routing (the single table-51820 default) is added by the worker via

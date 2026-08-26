@@ -102,8 +102,17 @@ pub fn finalize(b: Base) -> View {
     let phase = if b.configured {
         if b.degraded {
             VpnPhase::DegradedBlocked
-        } else if is_ovpn || hs.is_some() {
-            VpnPhase::Connected // handshake observed (wg) or journaled mgmt CONNECTED (ovpn)
+        } else if is_ovpn {
+            // OVPN: Connected ONLY when the worker completed apply (mgmt
+            // CONNECTED + addr/routes/DNS verified under the lock). configured-
+            // at-spawn alone is ConnectingBlocked while TLS is in flight.
+            if b.ovpn_connected {
+                VpnPhase::Connected
+            } else {
+                VpnPhase::ConnectingBlocked
+            }
+        } else if hs.is_some() {
+            VpnPhase::Connected // WG handshake observed
         } else {
             VpnPhase::ConnectingBlocked // configured, no handshake yet
         }
@@ -1043,4 +1052,40 @@ fn sleep_sleep(d: Duration) {
 /// pub(crate).
 fn netops_policy_routing_up() -> Vec<netops::NetError> {
     netops::ovpn_routes_up()
+}
+
+#[cfg(test)]
+mod ovpn_phase_tests {
+    use super::*;
+
+    fn ovpn_base(connected: bool) -> Base {
+        Base {
+            egress: Egress::Blocked,
+            ks_pref: true,
+            ks_active: true,
+            ipv6: Some(Ipv6Policy::Block),
+            configured: true,
+            degraded: false,
+            errored: false,
+            dirty: false,
+            profile_name: Some("test".into()),
+            connected_since_unix: None,
+            dns_filter: false,
+            tunnel_kind: Some(TunnelKind::OpenVpn),
+            ovpn_connected: connected,
+        }
+    }
+
+    #[test]
+    fn ovpn_configured_without_worker_proof_is_connecting_blocked() {
+        // TLS in flight: mgmt CONNECTED has not been journaled yet.
+        let v = finalize(ovpn_base(false));
+        assert_eq!(v.phase, VpnPhase::ConnectingBlocked);
+    }
+
+    #[test]
+    fn ovpn_with_worker_applied_is_connected() {
+        let v = finalize(ovpn_base(true));
+        assert_eq!(v.phase, VpnPhase::Connected);
+    }
 }
