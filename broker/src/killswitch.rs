@@ -261,8 +261,12 @@ mod tests {
         // Only the fwmark-carrying filter socket may reach the resolver.
         assert!(rs.contains(&format!("meta mark {FWMARK} ip daddr 1.1.1.1 udp dport 53 accept")));
         // A plain (unmarked) DNS packet to a resolver must NOT be accepted —
-        // it is redirected instead, never allowed through directly.
-        assert!(!rs.contains("ip daddr 1.1.1.1 udp dport 53 accept"));
+        // it is redirected instead, never allowed through directly. The marked
+        // hole above contains the same substring, so anchor the negation on a
+        // line start followed by an unmarked rule.
+        assert!(!rs
+            .lines()
+            .any(|l| l.trim_start().starts_with("ip daddr 1.1.1.1 udp dport 53 accept")));
         assert!(rs.contains("policy drop;"));
     }
 
