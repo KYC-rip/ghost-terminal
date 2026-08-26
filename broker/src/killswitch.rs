@@ -22,6 +22,26 @@ use crate::types::Ipv6Policy;
 
 pub const TABLE: &str = "ripley_vpn";
 
+/// Transport protocol of the pinned tunnel endpoint. WireGuard is always UDP;
+/// OpenVPN profiles may carry either. The endpoint hole MUST match the real
+/// transport or a TCP profile is blackholed (and loosening it without the mark
+/// would let unmarked traffic through — never do that).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndpointProto {
+    Udp,
+    Tcp,
+}
+
+impl EndpointProto {
+    /// nftables protocol keyword for the rule text.
+    pub fn nft_name(self) -> &'static str {
+        match self {
+            EndpointProto::Udp => "udp",
+            EndpointProto::Tcp => "tcp",
+        }
+    }
+}
+
 fn header() -> String {
     // add-then-delete makes the following (re)definition an atomic replace that
     // never fails on a pre-existing OR absent table.
@@ -29,19 +49,26 @@ fn header() -> String {
 }
 
 /// Build the active ruleset that pins exactly the endpoint via the physical dev.
-fn ruleset(endpoint_ip: IpAddr, port: u16, ipv6: Ipv6Policy, phys: &str) -> String {
-    // `meta mark {FWMARK}` ensures ONLY WireGuard's own marked transport packets
-    // can use the endpoint hole — not another process racing during bring-up.
-    // WireGuard transport is fwmark-stamped. Plain ICMP to the same peer is
-    // also allowed so the host speed-test can measure the live server while
-    // connected (without opening a general clearnet hole).
+fn ruleset(
+    endpoint_ip: IpAddr,
+    port: u16,
+    ipv6: Ipv6Policy,
+    phys: &str,
+    proto: EndpointProto,
+) -> String {
+    // `meta mark {FWMARK}` ensures ONLY WireGuard's (or marked-OpenVPN's) own
+    // transport packets can use the endpoint hole — not another process racing
+    // during bring-up. Plain ICMP to the same peer is also allowed so the host
+    // speed-test can measure the live server while connected (without opening
+    // a general clearnet hole).
+    let l4 = proto.nft_name();
     let ep = match endpoint_ip {
         IpAddr::V4(v4) => format!(
-            "        oifname \"{phys}\" meta mark {FWMARK} ip daddr {v4} udp dport {port} accept\n\
+            "        oifname \"{phys}\" meta mark {FWMARK} ip daddr {v4} {l4} dport {port} accept\n\
              oifname \"{phys}\" ip daddr {v4} icmp type echo-request accept\n"
         ),
         IpAddr::V6(v6) => format!(
-            "        oifname \"{phys}\" meta mark {FWMARK} ip6 daddr {v6} udp dport {port} accept\n\
+            "        oifname \"{phys}\" meta mark {FWMARK} ip6 daddr {v6} {l4} dport {port} accept\n\
              oifname \"{phys}\" ip6 daddr {v6} icmpv6 type echo-request accept\n"
         ),
     };
@@ -65,17 +92,18 @@ fn ruleset(endpoint_ip: IpAddr, port: u16, ipv6: Ipv6Policy, phys: &str) -> Stri
 }
 
 /// Install (or atomically replace) the kill-switch pinning `endpoint_ip:port`
-/// out `phys`.
+/// out `phys` over the given transport.
 pub fn install(
     endpoint_ip: IpAddr,
     port: u16,
     ipv6: Ipv6Policy,
     phys: &str,
+    proto: EndpointProto,
 ) -> Result<(), NetError> {
     run_stdin(
         "nft",
         &["-f", "-"],
-        ruleset(endpoint_ip, port, ipv6, phys).as_bytes(),
+        ruleset(endpoint_ip, port, ipv6, phys, proto).as_bytes(),
     )
 }
 
@@ -208,6 +236,7 @@ mod tests {
             51820,
             Ipv6Policy::Block,
             "eth0",
+            EndpointProto::Udp,
         );
         assert!(rs.contains("policy drop;"));
         assert!(rs.contains(
@@ -229,8 +258,44 @@ mod tests {
             1,
             Ipv6Policy::FullTunnel,
             "wlan0",
+            EndpointProto::Udp,
         );
         assert!(!rs.contains("meta nfproto ipv6 drop"));
+    }
+
+    #[test]
+    fn tcp_proto_hole_matches_tcp_not_udp_and_keeps_the_mark() {
+        // OpenVPN TCP profiles: the hole MUST switch transport WITHOUT losing
+        // the fwmark gate — an unmarked accept would be a leak.
+        let rs = ruleset(
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)),
+            443,
+            Ipv6Policy::Block,
+            "eth0",
+            EndpointProto::Tcp,
+        );
+        assert!(rs.contains(
+            "oifname \"eth0\" meta mark 0xca6c ip daddr 203.0.113.9 tcp dport 443 accept"
+        ));
+        assert!(!rs.contains("udp dport 443"));
+        assert!(rs.contains("meta nfproto ipv6 drop"));
+        // No tcp-flavored blanket established rule may appear either.
+        assert!(!rs.contains("ct state established"));
+    }
+
+    #[test]
+    fn udp_proto_hole_is_unchanged_wg_shape() {
+        let rs = ruleset(
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+            51820,
+            Ipv6Policy::Block,
+            "eth0",
+            EndpointProto::Udp,
+        );
+        assert!(!rs.contains("tcp dport 51820"));
+        assert!(rs
+            .lines()
+            .all(|l| !l.trim_start().starts_with("tcp dport")));
     }
 
     #[test]

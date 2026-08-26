@@ -336,7 +336,13 @@ impl Manager {
         journal_persist("connecting").map_err(|e| format!("cannot persist intent: {e}"))?;
 
         // Seal egress first (fail-closed). Only on success is egress Blocked.
-        if let Err(e) = killswitch::install(endpoint_ip, cfg.endpoint().port(), cfg.ipv6(), &phys) {
+        if let Err(e) = killswitch::install(
+            endpoint_ip,
+            cfg.endpoint().port(),
+            cfg.ipv6(),
+            &phys,
+            killswitch::EndpointProto::Udp, // WireGuard transport is always UDP
+        ) {
             self.errored = true;
             // nft -f is atomic: on failure any prior block is intact, so restore
             // the prior marker (never a blanket "open" that would drop protection
