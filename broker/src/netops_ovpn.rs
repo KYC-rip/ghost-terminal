@@ -416,9 +416,20 @@ pub fn build_runtime_conf(
     if let Some(auth) = cfg.auth_digest() {
         let _ = writeln!(t, "auth {auth}");
     }
-    t.push_str(cfg.ca_block());
-    t.push_str(cfg.cert_block());
-    t.push_str(cfg.key_block());
+    if cfg.remote_cert_tls() {
+        let _ = writeln!(t, "remote-cert-tls server");
+    }
+    if let Some(name) = cfg.verify_x509_name() {
+        let _ = writeln!(t, "verify-x509-name {name} name");
+    }
+    if let Some(kd) = cfg.key_direction_emitted() {
+        let _ = writeln!(t, "key-direction {kd}");
+    }
+    // PEM bodies are re-emitted WITH their <ca>/<cert>/<key> wrappers: the
+    // parser stores raw block interiors; OpenVPN requires the tags.
+    let _ = writeln!(t, "<ca>\n{}</ca>", cfg.ca_block());
+    let _ = writeln!(t, "<cert>\n{}</cert>", cfg.cert_block());
+    let _ = writeln!(t, "<key>\n{}</key>", cfg.key_block());
     if let Some((prot, body)) = cfg.tls_auth_or_crypt() {
         match prot {
             crate::parser_ovpn::TlsProtection::TlsAuth => {

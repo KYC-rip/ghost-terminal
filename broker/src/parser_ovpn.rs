@@ -97,6 +97,10 @@ pub struct OvpnConfig {
     tls_auth_or_crypt: Option<(TlsProtection, Zeroizing<String>)>,
     data_ciphers: Option<String>,
     auth_digest: Option<String>,
+    remote_cert_tls: bool,
+    verify_x509_name: Option<String>,
+    key_direction_emitted: Option<u8>,
+    legacy_cipher: Option<String>,
     key_direction: Option<u8>,
     exit_notify: Option<u8>,
 }
@@ -145,6 +149,18 @@ impl OvpnConfig {
         self.auth_digest.as_deref()
     }
     /// PEM block bodies (zeroized buffers; returned as &str for conf assembly).
+    pub fn remote_cert_tls(&self) -> bool {
+        self.remote_cert_tls
+    }
+    pub fn verify_x509_name(&self) -> Option<&str> {
+        self.verify_x509_name.as_deref()
+    }
+    pub fn key_direction_emitted(&self) -> Option<u8> {
+        self.key_direction_emitted
+    }
+    pub fn legacy_cipher(&self) -> Option<&str> {
+        self.legacy_cipher.as_deref()
+    }
     pub fn ca_block(&self) -> &str {
         &self.ca_block
     }
@@ -194,10 +210,15 @@ fn bounded_u16(key: &'static str, v: &str, lo: u32, hi: u32) -> Result<u16, Ovpn
     Ok(n as u16)
 }
 
+/// PEM-structural validation: ASCII base64/armor only AND carries at least one
+/// BEGIN/END pair (tls-auth static keys use "BEGIN OpenVPN Static key V1").
+/// Anything else (e.g. raw directive text smuggled into a block) is rejected —
+/// this closes the config-injection channel through re-emitted blocks.
 fn is_pemish_body(body: &str) -> bool {
-    // PEM armor lines are ASCII base64 / headers; allow comments whitespace.
-    body.lines()
-        .all(|l| l.is_empty() || l.bytes().all(|b| b.is_ascii_graphic() || b == b' '))
+    let all_ascii = body
+        .lines()
+        .all(|l| l.is_empty() || l.bytes().all(|b| b.is_ascii_graphic() || b == b' ' || b == b'#'));
+    all_ascii && body.contains("-----BEGIN ") && body.contains("-----END ")
 }
 
 // Which directives may carry multiple space-separated arguments that we accept.
@@ -238,6 +259,9 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
     let mut key_direction: Option<u8> = None;
     let mut exit_notify: Option<u8> = None;
     let mut tls_block: Option<(TlsProtection, Zeroizing<String>)> = None;
+    let mut remote_cert_tls = false;
+    let mut verify_x509_name: Option<String> = None;
+    let mut legacy_cipher: Option<String> = None;
 
     let mut ca = Option::<Zeroizing<String>>::None;
     let mut cert = Option::<Zeroizing<String>>::None;
@@ -309,6 +333,7 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
                 "key" => "key",
                 "tls-auth" => "tls-auth",
                 "tls-crypt" => "tls-crypt",
+                "auth-user-pass" => return Err(OvpnParseError::AuthUserPassUnsupported),
                 other => return Err(OvpnParseError::UnknownBlock(other.to_string())),
             };
             current_block = Some(block_name);
@@ -448,7 +473,6 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
                     remote = Some((host, port, None));
                 }
             }
-            "dns" => unreachable!(),
             "dhcp-option" => {
                 let mut parts = dargs.split_whitespace();
                 let kind = parts.next().unwrap_or("");
@@ -464,13 +488,28 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
                             reason: "unexpected trailing argument".into(),
                         });
                     }
-                    let ip = IpAddr::from_str(ip_s).map_err(|_| OvpnParseError::BadValue {
-                        key: "dhcp-option",
-                        reason: "bad DNS IP".into(),
-                    })?;
+                    let ip_v4: std::net::Ipv4Addr =
+                        ip_s.parse().map_err(|_| OvpnParseError::BadValue {
+                            key: "dhcp-option",
+                            reason: "only IPv4 DNS servers accepted in v1".into(),
+                        })?;
+                    let ip = IpAddr::V4(ip_v4);
+                    // WG-parity usable-class gate (types::validate_dns_ip):
+                    // unspecified / broadcast / loopback / multicast / link-local
                     let unusable = match ip {
-                        IpAddr::V4(v4) => v4.is_unspecified() || v4.is_broadcast(),
-                        IpAddr::V6(v6) => v6.is_unspecified(),
+                        IpAddr::V4(v4) => {
+                            v4.is_unspecified()
+                                || v4.is_broadcast()
+                                || v4.is_loopback()
+                                || v4.is_multicast()
+                                || v4.is_link_local()
+                                || v4.is_private() == false && v4.octets()[0] == 0
+                        }
+                        IpAddr::V6(v6) => {
+                            v6.is_unspecified()
+                                || v6.is_loopback()
+                                || v6.is_multicast()
+                        }
                     };
                     if unusable {
                         return Err(OvpnParseError::BadValue {
@@ -503,39 +542,58 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
                         reason: "only 'server' accepted".into(),
                     });
                 }
+                remote_cert_tls = true;
             }
             "auth" => {
                 mark_seen(&mut seen, "auth")?;
-                if !dargs.starts_with("SHA") {
+                if !matches!(dargs, "SHA256" | "SHA384" | "SHA512") {
                     return Err(OvpnParseError::BadValue {
                         key: "auth",
-                        reason: "only SHA digests accepted".into(),
+                        reason: "only SHA256/SHA384/SHA512 accepted".into(),
                     });
                 }
                 auth_digest = Some(dargs.to_string());
             }
             "cipher" => {
                 mark_seen(&mut seen, "cipher")?;
-                if dargs.eq_ignore_ascii_case("none") || dargs.starts_with("BF-") {
+                // AEAD allowlist (plan): AES-GCM / CHACHA20-POLY1305 families.
+                let ok = ["AES-128-GCM", "AES-192-GCM", "AES-256-GCM", "CHACHA20-POLY1305"]
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(dargs));
+                if !ok {
                     return Err(OvpnParseError::BadValue {
                         key: "cipher",
-                        reason: "weak or disabled cipher refused".into(),
+                        reason: "only AEAD ciphers (AES-GCM/CHACHA20-POLY1305) accepted".into(),
                     });
                 }
+                legacy_cipher = Some(dargs.to_string());
             }
             "data-ciphers" => {
                 mark_seen(&mut seen, "data-ciphers")?;
                 for c in dargs.split(':') {
-                    if c.eq_ignore_ascii_case("none") || c.starts_with("BF-") {
+                    let ok = ["AES-128-GCM", "AES-192-GCM", "AES-256-GCM", "CHACHA20-POLY1305"]
+                        .iter()
+                        .any(|c2| c2.eq_ignore_ascii_case(c.trim()));
+                    if !ok {
                         return Err(OvpnParseError::BadValue {
                             key: "data-ciphers",
-                            reason: "weak or disabled cipher refused".into(),
+                            reason: format!("non-AEAD cipher '{c}' refused"),
                         });
                     }
                 }
                 data_ciphers = Some(dargs.to_string());
             }
-            "data-ciphers-fallback" => {} // validated like cipher family implicitly
+            "data-ciphers-fallback" => {
+                let ok = ["AES-128-GCM", "AES-192-GCM", "AES-256-GCM", "CHACHA20-POLY1305"]
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(dargs.trim()));
+                if !ok {
+                    return Err(OvpnParseError::BadValue {
+                        key: "data-ciphers-fallback",
+                        reason: format!("non-AEAD fallback '{dargs}' refused"),
+                    });
+                }
+            }
             "key-direction" => {
                 mark_seen(&mut seen, "key-direction")?;
                 let n: u8 = dargs.parse().map_err(|_| OvpnParseError::BadValue {
@@ -586,6 +644,7 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
                 }
             }
             "verify-x509-name" => {
+                mark_seen(&mut seen, "verify-x509-name")?;
                 let mut parts = dargs.split_whitespace();
                 let name_v = parts.next().unwrap_or("");
                 if name_v.len() > 128 || !name_v.bytes().all(|b| b.is_ascii_graphic()) {
@@ -594,6 +653,7 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
                         reason: "malformed".into(),
                     });
                 }
+                verify_x509_name = Some(name_v.to_string());
             }
             "auth-nocache" | "ping-timer-rem" => {} // benign flags, accepted
             "ping" | "ping-restart" => {
@@ -687,6 +747,10 @@ pub fn parse_ovpn_config(input: &str) -> Result<OvpnConfig, OvpnParseError> {
         data_ciphers,
         auth_digest,
         key_direction,
+        remote_cert_tls,
+        verify_x509_name,
+        key_direction_emitted: key_direction,
+        legacy_cipher,
         exit_notify,
     })
 }
