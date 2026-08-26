@@ -967,9 +967,11 @@ fn destroy_tunnel_owning(ip: &str) {
     let Some(iface) = route_field(ip, "interface").ok().filter(|i| i.starts_with("utun")) else {
         return;
     };
-    // A live WireGuard tunnel answers `wg show <iface>`; a dead leftover
-    // (or a foreign utun like Mihomo's) does not. Only skip destruction when
-    // the interface is a genuinely working WireGuard peer.
+    // 4-way ownership matrix (plan v9):
+    //   live-wg      → wg show succeeds                → SKIP
+    //   live-ovpn    → our pidfile alive (comm+start)  → SKIP
+    //   dead-ovpn    → our stale pidfile artifacts     → DESTROY + unlink
+    //   foreign      → no marker at all (Mihomo etc.)  → DESTROY
     let is_live_wg = tool("wg")
         .ok()
         .and_then(|wg| run_capture(&wg, &["show", &iface], None).ok())
@@ -977,7 +979,28 @@ fn destroy_tunnel_owning(ip: &str) {
     if is_live_wg {
         return;
     }
+    if ovpn_child_alive() {
+        return; // a live OpenVPN child of OURS owns this route
+    }
+    ripley_vpn_broker::netops_ovpn::ovpn_down(); // sweep stale pidfile/sidecar if claimed
     let _ = destroy_tunnel_interface(&iface);
+}
+
+/// True when the pidfile-recorded openvpn child is alive AND identity-matched.
+/// On macOS, start-time identity comes from the helperd supervisor's record,
+/// not /proc. Absent pidfile ⇒ no claim.
+fn ovpn_child_alive() -> bool {
+    // The helperd worker protocol (Step 5b) validates the child via waitpid;
+    // until a connect has ever run there is no pidfile, so this is false on
+    // fresh installs — exactly the safe default for foreign-tunnel destruction.
+    std::fs::read_to_string(ovpn_pid_file_path())
+        .map(|body| !body.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// macOS pidfile location (private state dir scope).
+fn ovpn_pid_file_path() -> std::path::PathBuf {
+    PathBuf::from("/var/run/ripley-vpn/private/ovpn.pid")
 }
 
 /// Kill orphaned `wg-quick up` / `route -n monitor` processes. wg-quick's
@@ -2178,3 +2201,4 @@ mod ovpn_proto_tests {
         assert!(!rules.contains("proto udp to 167.88.161.83"));
     }
 }
+
