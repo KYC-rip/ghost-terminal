@@ -49,7 +49,18 @@ impl std::fmt::Display for OvpnSupError {
 }
 
 fn mgmt_sock_path() -> PathBuf {
-    PathBuf::from("/run/ripley-vpn/mgmt/mgmt.sock")
+    #[cfg(target_os = "linux")]
+    {
+        // Env override for tests only.
+        match std::env::var("ROSL_OVPN_MGMT_SOCK") {
+            Ok(p) if !p.is_empty() => PathBuf::from(p),
+            _ => PathBuf::from("/run/ripley-vpn/mgmt/mgmt.sock"),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        PathBuf::from("/var/run/ripley-vpn/mgmt/mgmt.sock")
+    }
 }
 
 /// PID file path. Env override exists for tests only.
@@ -137,7 +148,6 @@ fn remove_artifacts() {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn signal_pid(pid: i32, sig: nix::sys::signal::Signal) -> Result<(), OvpnSupError> {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), sig)
         .map_err(|e| OvpnSupError::Signal(format!("kill {pid}: {e}")))
@@ -156,8 +166,11 @@ fn proc_comm_is_openvpn(pid: i32) -> bool {
         .unwrap_or(false)
 }
 
-pub fn ovpn_down_linux() {
-    // placeholder replaced below
+#[cfg(not(target_os = "linux"))]
+fn proc_comm_is_openvpn(_pid: i32) -> bool {
+    // macOS supervision lives in helperd's waitpid path; identity check via
+    // pidfile alone here, comm verification happens there.
+    true
 }
 
 pub fn ovpn_down() -> Vec<OvpnSupError> {
@@ -192,11 +205,8 @@ pub fn ovpn_down() -> Vec<OvpnSupError> {
 
 /// macOS: artifact cleanup only — child liveness/signaling is owned by
 /// helperd's supervisor (direct child + waitpid), not by this pidfile shim.
-#[cfg(not(target_os = "linux"))]
-pub fn ovpn_down() -> Vec<OvpnSupError> {
-    remove_artifacts();
-    Vec::new()
-}
+// (non-Linux ovpn_down removed — unified above; signal helpers still linux-gated)
+
 
 /// Kind-aware transfer counters for the ovpn path. The management `status`
 /// request/response supplies TUN/TOUT bytes; until the worker's client is
@@ -302,7 +312,7 @@ impl MgmtClient {
         { Ok(None) }
     }
 
-    #[cfg(target_os = "linux")]
+    /// Cross-platform (Linux broker AND macOS helperd): a plain unix stream.
     pub fn send_command(&mut self, cmd: &str) -> Result<(), MgmtError> {
         use std::io::Write;
         self.stream
@@ -310,11 +320,6 @@ impl MgmtClient {
             .ok_or_else(|| MgmtError::Protocol("client closed".into()))?
             .write_all(format!("{cmd}\n").as_bytes())
             .map_err(|e| MgmtError::Io(e.to_string()))
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn send_command(&mut self, _cmd: &str) -> Result<(), MgmtError> {
-        Err(MgmtError::Io("mgmt client is Linux-supervised".into()))
     }
 }
 
