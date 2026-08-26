@@ -122,6 +122,45 @@ pub enum TlsProtection {
     TlsCrypt,
 }
 
+impl OvpnConfig {
+    pub fn remote_host(&self) -> &EndpointHost {
+        &self.remote
+    }
+    pub fn remote_port(&self) -> u16 {
+        self.remote_port
+    }
+    pub fn proto_transport(&self) -> TransportProto {
+        self.proto_transport
+    }
+    pub fn dns_servers(&self) -> &[IpAddr] {
+        &self.dns_servers
+    }
+    pub fn tun_mtu(&self) -> Option<u16> {
+        self.tun_mtu
+    }
+    pub fn data_ciphers(&self) -> Option<&str> {
+        self.data_ciphers.as_deref()
+    }
+    pub fn auth_digest(&self) -> Option<&str> {
+        self.auth_digest.as_deref()
+    }
+    /// PEM block bodies (zeroized buffers; returned as &str for conf assembly).
+    pub fn ca_block(&self) -> &str {
+        &self.ca_block
+    }
+    pub fn cert_block(&self) -> &str {
+        &self.cert_block
+    }
+    pub fn key_block(&self) -> &str {
+        &self.key_block
+    }
+    pub fn tls_auth_or_crypt(&self) -> Option<(TlsProtection, &str)> {
+        self.tls_auth_or_crypt
+            .as_ref()
+            .map(|(p, b)| (*p, b.as_str()))
+    }
+}
+
 impl std::fmt::Debug for OvpnConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Redacted: never echo PEM or any secret-adjacent content.
