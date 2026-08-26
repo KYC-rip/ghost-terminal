@@ -967,11 +967,13 @@ fn destroy_tunnel_owning(ip: &str) {
     let Some(iface) = route_field(ip, "interface").ok().filter(|i| i.starts_with("utun")) else {
         return;
     };
-    // 4-way ownership matrix (plan v9):
-    //   live-wg      → wg show succeeds                → SKIP
-    //   live-ovpn    → our pidfile alive (comm+start)  → SKIP
-    //   dead-ovpn    → our stale pidfile artifacts     → DESTROY + unlink
-    //   foreign      → no marker at all (Mihomo etc.)  → DESTROY
+    // 4-way ownership matrix (plan v9, final wording):
+    //   live-wg      → wg show succeeds                     → SKIP
+    //   live-ovpn    → our pidfile alive                    → SKIP
+    //   dead-ovpn    → our stale artifacts (pidfile present)→ DESTROY + sweep
+    //   foreign      → no marker at all (Mihomo/Apple etc.) → SKIP
+    // Foreign tunnels are the user's own software; we destroy only what our
+    // pidfile claims as ours-and-dead.
     let is_live_wg = tool("wg")
         .ok()
         .and_then(|wg| run_capture(&wg, &["show", &iface], None).ok())
@@ -982,7 +984,10 @@ fn destroy_tunnel_owning(ip: &str) {
     if ovpn_child_alive() {
         return; // a live OpenVPN child of OURS owns this route
     }
-    ripley_vpn_broker::netops_ovpn::ovpn_down(); // sweep stale pidfile/sidecar if claimed
+    if !std::path::Path::new(ovpn_pid_file_path().as_os_str()).exists() {
+        return; // foreign utun — never touched
+    }
+    ripley_vpn_broker::netops_ovpn::ovpn_down(); // sweep stale pidfile + conf + sock
     let _ = destroy_tunnel_interface(&iface);
 }
 
