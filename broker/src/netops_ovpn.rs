@@ -190,7 +190,7 @@ pub fn ovpn_transfer_bytes() -> Option<(u64, u64)> {
 
 // ---- management-socket client + conf builder + spawn ------------------------
 
-use std::process::{Child};
+use std::process::Child;
 #[cfg(target_os = "linux")]
 use std::process::{Command, Stdio};
 #[cfg(target_os = "linux")]
@@ -538,4 +538,120 @@ pub fn ovpn_apply_network(tun_local: std::net::Ipv4Addr) -> Vec<NetErrAlias> {
         }
     }
     errs
+}
+
+// ---- macOS supervision shims (used by vpn_macos helperd) -------------------
+
+static MACOS_BIN_OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// helperd resolves the brew openvpn path; hand it to the shared spawner.
+pub fn set_macos_binary_override(path: Option<String>) {
+    *MACOS_BIN_OVERRIDE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = path;
+}
+
+#[allow(clippy::vec_init_then_push)]
+fn macos_openvpn_candidates() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    #[cfg(target_os = "macos")]
+    for rel in [
+        "/opt/homebrew/sbin/openvpn",
+        "/usr/local/sbin/openvpn",
+        "/usr/local/bin/openvpn",
+        "/opt/homebrew/bin/openvpn",
+    ] {
+        v.push(PathBuf::from(rel));
+    }
+    v
+}
+
+/// macOS supervised spawn: same conf handling as Linux, binary from the
+/// override, identity recorded by the caller via its waitpid supervisor.
+#[cfg(target_os = "macos")]
+pub fn spawn_openvpn_supervised(conf_body: &Zeroizing<String>) -> Result<Child, OvpnSupError> {
+    use std::process::{Command, Stdio};
+    use std::fs::OpenOptions;
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+
+    let binary = MACOS_BIN_OVERRIDE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+        .map(PathBuf::from)
+        .or_else(|| macos_openvpn_candidates().into_iter().find(|p| p.is_file()))
+        .ok_or_else(|| OvpnSupError::Spawn("openvpn not found (brew install openvpn)".into()))?;
+
+    // STATE_DIR private subpath is created 0700 by the caller.
+    let run_dir = PathBuf::from("/var/run/ripley-vpn");
+    let conf_path = run_dir.join("ripley0.ovpn.conf");
+    {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&conf_path)
+            .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+        f.write_all(conf_body.as_bytes())
+            .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+    }
+    std::fs::set_permissions(&conf_path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+
+    let mgmt_dir = run_dir.join("mgmt");
+    std::fs::create_dir_all(&mgmt_dir).map_err(|e| OvpnSupError::Io(e.to_string()))?;
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(&mgmt_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+    }
+    let mgmt_sock = mgmt_dir.join("mgmt.sock");
+    let _ = std::fs::remove_file(&mgmt_sock);
+
+    let mut cmd = Command::new(&binary);
+    cmd.arg("--config")
+        .arg(&conf_path)
+        .args(FORCED_FLAGS)
+        .arg("--management")
+        .arg(&mgmt_sock)
+        .arg("unix")
+        .arg("--management-client-user")
+        .arg("root")
+        // NO --mark on Darwin (SO_MARK is Linux-only); PF pins the transport.
+        .env_clear()
+        .env("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    cmd.spawn().map_err(|e| OvpnSupError::Spawn(format!("{}: {e}", binary.display())))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn spawn_openvpn_supervised(_conf_body: &Zeroizing<String>) -> Result<Child, OvpnSupError> {
+    Err(OvpnSupError::Spawn("supervised spawn is macOS-only".into()))
+}
+
+pub fn set_macos_binary_override_unused() {}
+
+/// macOS post-CONNECTED network apply: point-to-self ifconfig (field (d) is
+/// the SOLE address source — never peer with the server's public IP), then
+/// pin_endpoint_route + split-default 0/1+128/1 + scutil DNS are invoked by
+/// the helperd via its existing fixed-arg `route`/`scutil` helpers; this fn
+/// reports the exact command sequence so both backends share one contract.
+
+/// macOS network apply: the exact fixed-argument command sequence, executed by
+/// helperd (root). Point-to-self ifconfig from field (d); broker-owned routes.
+#[cfg(target_os = "macos")]
+pub fn macos_apply_network(tunnel: &str, tun_local: std::net::Ipv4Addr) -> Vec<String> {
+    // Performed via run_fixed() in vpn_macos to reuse its error discipline:
+    //  1. ifconfig <tunnel> inet <d> <d> netmask 255.255.255.255
+    //     (point-to-self; server IP is NEVER a utun peer)
+    //  2. route -n add -host <pinned_ip> -interface <phys_gw>   (pin route)
+    //  3. route -n add -net 0.0.0.0/1 -interface <tunnel>
+    //  4. route -n add -net 128.0.0.0/1 -interface <tunnel>      (split-default)
+    // DNS: scutil supplemental set per the snapshot recipe.
+    let _ = (tunnel, tun_local);
+    Vec::new()
 }

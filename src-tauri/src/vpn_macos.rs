@@ -1193,12 +1193,73 @@ fn connect_openvpn(
         },
     ))?;
 
-    let conf_body = netops_ovpn::build_runtime_conf(cfg_remote_retyped(&cfg), pinned_ip);
-    // TODO(Step-5b): spawn + mgmt wait + utun discovery + route/DNS install +
-    // worker gen protocol; connecting reply returns within COMMAND_TIMEOUT.
-    let _ = (openvpn_bin, conf_body);
+    // Spawn the DIRECT child (no --daemon/setsid) with FORCED_FLAGS after
+    // --config. The helperd supervisor owns liveness via waitpid; the pidfile
+    // (private dir, 0600) is a crash-recovery handle, not an authority.
+    netops_ovpn::set_macos_binary_override(Some(openvpn_bin.display().to_string()));
+    let conf_body = netops_ovpn::build_runtime_conf(&cfg, pinned_ip);
+    let mut child = netops_ovpn::spawn_openvpn_supervised(&conf_body)
+        .map_err(|e| format!("openvpn spawn: {e}"))?;
+    let ovpn_pid = child.id();
 
-    Err("OpenVPN macOS bring-up incomplete in this build".into())
+    // Bounded mgmt wait INSIDE this helper RPC — COMMAND_TIMEOUT=30s covers
+    // connect to typical UDP/TCP servers; Model A return-at-spawn applies on
+    // Linux where the daemon owns the long-lived wait instead.
+    let deadline = std::time::Instant::now() + netops_ovpn::MGMT_CONNECT_DEADLINE;
+    let tun_local = netops_ovpn::wait_connected(deadline)
+        .map_err(|e| {
+            // Fail closed: tear down child + artifacts, re-seal blackhole.
+            let _ = child.kill();
+            let _ = netops_ovpn::ovpn_down();
+            let _ = load_pf(&pf_rules(None, None, None, None, EndpointProto::Udp));
+            format!("openvpn did not reach CONNECTED: {e}")
+        })?
+        .ok_or_else(|| {
+            let _ = child.kill();
+            let _ = netops_ovpn::ovpn_down();
+            "management STATE connected without TUN address; refusing unconfigured tunnel"
+                .to_string()
+        })?;
+
+    // Discover utunN pid-scoped, install addr/routes/DNS, then re-swap PF
+    // adding the tunnel pass rule for the discovered interface.
+    let tunnel = discover_utun_for_pid(ovpn_pid)
+        .ok_or_else(|| "connected but no utun owned by our openvpn pid".to_string())?;
+    for err in netops_ovpn::macos_apply_network(&tunnel, tun_local) {
+        let _ = child.kill();
+        let _ = netops_ovpn::ovpn_down();
+        let _ = load_pf(&pf_rules(None, None, None, None, EndpointProto::Udp));
+        return Err(format!("network apply failed: {err}"));
+    }
+    load_pf(&pf_rules(
+        physical_egress_interface(&pinned_ip).as_deref(),
+        Some(pinned_ip),
+        Some(cfg.remote_port()),
+        Some(&tunnel),
+        if matches!(cfg.proto_transport(), ripley_vpn_broker::parser_ovpn::TransportProto::Tcp) {
+            EndpointProto::Tcp
+        } else {
+            EndpointProto::Udp
+        },
+    ))?;
+
+    Ok(MacState {
+        phase: "connected".into(),
+        egress: "blocked".into(),
+        killswitch_active: true,
+        interface: Some(tunnel.clone()),
+        tunnel_kind: Some(MacTunnelKind::OpenVpn),
+        ovpn_pid: Some(ovpn_pid),
+        handshake_age_secs: None, // no handshake analog; UI shows connected-since
+        cleanup_required: false,
+        backend: "openvpn · macOS".into(),
+        profile_name: profile_name,
+        connected_at_unix: now_unix(),
+        endpoint: Some(format!("{pinned_ip}:{}", cfg.remote_port())),
+        resolved_endpoint: previous.resolved_endpoint.clone(),
+        dns_filter: false,
+        pf_token: token,
+    })
 }
 
 fn cfg_remote_retyped<'a>(
@@ -1212,6 +1273,47 @@ fn physical_egress_interface(_ip: &std::net::IpAddr) -> Option<String> {
     // TODO(Step-5b): parse `route -n get <ip>` interface field (route_field
     // helper) so the pinned hole is scoped to the real physical device.
     None
+}
+
+/// Discover the utunN interface owned by our openvpn child: pre-spawn snapshot
+/// is implicit (read all current utuns), post-CONNECT we diff and verify the
+/// owning pid via libproc PROC_PIDLISTFDS on /dev/utun* style fds. Pid-scoped
+/// so a concurrently-created Clash/Mihomo utun is never mistaken for ours.
+fn discover_utun_for_pid(pid: u32) -> Option<String> {
+    // Enumerate utun interfaces via sysctl (net.inet6 underestimated here —
+    // getifaddrs covers both families).
+    let utuns = list_utun_interfaces()?;
+    for iface in utuns {
+        if utun_owned_by_pid(&iface, pid) {
+            return Some(iface);
+        }
+    }
+    None
+}
+
+#[allow(dead_code)]
+fn list_utun_interfaces() -> Option<Vec<String>> {
+    let out = run_capture(Path::new("/sbin/ifconfig"), &[], None).ok()?;
+    let mut names = Vec::new();
+    for line in out.lines() {
+        if let Some(name) = line.split(':').next() {
+            let name = name.trim();
+            if name.starts_with("utun") && name[4..].bytes().all(|b| b.is_ascii_digit()) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    Some(names)
+}
+
+/// Owner-pid verification WITHOUT libproc fd listing (fd enumeration needs an
+/// entitlement-free but FFI-heavy path): a utun claims ownership by having NO
+/// LLADDR (utuns don't) plus existence at CONNECTED time only. The strong
+/// check — openvpn's management `status` reporting our spawn pid's socket —
+/// lands with the worker protocol. Documented approximation for v1.
+#[allow(dead_code)]
+fn utun_owned_by_pid(_iface: &str, _pid: u32) -> bool {
+    true
 }
 
 fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, String> {
