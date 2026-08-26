@@ -344,14 +344,25 @@ pub struct MgmtState {
 }
 
 impl MgmtState {
+    /// Parse a `>STATE:` line per OpenVPN 2.6 management-notes.txt:
+    /// `>STATE:<ts>,CONNECTED,SUCCESS,<remote ip (e)>,<remote port (f)>
+    /// ,<tun local IPv4 (d)>,…` — WAIT, the canonical 2.6 CONNECTED field order
+    /// is ts,state,desc,**tun-local-ip**(d),**remote-ip**(e),**remote-port**(f).
+    /// TUN local IPv4 lives at index 3.
     pub fn parse(line: &str) -> MgmtState {
-        // >STATE:<unixtime>,CONNECTED,SUCCESS,<remote ip>,<remote port>,<tun local>,…
         let mut m = MgmtState::default();
         if let Some(rest) = line.strip_prefix(">STATE:") {
             let fields: Vec<&str> = rest.split(',').collect();
-            if fields.len() >= 6 && fields[1] == "CONNECTED" && fields[2] == "SUCCESS" {
-                m.remote_port = fields[4].parse().ok();
-                m.tun_local_v4 = fields[5].trim().parse::<std::net::Ipv4Addr>().ok();
+            // fields[0]=unixtime, [1]=state name, [2]=description,
+            // [3]=TUN local IPv4 (d), [4]=remote IP (e), [5]=remote port (f)
+            if fields.len() >= 4 && fields[1] == "CONNECTED" && fields[2] == "SUCCESS" {
+                m.tun_local_v4 = fields[3].trim().parse::<std::net::Ipv4Addr>().ok();
+                if m.tun_local_v4.is_none() && !fields[3].trim().is_empty() {
+                    // Some 2.6 builds put the remote ip at [3] when ifconfig
+                    // reporting is reordered — do NOT guess; leave None so the
+                    // worker fails closed on missing (d).
+                }
+                m.remote_port = fields.get(5).and_then(|p| p.parse().ok());
             }
         }
         m
@@ -363,25 +374,49 @@ impl MgmtState {
 /// already returned `connecting` to the caller (Model A).
 /// One-shot STATE probe: returns Some(tun_local) when CONNECTED observed,
 /// None while still connecting. Errors are terminal for the caller's loop.
+/// One SHORT management probe: connects, sends `state on`, reads whatever
+/// arrives within ~2s. Soft outcomes (connect refused while openvpn is still
+/// binding, read timeout) return `Ok(None)` = "keep polling"; ONLY a hard
+/// protocol signal (EXITING/RECONNECTING) is terminal. The WORKER owns the
+/// real deadline; this function never enforces one itself beyond the per-poll
+/// socket timeout, so TLS negotiation time can never abort bring-up early.
 pub fn poll_connected_once() -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
-    let mut c = MgmtClient::connect()?;
-    c.send_command("state on")?;
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // Connect failure is SOFT: the mgmt socket appears only after openvpn
+    // finishes argument parsing and forks its listener — retry until the
+    // worker's outer deadline says otherwise.
+    let mut c = match MgmtClient::connect() {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    if let Err(e) = c.send_command("state on") {
+        return Err(e); // stream died before first write — surface hard errors
+    }
+    // Read up to ~2s of lines per poll. CONNECTED terminates immediately.
+    let soft_deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if Instant::now() >= deadline {
-            return Err(MgmtError::Timeout);
+        if Instant::now() >= soft_deadline {
+            return Ok(None); // keep polling — NOT terminal
         }
         match c.read_line()? {
             Some(line) if line.starts_with(">STATE:") => {
                 if line.contains(",CONNECTED,SUCCESS,") {
-                    return Ok(MgmtState::parse(&line).tun_local_v4);
+                    let tun = MgmtState::parse(&line).tun_local_v4;
+                    // Missing (d) is Ok(Some) folded into Ok(None)? NO — the
+                    // caller distinguishes "still connecting" (None) from
+                    // "connected without address" — use a sentinel via error.
+                    if tun.is_none() {
+                        return Err(MgmtError::Protocol(
+                            "CONNECTED but TUN address absent — fail closed".into(),
+                        ));
+                    }
+                    return Ok(tun);
                 }
                 if line.contains(",EXITING,") || line.contains(",RECONNECTING,") {
                     return Err(MgmtError::Protocol(line));
                 }
             }
             Some(_) => continue,
-            None => return Err(MgmtError::Protocol("connection closed".into())),
+            None => return Ok(None), // connection closed w/o CONNECTED → retry
         }
     }
 }
@@ -414,17 +449,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn state_line_parses_d_as_tun_addr_and_ef_as_transport_only() {
+    fn state_line_parses_real_2p6_wire_format() {
+        // Real 2.6 CONNECTED line: ts,CONNECTED,SUCCESS,<tun local (d)>,
+        // <remote ip (e)>,<remote port (f)>
         let line =
-            ">STATE:1660000000,CONNECTED,SUCCESS,203.0.113.9,443,10.8.0.2,255.255.255.0";
+            ">STATE:1660000000,CONNECTED,SUCCESS,10.8.0.2,203.0.113.9,443";
         let s = MgmtState::parse(line);
-        assert_eq!(s.tun_local_v4, Some("10.8.0.2".parse().unwrap()));
+        assert_eq!(
+            s.tun_local_v4,
+            Some("10.8.0.2".parse::<std::net::Ipv4Addr>().unwrap()),
+            "(d) TUN local IPv4 must be fields[3] per management-notes.txt"
+        );
         assert_eq!(s.remote_port, Some(443));
     }
 
     #[test]
     fn non_connected_state_lines_yield_nothing() {
         let s = MgmtState::parse(">STATE:1660000000,WAIT,,");
+        assert_eq!(s.tun_local_v4, None);
+    }
+
+    #[test]
+    fn missing_d_is_none_so_worker_fails_closed() {
+        // If a build omits the tun address, tun_local_v4 is None — the worker
+        // treats that as a failure (never installs a guessed address).
+        let s = MgmtState::parse(">STATE:1660000000,CONNECTED,SUCCESS,,,");
         assert_eq!(s.tun_local_v4, None);
     }
 }
@@ -574,13 +623,17 @@ pub struct IpLinkError(pub NetErrAlias);
 #[cfg(target_os = "linux")]
 pub type NetErrAlias = String;
 
-#[cfg(target_os = "linux")]
-pub fn ovpn_apply_network(tun_local: std::net::Ipv4Addr) -> Vec<NetErrAlias> {
+/// Linux apply stage 1+2: addr/link-up + resolvectl DNS (fail-closed).
+/// Policy routing (the single table-51820 default) is added by the worker via
+/// netops::ovpn_routes_up() right after — NOT duplicated here.
+pub fn ovpn_apply_network(
+    tun_local: std::net::Ipv4Addr,
+    dns_servers: &[std::net::IpAddr],
+) -> Vec<NetErrAlias> {
     let mut errs = Vec::new();
     for args in [
         vec!["-4", "addr", "add", &format!("{tun_local}/32"), "dev", IFACE],
         vec!["-4", "link", "set", IFACE, "up"],
-        vec!["-4", "route", "add", "default", "dev", IFACE, "table", RT_TABLE],
     ] {
         let out = std::process::Command::new("ip")
             .args(&args)
@@ -595,6 +648,44 @@ pub fn ovpn_apply_network(tun_local: std::net::Ipv4Addr) -> Vec<NetErrAlias> {
                 String::from_utf8_lossy(&o.stderr).trim()
             )),
             Err(e) => errs.push(format!("ip {}: {e}", args.join(" "))),
+        }
+    }
+    if errs.is_empty() {
+        errs.extend(ovpn_dns_up(dns_servers));
+    }
+    errs
+}
+
+/// resolvectl per-link DNS + `~.` domain — WG dns_up parity. Failure is fatal
+/// to bring-up (stricter than WG degrade): parser guarantees >=1 server.
+pub fn ovpn_dns_up(dns_servers: &[std::net::IpAddr]) -> Vec<NetErrAlias> {
+    let mut errs = Vec::new();
+    if dns_servers.is_empty() {
+        errs.push("no DNS servers — cannot configure link DNS".into());
+        return errs;
+    }
+    let list: Vec<String> = dns_servers.iter().map(|i| i.to_string()).collect();
+    for cmd_args in [
+        {
+            let mut a = vec!["dns".to_string(), IFACE.to_string()];
+            a.extend(list.iter().cloned());
+            a
+        },
+        vec!["domain".to_string(), IFACE.to_string(), "~.".to_string()],
+    ] {
+        let out = std::process::Command::new("resolvectl")
+            .args(&cmd_args)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => errs.push(format!(
+                "resolvectl {}: {}",
+                cmd_args.join(" "),
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => errs.push(format!("resolvectl {}: {e}", cmd_args.join(" "))),
         }
     }
     errs

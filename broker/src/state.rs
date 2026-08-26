@@ -74,6 +74,8 @@ pub struct Base {
     /// Which tunnel kind is (or was last) active. `None` = WG legacy state
     /// (pre-OpenVPN journals never carried a kind).
     tunnel_kind: Option<TunnelKind>,
+    /// OpenVPN liveness proof — finalize requires it for Connected.
+    ovpn_connected: bool,
 }
 
 /// Finalize a snapshot: probe the handshake (bounded, outside the lock) and
@@ -367,6 +369,7 @@ impl Manager {
             connected_since_unix: self.connected_since_unix,
             dns_filter: self.dns_filter,
             tunnel_kind: self.tunnel_kind,
+            ovpn_connected: self.ovpn_connected,
         }
     }
 
@@ -671,6 +674,7 @@ mod tests {
             connected_since_unix: None,
             dns_filter: false,
             tunnel_kind: None,
+            ovpn_connected: false,
         }
     }
 
@@ -884,6 +888,7 @@ impl Manager {
         // Model A worker: everything below runs after the RPC returned OK.
         // Gen-gated under the manager lock at BOTH apply and failure points.
         // Linux-only: on macOS helperd owns supervision via its own loop.
+        let dns_servers: Vec<std::net::IpAddr> = cfg.dns_servers().to_vec();
         #[cfg(target_os = "linux")]
         std::thread::spawn(move || {
             use std::time::{Duration, Instant};
@@ -910,35 +915,46 @@ impl Manager {
                 }
             };
 
-            // Lock + gen gate: zero mutation when a newer intent exists.
+            // Lock + gen gate + apply + journal — ALL under ONE lock hold.
             let mut mgr = match crate_state_lock() {
                 Some(g) => g,
                 None => return, // poisoned: another thread force-exits
             };
             if mgr.connect_gen != captured_gen {
+                // A newer intent (disconnect/reconcile/restore) owns the child.
+                // The cancel path already ran teardown_any under its own lock,
+                // which SIGTERM/KILLed this child via pidfile identity. Sweep
+                // once more idempotently in case we raced between its steps.
+                let _ = netops_ovpn::ovpn_down();
                 eprintln!("ripley-vpn-broker: openvpn worker gen mismatch — no mutation, exiting");
-                // The disconnect path owns the child now.
                 drop(mgr);
                 return;
             }
 
             match wait_result {
                 Ok(tun_local) => {
-                    let mut errs: Vec<String> = netops_ovpn::ovpn_apply_network(tun_local);
+                    let mut errs: Vec<String> =
+                        netops_ovpn::ovpn_apply_network(tun_local, &dns_servers);
                     errs.extend(
                         netops_policy_routing_up()
                             .iter()
                             .map(|e| e.to_string()),
                     );
                     if !errs.is_empty() {
+                        // Fail closed: tear down the half-open tunnel.
+                        let _ = netops_ovpn::ovpn_down();
                         mgr.errored = true;
+                        mgr.configured = false;
+                        mgr.ovpn_connected = false;
+                        mgr.tunnel_kind = None;
                         mgr.teardown_marking_dirty();
                         journal_best("errored ovpn");
                         eprintln!(
                             "ripley-vpn-broker: openvpn network apply failed — torn down: {}",
-                            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+                            errs.join("; ")
                         );
-                        return;
+                        drop(mgr);
+                        return; // do NOT fall into the death watcher after teardown
                     }
                     mgr.ovpn_connected = true;
                     mgr.degraded = false;
@@ -947,43 +963,48 @@ impl Manager {
                     eprintln!("ripley-vpn-broker: openvpn connected (worker)");
                 }
                 Err(e) => {
-                    // Fail closed: tear down the half-open tunnel, stay blocked.
+                    // Fail closed on TLS/wait: tear down, stay blocked. RETURN —
+                    // never enter the child-death watcher from this path.
                     let _ = netops_ovpn::ovpn_down();
                     mgr.errored = true;
                     mgr.teardown_marking_dirty();
                     mgr.configured = false;
+                    mgr.ovpn_connected = false;
                     mgr.tunnel_kind = None;
                     journal_best("blocked");
                     eprintln!("ripley-vpn-broker: openvpn connect failed fail-closed ({e})");
+                    drop(mgr);
+                    return;
                 }
             }
 
-            // Child-death reaper continues AFTER successful apply too: an ovpn
-            // process that dies later must never leave a silent 'connected'.
-            // Detached watcher: poll pidfile identity + waitpid-style probe.
+            // Child-death watcher (post-apply only). ONE lock acquisition per
+            // tick — no nested re-lock of a guard we still hold.
             let gen_at_watch = mgr.connect_gen;
             drop(mgr);
             loop {
                 sleep_sleep(Duration::from_secs(1));
-                let locked = match crate_state_lock() {
+                let mut locked = match crate_state_lock() {
                     Some(g) => g,
                     None => return,
                 };
                 if locked.connect_gen != gen_at_watch {
                     drop(locked);
-                    return; // superseded/reaped elsewhere
+                    return; // superseded by disconnect/reconcile — they own cleanup
                 }
                 if !netops_ovpn::child_alive_by_pidfile() {
-                    // Unexpected death of a live child.
+                    // Unexpected death of a live tunnel: converge to blocked.
                     let _ = netops_ovpn::ovpn_down();
-                    let mut m2 = match crate_state_lock() {
-                        Some(g) => g,
-                        None => return,
-                    };
-                    m2.dirty = true;
-                    drop(m2);
+                    netops::wg_down(); // sweep routes/DNS too (benign-if-absent)
+                    locked.dirty = true;
+                    locked.configured = false;
+                    locked.ovpn_connected = false;
+                    locked.tunnel_kind = None;
+                    drop(locked); // release BEFORE journal write is fine (fs op)
                     journal_best("blocked");
-                    eprintln!("ripley-vpn-broker: openvpn child died unexpectedly — reconciled to blocked");
+                    eprintln!(
+                        "ripley-vpn-broker: openvpn child died unexpectedly — reconciled to blocked"
+                    );
                     return;
                 }
                 drop(locked);
