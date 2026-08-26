@@ -63,7 +63,8 @@ function resolveConnectTarget(
   t: (key: string, vars?: Record<string, string | number>) => string,
 ): { profile: VpnProfile; displayName: string; notice?: string } {
   if (!selected) throw new Error(t('selectConfig'));
-  if (selected.kind === 'openvpn') throw new Error(t('openvpnUnsupported'));
+  // OpenVPN now connects (cert-only v1). The broker rejects unsupported
+  // configs at connect time with a typed reason, so no renderer gate here.
   if (!isRandomProfile(selected)) {
     return { profile: selected, displayName: selected.name };
   }
@@ -726,7 +727,7 @@ export function VpnView() {
     }
   };
 
-  const canConnect = nativeControls && !!selectedProfile && selectedProfile.kind !== 'openvpn'
+  const canConnect = nativeControls && !!selectedProfile
     && (isRandomProfile(selectedProfile) || !!configText.trim());
   const isEmpty = profiles.length === 0;
   const confLines = useMemo(

@@ -16,10 +16,13 @@ Branch: `feat/ros-integration`. Host: Tauri v2 (Rust, `src-tauri/`). Renderer: R
    canonical configuration and is never executed as shell.
 4. **Remote renderer is untrusted.** `ros_remote` (including the localhost dev override) and `ros_local` may read status and *open* a host-owned VPN window, but neither receives mutation commands. The repo's threat model treats even the OTA bundle as untrusted (see the capability files — no fs/shell). Therefore **all VPN mutations (import, connect, disable-kill-switch) require a native, host-owned confirmation window** (mirror the existing wallet-op confirm pattern), not renderer trust.
 5. **Host support:** Linux uses the persistent broker. macOS uses upstream Homebrew
-   `wireguard-tools` plus a per-action authorization prompt and a dedicated PF anchor. A signed
+   `wireguard-tools` (WireGuard) or `openvpn` (OpenVPN, brew sbin path) plus a per-action
+   authorization prompt and a dedicated PF anchor — served by the PERSISTENT helper daemon
+   (`--vpn-macos-helperd`), not a one-shot helper. A signed
    NetworkExtension remains the preferred packaged macOS architecture once Apple entitlements are
    available. Windows (WFP) is later.
-6. **VPN-over-Tor is OUT of v1.** Plain WireGuard and the supplied OpenVPN profiles use UDP; Tor carries TCP streams only. VPN-over-Tor needs a UDP-over-TCP/obfuscation transport = separate project. **Tor-over-VPN** (ROS's Arti traffic inside an established host VPN) is the supported variant.
+6. **VPN-over-Tor is OUT of v1.** WireGuard and OpenVPN transports connect directly; Tor carries TCP streams only, so either protocol *through* Tor needs tunneling-over-TCP = separate project. **Tor-over-VPN** (ROS's Arti traffic inside an established host VPN) is the supported variant.
+7. **OpenVPN support (cert-only v1):** `.ovpn` profiles whose transport is UDP or TCP and which carry inline `<ca>/<cert>/<key>` PEM blocks plus at least one in-file `dhcp-option DNS` line. `auth-user-pass` profiles are NOT supported (broker rejects with a dedicated message); routes/DNS are broker-owned (`route`/`redirect-gateway`/`ifconfig` directives rejected). OpenVPN >= 2.6 required (`--disable-dco`).
 
 ## Components
 
