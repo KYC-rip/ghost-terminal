@@ -461,14 +461,14 @@ fn is_synthetic_tunnel_ip(ip: IpAddr) -> bool {
 /// kill-switch is never touched, so egress stays fail-closed throughout.
 fn resolve_endpoint_while_blocked(
     host: &str,
-    prev_endpoint: Option<(IpAddr, u16)>,
+    prev_endpoint: Option<EndpointPin>,
 ) -> Result<IpAddr, String> {
     load_pf(&pf_rules_doh_only(prev_endpoint))
         .map_err(|e| format!("open DoH-only window: {e}"))?;
     let resolved = resolve_doh_ipv4(host);
     // Re-seal BEFORE inspecting the result — a resolution failure must not
     // leave the DoH window open.
-    load_pf(&pf_rules(None, None, None, None))
+    load_pf(&pf_rules(None, None, None, None, EndpointProto::Udp))
         .map_err(|e| format!("re-seal kill-switch after endpoint resolution: {e}"))?;
     resolved
 }
@@ -480,7 +480,7 @@ fn resolve_endpoint_while_blocked(
 fn resolve_connect_endpoint(
     cfg: &WgConfig,
     blocked: bool,
-    prev_endpoint: Option<(IpAddr, u16)>,
+    prev_endpoint: Option<EndpointPin>,
 ) -> Result<IpAddr, String> {
     match cfg.endpoint().host() {
         EndpointHost::Ip(ip) => Ok(*ip),
@@ -506,16 +506,55 @@ fn resolve_connect_endpoint(
     }
 }
 
-fn parse_endpoint_label(label: &str) -> Option<(IpAddr, u16)> {
-    let (host, port) = if let Some(rest) = label.strip_prefix('[') {
+/// Transport of a pinned endpoint label. WireGuard is always UDP; OpenVPN
+/// profiles may carry TCP, and the PF endpoint hole must match the real
+/// transport or a TCP profile is blackholed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EndpointProto {
+    Udp,
+    Tcp,
+}
+
+impl EndpointProto {
+    /// PF protocol keyword for the rule text.
+    pub fn pf_name(self) -> &'static str {
+        match self {
+            EndpointProto::Udp => "udp",
+            EndpointProto::Tcp => "tcp",
+        }
+    }
+}
+
+/// Parsed endpoint label. The string form is `ip:port` (WireGuard state as it
+/// exists today) or `ip:port:udp|tcp` once OpenVPN pins carry their transport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EndpointPin {
+    pub ip: IpAddr,
+    pub port: u16,
+    pub proto: EndpointProto,
+}
+
+fn parse_endpoint_label(label: &str) -> Option<EndpointPin> {
+    // Optional trailing `:proto` suffix MUST be stripped BEFORE the last-colon
+    // split, or rsplit_once would read the proto token as the port.
+    let (body, proto) = match label.rsplit_once(':')? {
+        (rest, "udp") => (rest, EndpointProto::Udp),
+        (rest, "tcp") => (rest, EndpointProto::Tcp),
+        _ => (label, EndpointProto::Udp), // legacy `ip:port` = WireGuard shape
+    };
+    let (host, port) = if let Some(rest) = body.strip_prefix('[') {
         let (host, rest) = rest.split_once(']')?;
         (host, rest.strip_prefix(':')?)
     } else {
-        label.rsplit_once(':')?
+        body.rsplit_once(':')?
     };
     let ip: IpAddr = host.parse().ok()?;
     let port: u16 = port.parse().ok()?;
-    (!ip.is_unspecified() && !ip.is_multicast() && !ip.is_loopback()).then_some((ip, port))
+    (!ip.is_unspecified() && !ip.is_multicast() && !ip.is_loopback()).then_some(EndpointPin {
+        ip,
+        port,
+        proto,
+    })
 }
 
 fn route_field(target: &str, field: &str) -> Result<String, String> {
@@ -588,7 +627,9 @@ fn pf_rules(
     endpoint: Option<IpAddr>,
     port: Option<u16>,
     tunnel: Option<&str>,
+    proto: EndpointProto,
 ) -> String {
+    let l4 = proto.pf_name();
     let mut rules = String::from(
         "pass quick on lo0 all\n\
          pass out quick proto udp from any port 68 to any port 67 keep state\n\
@@ -596,10 +637,11 @@ fn pf_rules(
     );
     if let (Some(interface), Some(ip), Some(port)) = (physical, endpoint, port) {
         let family = if ip.is_ipv4() { "inet" } else { "inet6" };
-        // WireGuard transport (UDP) plus ICMP to the same pinned peer so the
-        // host speed-test can measure the live server (not only tunnel peers).
+        // Pinned transport (WG=udp, OpenVPN=udp|tcp) plus ICMP to the same
+        // pinned peer so the host speed-test can measure the live server (not
+        // only tunnel peers).
         rules.push_str(&format!(
-            "pass out quick on {interface} {family} proto udp to {ip} port = {port} keep state\n"
+            "pass out quick on {interface} {family} proto {l4} to {ip} port = {port} keep state\n"
         ));
         if ip.is_ipv4() {
             rules.push_str(&format!(
@@ -630,7 +672,7 @@ fn pf_rules(
 /// WireGuard transport to the previous peer must escape, or the query dies inside
 /// the still-live tunnel and both resolvers time out. It is the same peer the
 /// kill-switch already permits, so no additional egress is opened.
-fn pf_rules_doh_only(prev_endpoint: Option<(IpAddr, u16)>) -> String {
+fn pf_rules_doh_only(prev_endpoint: Option<EndpointPin>) -> String {
     let mut rules = String::from(
         "pass quick on lo0 all\n\
          pass out quick proto udp from any port 68 to any port 67 keep state\n\
@@ -638,10 +680,11 @@ fn pf_rules_doh_only(prev_endpoint: Option<(IpAddr, u16)>) -> String {
          pass out quick proto tcp to 1.1.1.1 port = 443 keep state\n\
          pass out quick proto tcp to 8.8.8.8 port = 443 keep state\n",
     );
-    if let Some((ip, port)) = prev_endpoint {
+    if let Some(EndpointPin { ip, port, proto }) = prev_endpoint {
         let family = if ip.is_ipv4() { "inet" } else { "inet6" };
         rules.push_str(&format!(
-            "pass out quick {family} proto udp to {ip} port = {port} keep state\n"
+            "pass out quick {family} proto {} to {ip} port = {port} keep state\n",
+            proto.pf_name()
         ));
     }
     rules.push_str("block drop out all\n");
@@ -1072,6 +1115,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         Some(endpoint),
         Some(cfg.endpoint().port()),
         None,
+        EndpointProto::Udp, // WireGuard transport
     );
     if let Err(error) = load_pf(&initial_rules) {
         let _ = clear_pf(token.as_deref());
@@ -1125,6 +1169,7 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
             Some(endpoint),
             Some(cfg.endpoint().port()),
             Some(&tunnel),
+            EndpointProto::Udp, // WireGuard transport
         ))?;
         Ok::<String, String>(tunnel)
     })();
@@ -1235,7 +1280,7 @@ fn disconnect(restore: bool, emergency: bool) -> Result<MacState, String> {
         } else {
             enable_pf()?
         };
-        load_pf(&pf_rules(None, None, None, None))?;
+        load_pf(&pf_rules(None, None, None, None, EndpointProto::Udp))?;
         let mut blocked = MacState::blocked(token);
         // Keep the last pinned peer so a reconnect's DoH window can re-allow
         // the encapsulated transport even if the interface teardown failed,
@@ -1265,7 +1310,7 @@ fn handle(request: HelperRequest) -> Result<MacState, String> {
             } else {
                 enable_pf()?
             };
-            load_pf(&pf_rules(None, None, None, None))?;
+            load_pf(&pf_rules(None, None, None, None, EndpointProto::Udp))?;
             let blocked = MacState::blocked(token);
             write_state(&blocked)?;
             Ok(blocked)
@@ -1734,6 +1779,7 @@ mod tests {
             Some("203.0.113.5".parse().unwrap()),
             Some(51820),
             Some("utun9"),
+            EndpointProto::Udp,
         );
         assert!(rules.contains("pass out quick on en0 inet proto udp to 203.0.113.5 port = 51820"));
         assert!(rules.contains("pass out quick on en0 inet proto icmp to 203.0.113.5 keep state"));
@@ -1792,6 +1838,7 @@ mod tests {
             Some("203.0.113.5".parse().unwrap()),
             Some(51820),
             Some("utun9"),
+            EndpointProto::Udp,
         );
         let parsed = run_capture(
             Path::new("/sbin/pfctl"),
@@ -1815,7 +1862,7 @@ mod tests {
 
     #[test]
     fn doh_only_ruleset_also_permits_previous_peer_transport() {
-        let rules = pf_rules_doh_only(Some(("167.88.161.83".parse().unwrap(), 51820)));
+        let rules = pf_rules_doh_only(Some(EndpointPin { ip: "167.88.161.83".parse().unwrap(), port: 51820, proto: EndpointProto::Udp }));
         assert!(rules.contains("pass out quick inet proto udp to 167.88.161.83 port = 51820 keep state"));
         assert!(rules.contains("pass out quick proto tcp to 1.1.1.1 port = 443 keep state"));
         assert!(rules.ends_with("block drop out all\n"));
@@ -1825,15 +1872,42 @@ mod tests {
     fn endpoint_label_roundtrips_through_parser() {
         assert_eq!(
             parse_endpoint_label("167.88.161.83:51820"),
-            Some(("167.88.161.83".parse().unwrap(), 51820))
+            Some(EndpointPin {
+                ip: "167.88.161.83".parse().unwrap(),
+                port: 51820,
+                proto: EndpointProto::Udp,
+            })
         );
         assert_eq!(
             parse_endpoint_label("[2001:db8::1]:51820"),
-            Some(("2001:db8::1".parse().unwrap(), 51820))
+            Some(EndpointPin {
+                ip: "2001:db8::1".parse().unwrap(),
+                port: 51820,
+                proto: EndpointProto::Udp,
+            })
+        );
+        // OpenVPN-era transport suffix.
+        assert_eq!(
+            parse_endpoint_label("167.88.161.83:443:tcp"),
+            Some(EndpointPin {
+                ip: "167.88.161.83".parse().unwrap(),
+                port: 443,
+                proto: EndpointProto::Tcp,
+            })
+        );
+        assert_eq!(
+            parse_endpoint_label("167.88.161.83:51820:udp"),
+            Some(EndpointPin {
+                ip: "167.88.161.83".parse().unwrap(),
+                port: 51820,
+                proto: EndpointProto::Udp,
+            })
         );
         assert_eq!(parse_endpoint_label("not-an-endpoint"), None);
         assert_eq!(parse_endpoint_label("0.0.0.0:51820"), None);
         assert_eq!(parse_endpoint_label("1.1.1.1:notaport"), None);
+        // A bare proto token is not a port and never a valid label.
+        assert_eq!(parse_endpoint_label("167.88.161.83:tcp"), None);
     }
 
     #[test]
@@ -1874,7 +1948,7 @@ mod tests {
             Path::new("/sbin/pfctl"),
             &["-nf", "-"],
             Some(
-                pf_rules_doh_only(Some(("167.88.161.83".parse().unwrap(), 51820))).as_bytes(),
+                pf_rules_doh_only(Some(EndpointPin { ip: "167.88.161.83".parse().unwrap(), port: 51820, proto: EndpointProto::Udp })).as_bytes(),
             ),
         );
         assert!(parsed.is_ok(), "{parsed:?}");
