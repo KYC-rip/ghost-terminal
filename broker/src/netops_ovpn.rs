@@ -253,6 +253,15 @@ impl std::fmt::Display for MgmtError {
 /// returned endpoints as typed values or discards them.
 pub struct MgmtClient {
     stream: Option<std::os::unix::net::UnixStream>,
+    /// Partial bytes from a read that ended mid-line (retained across calls).
+    acc: Vec<u8>,
+}
+
+impl MgmtClient {
+    /// Test/poll window tuning without exposing the raw stream publicly.
+    pub(crate) fn stream_mut(&mut self) -> Option<&mut std::os::unix::net::UnixStream> {
+        self.stream.as_mut()
+    }
 }
 
 impl MgmtClient {
@@ -263,7 +272,7 @@ impl MgmtClient {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| MgmtError::Io(e.to_string()))?;
-        let mut c = MgmtClient { stream: Some(stream) };
+        let mut c = MgmtClient { stream: Some(stream), acc: Vec::new() };
         c.drain_banner()?;
         Ok(c)
     }
@@ -280,36 +289,46 @@ impl MgmtClient {
         }
         Ok(())
     }
-    /// Read one newline-terminated line. A socket read timeout (TimedOut /
-    /// WouldBlock) maps to `Ok(None)` — SOFT, meaning "nothing arrived yet".
-    /// Callers treat None as keep-polling; hard IO errors still surface as Err.
+    /// Line-oriented read with an internal accumulator. A socket timeout
+    /// (TimedOut/WouldBlock) maps to `Ok(None)` — SOFT, "nothing more yet" —
+    /// and partial bytes are RETAINED across calls, so a batch of two STATE
+    /// lines arriving in one kernel read yields both lines on successive calls
+    /// instead of dropping the second.
     fn read_line_soft(&mut self) -> Result<Option<String>, MgmtError> {
         use std::io::Read;
-        let mut buf = [0u8; 512];
-        let n = match self
-            .stream
-            .as_mut()
-            .ok_or_else(|| MgmtError::Protocol("client closed".into()))?
-            .read(buf.as_mut())
-        {
-            Ok(n) => n,
-            // Timeout/WouldBlock: nothing arrived inside the socket window.
-            Err(e)
-                if e.kind() == std::io::ErrorKind::TimedOut
-                    || e.kind() == std::io::ErrorKind::WouldBlock =>
-            {
-                return Ok(None)
+        loop {
+            // Serve a complete buffered line first, if we have one.
+            if let Some(pos) = self.acc.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = self.acc.drain(..=pos).collect();
+                let text = String::from_utf8_lossy(&line[..line.len() - 1])
+                    .trim_end()
+                    .to_string();
+                return Ok(if text.is_empty() { None } else { Some(text) });
             }
-            Err(e) => return Err(MgmtError::Io(e.to_string())),
-        };
-        if n == 0 {
-            return Err(MgmtError::Protocol("connection closed by openvpn".into()));
+            if self.acc.len() > 4096 {
+                return Err(MgmtError::Protocol("line too long".into()));
+            }
+            let mut buf = [0u8; 512];
+            match self
+                .stream
+                .as_mut()
+                .ok_or_else(|| MgmtError::Protocol("client closed".into()))?
+                .read(buf.as_mut())
+            {
+                Ok(n) if n == 0 => {
+                    return Err(MgmtError::Protocol("connection closed by openvpn".into()))
+                }
+                Ok(n) => self.acc.extend_from_slice(&buf[..n]),
+                // Timeout/WouldBlock: nothing more inside this window — SOFT.
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Ok(None)
+                }
+                Err(e) => return Err(MgmtError::Io(e.to_string())),
+            }
         }
-        let text = String::from_utf8_lossy(&buf[..n]).trim_end_matches('\n').trim_end().to_string();
-        if text.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(text))
     }
 
 
@@ -431,11 +450,18 @@ pub fn poll_connected_once() -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
         Ok(c) => c,
         Err(_) => return Ok(None),
     };
+    // Snapshot window = 2s per poll (matches the doc contract). The 5s connect
+    // timeout is overridden so a silent TLS interval is soft, never hard.
+    if let Some(stream) = c.stream_mut() {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .map_err(|e| MgmtError::Io(e.to_string()))?;
+    }
     if let Err(e) = c.send_command("state on") {
         return Err(e); // stream unusable before first write — surface it
     }
     // Snapshot loop bounded by the socket read timeout: every read that times
-    // out maps to Ok(None) via read_line_soft; OPEN ended → soft too.
+    // out maps to Ok(None) via read_line_soft; EOF ended → soft too.
     loop {
         match c.read_line_soft()? {
             Some(line) if line.starts_with(">STATE:") => {

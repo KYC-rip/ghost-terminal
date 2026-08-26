@@ -7,8 +7,9 @@ Wants=network-pre.target
 [Service]
 Type=simple
 ExecStart=/usr/lib/ripley-terminal/ripley-vpn-broker
-# Fail closed if the openvpn binary is missing — the broker must never serve
-# a connect request it cannot honor (WG path unaffected by this check).
+# NOTE: OpenVPN binary presence and >=2.6 version preflight are enforced
+# inside the broker's up_openvpn path (not here): WG bring-up must never
+# depend on openvpn being installed.
 User=root
 Group=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW

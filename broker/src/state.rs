@@ -276,6 +276,9 @@ impl Manager {
     /// Every former direct `wg_down()` caller goes through here.
     fn teardown_any(&mut self) -> Vec<netops::NetError> {
         let mut errs = netops::wg_down(); // WG iface + policy routing + DNS revert (all benign-if-absent)
+        // Clear the OVPN liveness flag HERE so every teardown path — not just
+        // worker arms — cannot inherit a stale Connected proof.
+        self.ovpn_connected = false;
         match self.tunnel_kind {
             Some(TunnelKind::OpenVpn) => {
                 // OpenVPN userspace child: SIGTERM→SIGKILL ladder, then artifact
