@@ -15,4 +15,5 @@ pub use dnsfilter::{
 pub use parser::{parse_wg_config, ParseError};
 pub use parser_ovpn::{parse_ovpn_config, OvpnParseError, OvpnConfig, TransportProto};
 pub use types::{Cidr, Endpoint, EndpointHost, Ipv6Policy, WgConfig};
+pub mod netops_ovpn;
 pub mod parser_ovpn;

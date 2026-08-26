@@ -2004,3 +2004,38 @@ mod tests {
         assert_eq!(parse_doh_ipv4(body), Some("185.148.1.88".parse().unwrap()));
     }
 }
+
+#[cfg(test)]
+mod ovpn_proto_tests {
+    use super::*;
+
+    #[test]
+    fn pf_rules_tcp_hole_is_typed_and_fail_closed() {
+        let rules = pf_rules(
+            Some("en0"),
+            Some("203.0.113.9".parse().unwrap()),
+            Some(443),
+            Some("utun9"),
+            EndpointProto::Tcp,
+        );
+        assert!(rules
+            .contains("pass out quick on en0 inet proto tcp to 203.0.113.9 port = 443 keep state"));
+        assert!(!rules.contains("proto udp to 203.0.113.9"));
+        assert!(rules.ends_with("block drop out all\n"));
+        assert!(!rules.contains(';'));
+    }
+
+    #[test]
+    fn doh_window_keeps_prev_transport_not_always_udp() {
+        // A reconnect to a TCP node while armed must re-pin TCP in the DoH
+        // window — a UDP-only prev hole would blackhole the DoH query routed
+        // into the still-live tunnel.
+        let rules = pf_rules_doh_only(Some(EndpointPin {
+            ip: "167.88.161.83".parse().unwrap(),
+            port: 443,
+            proto: EndpointProto::Tcp,
+        }));
+        assert!(rules.contains("pass out quick inet proto tcp to 167.88.161.83 port = 443 keep state"));
+        assert!(!rules.contains("proto udp to 167.88.161.83"));
+    }
+}

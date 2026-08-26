@@ -121,6 +121,9 @@ enum ErrCode {
 #[derive(Debug, Clone, Serialize)]
 struct StatusSnapshot {
     protocol: u32,
+    /// Which tunnel protocol this status describes (additive, plan v9). The
+    /// envelope `protocol` above is the WIRE VERSION and is never overloaded.
+    tunnel_protocol: Option<String>,
     phase: VpnPhase,
     egress: Egress,
     /// Operator's desired kill-switch setting.
@@ -151,6 +154,7 @@ impl StatusSnapshot {
     fn stub() -> Self {
         StatusSnapshot {
             protocol: PROTOCOL,
+            tunnel_protocol: None,
             phase: VpnPhase::DisconnectedOpen,
             egress: Egress::Open,
             killswitch_pref: false,
@@ -643,6 +647,13 @@ fn clean_profile_name(value: Option<String>) -> Option<String> {
 fn snapshot_from(view: state::View) -> StatusSnapshot {
     StatusSnapshot {
         protocol: PROTOCOL,
+        // Additive discriminator (plan v9): the envelope `protocol` u32 is the
+        // WIRE VERSION and stays untouched; this names the tunnel kind.
+        tunnel_protocol: match view.tunnel_kind {
+            Some(state::TunnelKind::WireGuard) => Some("wireguard".into()),
+            Some(state::TunnelKind::OpenVpn) => Some("openvpn".into()),
+            None => None,
+        },
         phase: view.phase,
         egress: view.egress,
         killswitch_pref: view.ks_pref,

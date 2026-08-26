@@ -36,6 +36,9 @@ pub struct View {
     pub ks_active: bool,
     pub ipv6: Option<Ipv6Policy>,
     pub iface: Option<String>,
+    /// Which tunnel protocol this status describes. Additive field — the
+    /// envelope `protocol` u32 (wire version) is untouched.
+    pub tunnel_kind: Option<TunnelKind>,
     pub profile_name: Option<String>,
     pub handshake_age_secs: Option<u64>,
     pub uptime_secs: Option<u64>,
@@ -66,6 +69,9 @@ pub struct Base {
     /// Process-local epoch seconds when the tunnel last became configured.
     connected_since_unix: Option<u64>,
     dns_filter: bool,
+    /// Which tunnel kind is (or was last) active. `None` = WG legacy state
+    /// (pre-OpenVPN journals never carried a kind).
+    tunnel_kind: Option<TunnelKind>,
 }
 
 /// Finalize a snapshot: probe the handshake (bounded, outside the lock) and
@@ -74,21 +80,26 @@ pub struct Base {
 /// no keepalive legitimately has an old last-handshake), so age is surfaced in
 /// `handshake_age_secs` for the UI to judge rather than triggering false alarms.
 pub fn finalize(b: Base) -> View {
-    let hs = if b.configured {
-        netops::handshake_age_secs()
+    // Kind-aware liveness: WireGuard proves Connected via `wg show` handshakes;
+    // OpenVPN has no handshake analog — the bring-up worker journals
+    // `connected ovpn` after mgmt CONNECTED + iface-up, and finalize treats the
+    // configured flag plus that marker as proof (never `wg show` on ovpn kind).
+    let is_ovpn = matches!(b.tunnel_kind, Some(TunnelKind::OpenVpn));
+    let (hs, transfer) = if !b.configured {
+        (None, None)
+    } else if is_ovpn {
+        (None, ripley_vpn_broker::netops_ovpn::ovpn_transfer_bytes())
     } else {
-        None
-    };
-    let transfer = if b.configured {
-        netops::transfer_bytes()
-    } else {
-        None
+        (
+            netops::handshake_age_secs(),
+            netops::transfer_bytes(),
+        )
     };
     let phase = if b.configured {
         if b.degraded {
             VpnPhase::DegradedBlocked
-        } else if hs.is_some() {
-            VpnPhase::Connected // handshake observed
+        } else if is_ovpn || hs.is_some() {
+            VpnPhase::Connected // handshake observed (wg) or journaled mgmt CONNECTED (ovpn)
         } else {
             VpnPhase::ConnectingBlocked // configured, no handshake yet
         }
@@ -127,6 +138,7 @@ pub fn finalize(b: Base) -> View {
         sent_bytes: transfer.map(|value| value.1),
         cleanup_required: b.dirty,
         dns_filter: b.dns_filter,
+        tunnel_kind: b.tunnel_kind,
     }
 }
 
@@ -142,6 +154,39 @@ pub struct Manager {
     profile_name: Option<String>, // display-only; cleared when tunnel is down
     connected_since_unix: Option<u64>, // session start for uptime (process-local)
     dns_filter: bool, // loopback DNS blocklist filter is running
+    /// Which tunnel kind is active. Kind-aware teardown/boot switch on this.
+    tunnel_kind: Option<TunnelKind>,
+    /// Monotonic cancel counter (plan v9 `Connect generation` row). Every
+    /// de-escalating mutator bumps it BEFORE tearing down; a bring-up worker
+    /// captured the value at spawn and must find it unchanged before applying
+    /// any network mutation or journaling `connected`.
+    connect_gen: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TunnelKind {
+    WireGuard,
+    OpenVpn,
+}
+
+impl TunnelKind {
+    pub fn journal_token(self) -> &'static str {
+        match self {
+            TunnelKind::WireGuard => "wireguard",
+            TunnelKind::OpenVpn => "ovpn",
+        }
+    }
+
+    /// Legacy bare tokens (`open`/`blocked`) predate kinds and mean WG.
+    fn from_journal_field(field: &str) -> Option<TunnelKind> {
+        match field {
+            "wireguard" | "wg" | "open" | "blocked" | "connecting" | "connected" | "errored" => {
+                Some(TunnelKind::WireGuard)
+            }
+            "ovpn" => Some(TunnelKind::OpenVpn),
+            _ => None,
+        }
+    }
 }
 
 /// Atomic, durable journal write. tmp → fsync → rename → fsync(dir).
@@ -215,23 +260,55 @@ impl Manager {
             profile_name: None,
             connected_since_unix: None,
             dns_filter: false,
+            tunnel_kind: None,
+            connect_gen: 0,
         }
     }
 
     /// Best-effort teardown that records whether it left stale state behind, so a
     /// later "open" op can refuse until a clean teardown is verified.
     fn teardown_marking_dirty(&mut self) {
-        if !netops::wg_down().is_empty() {
+        let errs = self.teardown_any();
+        if !errs.is_empty() {
             self.dirty = true;
         }
         self.profile_name = None;
         self.connected_since_unix = None;
     }
 
+    /// THE teardown: switches on the active tunnel kind and sweeps BOTH kinds'
+    /// artifacts so a protocol switch can never leave cross-protocol leftovers.
+    /// Every former direct `wg_down()` caller goes through here.
+    fn teardown_any(&mut self) -> Vec<netops::NetError> {
+        let mut errs = netops::wg_down(); // WG iface + policy routing + DNS revert (all benign-if-absent)
+        match self.tunnel_kind {
+            Some(TunnelKind::OpenVpn) => {
+                // OpenVPN userspace child: SIGTERM→SIGKILL ladder, then artifact
+                // sweep. The pidfile lives in /run (same-boot scope by design).
+                errs.extend(ripley_vpn_broker::netops_ovpn::ovpn_down().into_iter().map(|e| netops::NetError::NonZero { cmd: "openvpn teardown".into(), code: None, stderr: e.to_string() }));
+            }
+            Some(TunnelKind::WireGuard) | None => {}
+        }
+        self.tunnel_kind = None;
+        errs
+    }
+
+    /// Monotonic cancel counter bump. Call BEFORE any teardown triggered by a
+    /// de-escalating op, so an in-flight bring-up worker observes a mismatched
+    /// generation and exits without touching the network or journal.
+    fn bump_connect_gen(&mut self) {
+        self.connect_gen = self.connect_gen.wrapping_add(1);
+    }
+
+    pub fn connect_gen(&self) -> u64 {
+        self.connect_gen
+    }
+
     /// The single guarded path to clearnet: verify a CLEAN teardown, then remove
     /// the block. Refuses (stays blocked) if anything is left dirty.
     fn guarded_open(&mut self) -> Result<(), String> {
-        let errs = netops::wg_down();
+        self.bump_connect_gen();
+        let errs = self.teardown_any();
         if !errs.is_empty() {
             self.dirty = true;
             self.errored = true;
@@ -257,6 +334,12 @@ impl Manager {
         };
         if recover {
             if !netops::wg_down().is_empty() {
+                m.dirty = true;
+            }
+            // OpenVPN journal recovery: sweep the pidfile-scoped child if any.
+            // (PID-reuse safe: the /run pidfile only survives within one boot.)
+            let ovpn_errs = ripley_vpn_broker::netops_ovpn::ovpn_down();
+            if !ovpn_errs.is_empty() {
                 m.dirty = true;
             }
             match killswitch::block_all() {
@@ -293,6 +376,7 @@ impl Manager {
             profile_name: self.profile_name.clone(),
             connected_since_unix: self.connected_since_unix,
             dns_filter: self.dns_filter,
+            tunnel_kind: self.tunnel_kind,
         }
     }
 
@@ -359,7 +443,11 @@ impl Manager {
         // Clear any stale state from a prior failed teardown first, so a leftover
         // `ripley0` / routes can't fail this bring-up (bring-up recovers over a
         // dirty blocked state — the egress block installed above stays intact).
-        let _ = netops::wg_down();
+        // ALSO the up()-side gen capture point: this bump invalidates any worker
+        // from an earlier connect attempt.
+        self.bump_connect_gen();
+        let captured_gen = self.connect_gen;
+        let _ = self.teardown_any();
 
         // Bring up wg + routes; on failure tear down but KEEP the block.
         if let Err(e) = netops::wg_up(cfg, endpoint_ip) {
@@ -472,7 +560,8 @@ impl Manager {
     /// Break-glass: FORCE teardown + clearnet regardless of teardown noise. Still
     /// requires the nft removal to succeed (else we cannot honestly open).
     pub fn emergency_restore(&mut self) -> Result<(), String> {
-        let _ = netops::wg_down(); // force — ignore teardown failures
+        self.bump_connect_gen();
+        let _ = self.teardown_any(); // force — ignore teardown failures
         self.open_after_verified_teardown()
     }
 
@@ -587,6 +676,7 @@ mod tests {
             profile_name: None,
             connected_since_unix: None,
             dns_filter: false,
+            tunnel_kind: None,
         }
     }
 
