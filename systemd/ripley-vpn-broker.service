@@ -9,7 +9,6 @@ Type=simple
 ExecStart=/usr/lib/ripley-terminal/ripley-vpn-broker
 # Fail closed if the openvpn binary is missing — the broker must never serve
 # a connect request it cannot honor (WG path unaffected by this check).
-ExecStartPre=/bin/sh -c 'command -v openvpn >/dev/null || exit 0'
 User=root
 Group=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
