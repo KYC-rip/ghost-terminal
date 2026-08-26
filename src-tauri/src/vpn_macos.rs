@@ -1525,6 +1525,36 @@ fn handle(request: HelperRequest) -> Result<MacState, String> {
                 .map(|s| s.lines().map(str::to_string).collect())
                 .unwrap_or_default();
             for config in configs {
+                // Dual-kind (plan v9): mixed Xeovo packs pre-cache BOTH kinds'
+                // remotes so reconnect-under-armed-KS works either way.
+                if sniff_is_openvpn(config.0.as_str()) {
+                    use ripley_vpn_broker::parse_ovpn_config;
+                    let Ok(cfg) = parse_ovpn_config(config.0.as_str()) else {
+                        continue;
+                    };
+                    if let EndpointHost::Dns(host) = cfg.remote_host() {
+                        let port = cfg.remote_port();
+                        if let Ok(ip) =
+                            std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:{port}"))
+                                .and_then(|mut it| {
+                                    it.next().ok_or_else(|| {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::NotFound,
+                                            "no addresses",
+                                        )
+                                    })
+                                })
+                                .map(|a| match a {
+                                    std::net::SocketAddr::V4(v4) => v4.ip().to_string(),
+                                    std::net::SocketAddr::V6(v6) => v6.ip().to_string(),
+                                })
+                        {
+                            entries.retain(|e| !e.starts_with(&format!("{host} ")));
+                            entries.push(format!("{host} {ip}"));
+                        }
+                    }
+                    continue;
+                }
                 let Ok(cfg) = parse_wg_config(config.0.as_str()) else {
                     continue;
                 };
