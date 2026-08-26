@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 pub const IFACE: &str = "ripley0"; // matches killswitch oifname
 pub const FWMARK: &str = "0xca6c";
+/// Same policy-routing table as wg_up — the not-fwmark rule points here.
+pub const RT_TABLE: &str = "51820";
 const PID_FILE: &str = "/run/ripley-vpn/ovpn.pid";
 
 /// CLI-forced safety flags appended AFTER --config so profile text cannot
@@ -188,6 +190,7 @@ pub fn ovpn_transfer_bytes() -> Option<(u64, u64)> {
 
 // ---- management-socket client + conf builder + spawn ------------------------
 
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use zeroize::Zeroizing;
 
@@ -199,6 +202,17 @@ pub enum MgmtError {
     Io(String),
     Timeout,
     Protocol(String),
+}
+
+impl std::fmt::Display for MgmtError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MgmtError::Connect(e) => write!(f, "connect: {e}"),
+            MgmtError::Io(e) => write!(f, "io: {e}"),
+            MgmtError::Timeout => write!(f, "timeout waiting CONNECTED"),
+            MgmtError::Protocol(e) => write!(f, "protocol: {e}"),
+        }
+    }
 }
 
 /// One blocking management-socket session over a root-owned unix socket in a
@@ -361,4 +375,164 @@ mod tests {
         let s = MgmtState::parse(">STATE:1660000000,WAIT,,");
         assert_eq!(s.tun_local_v4, None);
     }
+}
+
+// ---- runtime conf builder + Linux spawn (part of Step 3/4) -----------------
+
+/// Build the sanitized runtime config written to the 0600 tempfile. ONLY
+/// parser-validated values and the pinned IP endpoint appear here; safety
+/// flags live in FORCED_FLAGS on argv AFTER --config. NO management line
+/// (CLI owns it), NO route/ifconfig directives (broker owns routing).
+pub fn build_runtime_conf(
+    cfg: &crate::parser_ovpn::OvpnConfig,
+    pinned_ip: std::net::IpAddr,
+) -> Zeroizing<String> {
+    use std::fmt::Write as _;
+    let mut t = String::new();
+    let _ = writeln!(t, "client");
+    let _ = writeln!(t, "dev {IFACE}");
+    let _ = writeln!(t, "dev-type tun");
+    let _ = writeln!(t, "proto {}", cfg.proto_transport().as_str());
+    match pinned_ip {
+        std::net::IpAddr::V4(v4) => {
+            let _ = writeln!(t, "remote {v4} {}", cfg.remote_port());
+        }
+        std::net::IpAddr::V6(_) => unreachable!("v1 rejects IPv6 endpoints"),
+    }
+    let _ = writeln!(t, "persist-key");
+    let _ = writeln!(t, "nobind");
+    if let Some(mtu) = cfg.tun_mtu() {
+        let _ = writeln!(t, "tun-mtu {mtu}");
+    }
+    for d in cfg.dns_servers() {
+        let _ = writeln!(t, "dhcp-option DNS {d}");
+    }
+    if let Some(ciphers) = cfg.data_ciphers() {
+        let _ = writeln!(t, "data-ciphers {ciphers}");
+    }
+    if let Some(auth) = cfg.auth_digest() {
+        let _ = writeln!(t, "auth {auth}");
+    }
+    t.push_str(cfg.ca_block());
+    t.push_str(cfg.cert_block());
+    t.push_str(cfg.key_block());
+    if let Some((prot, body)) = cfg.tls_auth_or_crypt() {
+        match prot {
+            crate::parser_ovpn::TlsProtection::TlsAuth => {
+                let _ = write!(t, "<tls-auth>\n{}</tls-auth>\n", body);
+            }
+            crate::parser_ovpn::TlsProtection::TlsCrypt => {
+                let _ = write!(t, "<tls-crypt>\n{}</tls-crypt>\n", body);
+            }
+        }
+    }
+    Zeroizing::new(t)
+}
+
+fn which_openvpn() -> Result<PathBuf, OvpnSupError> {
+    const CANDIDATES: &[&str] = &["/usr/sbin/openvpn", "/usr/bin/openvpn", "/sbin/openvpn"];
+    CANDIDATES
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            OvpnSupError::Spawn("openvpn binary not found; install OpenVPN >= 2.6".into())
+        })
+}
+
+/// Spawn the openvpn child (DIRECT child — no --daemon/setsid). Writes the
+/// 0600 conf, unlinks stale mgmt socks, applies FORCED_FLAGS after --config,
+/// and sets umask(077) in the child so any files it creates are root-only.
+#[cfg(target_os = "linux")]
+pub fn spawn_openvpn(conf_body: &Zeroizing<String>) -> Result<Child, OvpnSupError> {
+    use std::fs::OpenOptions;
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+
+    let run_dir = PathBuf::from("/run/ripley-vpn");
+    std::fs::create_dir_all(&run_dir).map_err(|e| OvpnSupError::Io(e.to_string()))?;
+    std::fs::set_permissions(&run_dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+
+    // Keep the conf until teardown (SIGHUP re-reads it); mode 0600.
+    let conf_path = run_dir.join("ripley0.ovpn.conf");
+    {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&conf_path)
+            .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+        f.write_all(conf_body.as_bytes())
+            .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+    }
+    std::fs::set_permissions(&conf_path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| OvpnSupError::Io(e.to_string()))?;
+
+    let mgmt_dir = run_dir.join("mgmt");
+    std::fs::create_dir_all(&mgmt_dir).map_err(|e| OvpnSupError::Io(e.to_string()))?;
+    let mgmt_sock = mgmt_dir.join("mgmt.sock");
+    // A stale socket from a prior session blocks bind — unlink before spawn.
+    let _ = std::fs::remove_file(&mgmt_sock);
+
+    let binary = which_openvpn()?;
+    let mut cmd = Command::new(&binary);
+    cmd.arg("--config")
+        .arg(&conf_path)
+        .args(FORCED_FLAGS)
+        .arg("--mark")
+        .arg(FWMARK)
+        .arg("--management")
+        .arg(&mgmt_sock)
+        .arg("unix")
+        .arg("--management-client-user")
+        .arg("root");
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
+            Ok(())
+        });
+    }
+    cmd.env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    cmd.spawn()
+        .map_err(|e| OvpnSupError::Spawn(format!("{}: {e}", binary.display())))
+}
+
+/// Post-CONNECTED kernel bring-up: tun address from management field (d),
+/// then policy routing reusing the SAME constants as wg_up.
+#[cfg(target_os = "linux")]
+pub struct IpLinkError(pub NetErrAlias);
+
+#[cfg(target_os = "linux")]
+pub type NetErrAlias = String;
+
+#[cfg(target_os = "linux")]
+pub fn ovpn_apply_network(tun_local: std::net::Ipv4Addr) -> Vec<NetErrAlias> {
+    let mut errs = Vec::new();
+    for args in [
+        vec!["-4", "addr", "add", &format!("{tun_local}/32"), "dev", IFACE],
+        vec!["-4", "link", "set", IFACE, "up"],
+        vec!["-4", "route", "add", "default", "dev", IFACE, "table", RT_TABLE],
+    ] {
+        let out = std::process::Command::new("ip")
+            .args(&args)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => errs.push(format!(
+                "ip {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => errs.push(format!("ip {}: {e}", args.join(" "))),
+        }
+    }
+    errs
 }

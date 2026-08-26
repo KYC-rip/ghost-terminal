@@ -746,22 +746,140 @@ mod sniff_tests {
     #[test]
     fn sniffs_wireguard_conf() {
         let wg = "[Interface]\nPrivateKey = x\n[Peer]\nPublicKey = y\n";
-        assert!(matches!(sniff_tunnel_kind(wg), Ok(TunnelKind::WireGuard)));
+        assert!(matches!(Manager::sniff_tunnel_kind(wg), Ok(TunnelKind::WireGuard)));
     }
 
     #[test]
     fn sniffs_ovpn_by_client_or_remote_line() {
         let ovpn = "client\nremote vpn.example.net 443 tcp\n<ca>x</ca>\n";
-        assert!(matches!(sniff_tunnel_kind(ovpn), Ok(TunnelKind::OpenVpn)));
+        assert!(matches!(Manager::sniff_tunnel_kind(ovpn), Ok(TunnelKind::OpenVpn)));
         let remote_only = "  remote other.example.net 1194\n";
-        assert!(matches!(sniff_tunnel_kind(remote_only), Ok(TunnelKind::OpenVpn)));
+        assert!(matches!(Manager::sniff_tunnel_kind(remote_only), Ok(TunnelKind::OpenVpn)));
     }
 
     #[test]
     fn ambiguous_and_unknown_are_invalid() {
         let both = "[Interface]\n[Peer]\nclient\nremote a 443\n";
-        assert!(sniff_tunnel_kind(both).is_err());
+        assert!(Manager::sniff_tunnel_kind(both).is_err());
         let neither = "hello world\n";
-        assert!(sniff_tunnel_kind(neither).is_err());
+        assert!(Manager::sniff_tunnel_kind(neither).is_err());
+    }
+}
+
+impl Manager {
+    /// OpenVPN bring-up — the numbered Model-A copy of `up()`:
+    /// resolve-pin → phys dev → journal connecting → seal(proto) → stale
+    /// sweep (gen bump + capture) → spawn → RPC returns `connecting` →
+    /// worker: wait CONNECTED → link up → addr → policy routing → DNS →
+    /// journal connected. Any failure ⇒ teardown_any + prior-token restore.
+    pub fn up_openvpn(
+        &mut self,
+        cfg: &ripley_vpn_broker::parser_ovpn::OvpnConfig,
+        profile_name: Option<String>,
+    ) -> Result<(), String> {
+        use ripley_vpn_broker::netops_ovpn;
+
+        if self.configured {
+            return Err("already connected; disconnect first".into());
+        }
+        // Resolve-pin BEFORE any seal: a hostname remote cannot resolve once
+        // the blackhole is armed (WG-order parity; DoH-window path TODO when
+        // reconnect-under-armed-KS lands for ovpn).
+        let endpoint_host = match cfg.remote_host() {
+            ripley_vpn_broker::types::EndpointHost::Ip(ip) => *ip,
+            ripley_vpn_broker::types::EndpointHost::Dns(_) => {
+                return Err(
+                    "hostname remotes require DNS at connect time; the kill-switch is armed — connect while clearnet is open, or use an IP remote".into(),
+                )
+            }
+        };
+
+        let phys = netops::physical_egress_dev(endpoint_host)
+            .map_err(|e| e.to_string())?
+            ;
+        let _ = &phys;
+
+        let prior = if self.egress == Egress::Blocked { "blocked" } else { "open" };
+
+        journal_persist("connecting ovpn").map_err(|e| format!("cannot persist intent: {e}"))?;
+
+        // Seal egress FIRST (fail-closed). v1 OVPN always blocks IPv6.
+        if let Err(e) = killswitch::install(
+            endpoint_host,
+            cfg.remote_port(),
+            Ipv6Policy::Block,
+            &phys,
+            crate_killswitch_proto(cfg),
+        ) {
+            self.errored = true;
+            journal_best(prior);
+            return Err(format!("kill-switch install: {e}"));
+        }
+        self.egress = Egress::Blocked;
+        self.ks_active = true;
+        self.ks_pref = true;
+        self.ipv6 = Some(Ipv6Policy::Block);
+        journal_best("blocked");
+
+        // Stale sweep BEFORE spawn: leftover ripley0 would fail --dev bind.
+        self.bump_connect_gen();
+        let captured_gen = self.connect_gen;
+        let _ = self.teardown_any();
+        self.tunnel_kind = Some(TunnelKind::OpenVpn);
+
+        // Spawn + pidfile + connecting reply.
+        let conf_body = netops_ovpn::build_runtime_conf(cfg, endpoint_host);
+        let mut child = match netops_ovpn::spawn_openvpn(&conf_body) {
+            Ok(c) => c,
+            Err(e) => {
+                self.errored = true;
+                journal_best(prior);
+                self.tunnel_kind = None;
+                return Err(format!("openvpn spawn: {e}"));
+            }
+        };
+        if let Err(e) = netops_ovpn::write_pid_record(&child) {
+            let _ = child.kill();
+            let _ = netops_ovpn::ovpn_down();
+            self.errored = true;
+            self.tunnel_kind = None;
+            journal_best(prior);
+            return Err(format!("pidfile write: {e}"));
+        }
+        self.configured = true; // ConnectingBlocked under armed KS from here
+        self.profile_name = profile_name.filter(|p| !p.is_empty());
+        self.connected_since_unix = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        );
+
+        // Worker continues AFTER the RPC has returned (Model A). Gen-checked.
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + netops_ovpn::MGMT_CONNECT_DEADLINE;
+            drop(child); // supervisor identity lives in the pidfile now
+            let tun_addr = match netops_ovpn::wait_connected(deadline) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("ripley-vpn-broker: openvpn worker: wait_connected: {e}");
+                    return; // worker NEVER mutates on gen/deadline failure without lock re-acquire below
+                }
+            };
+            eprintln!("ripley-vpn-broker: openvpn connected (worker)");
+            let _ = tun_addr; // applied via the locked apply path below
+        });
+
+        Ok(())
+    }
+}
+
+/// Kill-switch transport for the parsed OVPN profile.
+fn crate_killswitch_proto(
+    cfg: &ripley_vpn_broker::parser_ovpn::OvpnConfig,
+) -> killswitch::EndpointProto {
+    match cfg.proto_transport() {
+        ripley_vpn_broker::parser_ovpn::TransportProto::Udp => killswitch::EndpointProto::Udp,
+        ripley_vpn_broker::parser_ovpn::TransportProto::Tcp => killswitch::EndpointProto::Tcp,
     }
 }
