@@ -63,8 +63,10 @@ function resolveConnectTarget(
   t: (key: string, vars?: Record<string, string | number>) => string,
 ): { profile: VpnProfile; displayName: string; notice?: string } {
   if (!selected) throw new Error(t('selectConfig'));
-  // OpenVPN now connects (cert-only v1). The broker rejects unsupported
-  // configs at connect time with a typed reason, so no renderer gate here.
+  // OpenVPN relock (review round 1): the disk path is in, but the full
+  // Model-A apply chain must land on both OSes before Connect is offered.
+  // TODO(v1.1): remove this gate once the E2E matrix passes on Linux+macOS.
+  if (selected.kind === 'openvpn') throw new Error(t('openvpnUnsupported'));
   if (!isRandomProfile(selected)) {
     return { profile: selected, displayName: selected.name };
   }
@@ -727,7 +729,7 @@ export function VpnView() {
     }
   };
 
-  const canConnect = nativeControls && !!selectedProfile
+  const canConnect = nativeControls && !!selectedProfile && selectedProfile.kind !== 'openvpn'
     && (isRandomProfile(selectedProfile) || !!configText.trim());
   const isEmpty = profiles.length === 0;
   const confLines = useMemo(
