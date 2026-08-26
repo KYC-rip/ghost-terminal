@@ -337,6 +337,31 @@ impl MgmtState {
 /// Blocking wait ≤ deadline for a CONNECTED line; returns the parsed tun
 /// address when present. Called by the bring-up worker AFTER up()'s RPC has
 /// already returned `connecting` to the caller (Model A).
+/// One-shot STATE probe: returns Some(tun_local) when CONNECTED observed,
+/// None while still connecting. Errors are terminal for the caller's loop.
+pub fn poll_connected_once() -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
+    let mut c = MgmtClient::connect()?;
+    c.send_command("state on")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if Instant::now() >= deadline {
+            return Err(MgmtError::Timeout);
+        }
+        match c.read_line()? {
+            Some(line) if line.starts_with(">STATE:") => {
+                if line.contains(",CONNECTED,SUCCESS,") {
+                    return Ok(MgmtState::parse(&line).tun_local_v4);
+                }
+                if line.contains(",EXITING,") || line.contains(",RECONNECTING,") {
+                    return Err(MgmtError::Protocol(line));
+                }
+            }
+            Some(_) => continue,
+            None => return Err(MgmtError::Protocol("connection closed".into())),
+        }
+    }
+}
+
 pub fn wait_connected(deadline: Instant) -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
     let mut c = MgmtClient::connect()?;
     c.send_command("state on")?;

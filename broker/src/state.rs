@@ -15,7 +15,9 @@
 
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::net::{IpAddr};
+use std::str::FromStr;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::types::{Ipv6Policy, WgConfig};
 use crate::{dnsfilter, killswitch, netops, Egress, VpnPhase};
@@ -156,6 +158,10 @@ pub struct Manager {
     dns_filter: bool, // loopback DNS blocklist filter is running
     /// Which tunnel kind is active. Kind-aware teardown/boot switch on this.
     tunnel_kind: Option<TunnelKind>,
+    /// OpenVPN liveness proof: set ONLY by the worker after mgmt CONNECTED +
+    /// network apply; cleared on any teardown. finalize() requires it for
+    /// Connected — `configured` alone means ConnectingBlocked (TLS in flight).
+    ovpn_connected: bool,
     /// Monotonic cancel counter (plan v9 `Connect generation` row). Every
     /// de-escalating mutator bumps it BEFORE tearing down; a bring-up worker
     /// captured the value at spawn and must find it unchanged before applying
@@ -238,6 +244,7 @@ impl Manager {
             connected_since_unix: None,
             dns_filter: false,
             tunnel_kind: None,
+            ovpn_connected: false,
             connect_gen: 0,
         }
     }
@@ -759,22 +766,48 @@ impl Manager {
         if self.configured {
             return Err("already connected; disconnect first".into());
         }
-        // Resolve-pin BEFORE any seal: a hostname remote cannot resolve once
-        // the blackhole is armed (WG-order parity; DoH-window path TODO when
-        // reconnect-under-armed-KS lands for ovpn).
-        let endpoint_host = match cfg.remote_host() {
+
+        // Resolve-pin BEFORE any seal (WG-order parity). Hostname remotes are
+        // resolved on clearnet with the WG resolver (getent); ONLY when the
+        // kill-switch is already armed do we refuse — that path needs the
+        // scoped-DNS-hole retry, which lands with reconnect-under-blocked.
+        let endpoint_host: IpAddr = match cfg.remote_host() {
             ripley_vpn_broker::types::EndpointHost::Ip(ip) => *ip,
-            ripley_vpn_broker::types::EndpointHost::Dns(_) => {
-                return Err(
-                    "hostname remotes require DNS at connect time; the kill-switch is armed — connect while clearnet is open, or use an IP remote".into(),
-                )
+            ripley_vpn_broker::types::EndpointHost::Dns(name) => {
+                if self.egress == Egress::Blocked && self.ks_active {
+                    return Err(
+                        "cannot resolve hostname while the kill-switch is armed; restore clearnet once or use an IP remote"
+                            .into(),
+                    );
+                }
+                let out = std::process::Command::new("getent")
+                    .args(["ahosts", name])
+                    .env_clear()
+                    .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+                    .output()
+                    .map_err(|e| format!("resolve {name}: {e}"))?;
+                let text = String::from_utf8_lossy(&out.stdout);
+                let ip = text
+                    .lines()
+                    .filter_map(|l| l.split_whitespace().next())
+                    .filter_map(|s| s.parse::<IpAddr>().ok())
+                    .find(|ip| ip.is_ipv4() || ip.is_ipv4() == false && false)
+                    .or_else(|| {
+                        text.lines()
+                            .filter_map(|l| l.split_whitespace().next())
+                            .filter_map(|s| IpAddr::from_str(s).ok())
+                            .next()
+                    })
+                    .ok_or_else(|| format!("remote '{name}' resolved to no usable address"))?;
+                if ip.is_ipv6() {
+                    return Err("IPv6 remotes are not supported in v1".into());
+                }
+                ip
             }
         };
 
         let phys = netops::physical_egress_dev(endpoint_host)
-            .map_err(|e| e.to_string())?
-            ;
-        let _ = &phys;
+            .map_err(|e| e.to_string())?;
 
         let prior = if self.egress == Egress::Blocked { "blocked" } else { "open" };
 
@@ -795,35 +828,41 @@ impl Manager {
         self.egress = Egress::Blocked;
         self.ks_active = true;
         self.ks_pref = true;
-        self.ipv6 = Some(Ipv6Policy::Block);
+        // NEVER journal "open" after a successful seal: crash recovery must
+        // treat the box as blocked, not clean-open.
         journal_best("blocked");
 
-        // Stale sweep BEFORE spawn: leftover ripley0 would fail --dev bind.
+        // Gen capture + bump BEFORE the stale sweep so a concurrent teardown
+        // invalidates this worker.
         self.bump_connect_gen();
         let captured_gen = self.connect_gen;
         let _ = self.teardown_any();
         self.tunnel_kind = Some(TunnelKind::OpenVpn);
 
-        // Spawn + pidfile + connecting reply.
+        // Spawn + pidfile + connecting reply. Post-seal failures stay BLOCKED.
+        #[cfg(target_os = "linux")]
         let conf_body = netops_ovpn::build_runtime_conf(cfg, endpoint_host);
+        #[cfg(target_os = "linux")]
         let mut child = match netops_ovpn::spawn_openvpn(&conf_body) {
             Ok(c) => c,
             Err(e) => {
                 self.errored = true;
-                journal_best(prior);
                 self.tunnel_kind = None;
+                journal_best("blocked");
                 return Err(format!("openvpn spawn: {e}"));
             }
         };
+        #[cfg(target_os = "linux")]
         if let Err(e) = netops_ovpn::write_pid_record(&child) {
             let _ = child.kill();
             let _ = netops_ovpn::ovpn_down();
             self.errored = true;
             self.tunnel_kind = None;
-            journal_best(prior);
+            journal_best("blocked");
             return Err(format!("pidfile write: {e}"));
         }
-        self.configured = true; // ConnectingBlocked under armed KS from here
+        self.configured = true; // ConnectingBlocked-under-KS until CONNECTED
+        self.ovpn_connected = false;
         self.profile_name = profile_name.filter(|p| !p.is_empty());
         self.connected_since_unix = Some(
             std::time::SystemTime::now()
@@ -832,24 +871,127 @@ impl Manager {
                 .unwrap_or(0),
         );
 
-        // Worker continues AFTER the RPC has returned (Model A). Gen-checked.
+        // Model A worker: everything below runs after the RPC returned OK.
+        // Gen-gated under the manager lock at BOTH apply and failure points.
+        // Linux-only: on macOS helperd owns supervision via its own loop.
+        #[cfg(target_os = "linux")]
         std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + netops_ovpn::MGMT_CONNECT_DEADLINE;
-            drop(child); // supervisor identity lives in the pidfile now
-            let tun_addr = match netops_ovpn::wait_connected(deadline) {
-                Ok(a) => a,
-                Err(e) => {
-                    eprintln!("ripley-vpn-broker: openvpn worker: wait_connected: {e}");
-                    return; // worker NEVER mutates on gen/deadline failure without lock re-acquire below
+            use std::time::{Duration, Instant};
+
+            // Reaper liveness: monitor the child for unexpected death.
+            let deadline = Instant::now() + netops_ovpn::MGMT_CONNECT_DEADLINE;
+
+            // wait_result: Ok(tun_local) | Err(reason)
+            let wait_result: Result<std::net::Ipv4Addr, String> = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        break Err(format!("openvpn exited during TLS: status={status:?}"));
+                    }
+                    Ok(None) => {}
+                    Err(e) => break Err(format!("waitpid probe: {e}")),
+                }
+                if Instant::now() >= deadline {
+                    break Err("CONNECTED not observed within deadline".into());
+                }
+                match netops_ovpn::poll_connected_once() {
+                    Ok(Some(addr)) => break Ok(addr),
+                    Ok(None) => sleep_sleep(Duration::from_millis(250)),
+                    Err(e) => break Err(e.to_string()),
                 }
             };
-            eprintln!("ripley-vpn-broker: openvpn connected (worker)");
-            let _ = tun_addr; // applied via the locked apply path below
+
+            // Lock + gen gate: zero mutation when a newer intent exists.
+            let mut mgr = match crate_state_lock() {
+                Some(g) => g,
+                None => return, // poisoned: another thread force-exits
+            };
+            if mgr.connect_gen != captured_gen {
+                eprintln!("ripley-vpn-broker: openvpn worker gen mismatch — no mutation, exiting");
+                // The disconnect path owns the child now.
+                drop(mgr);
+                return;
+            }
+
+            match wait_result {
+                Ok(tun_local) => {
+                    let mut errs: Vec<String> = netops_ovpn::ovpn_apply_network(tun_local);
+                    errs.extend(
+                        netops_policy_routing_up()
+                            .iter()
+                            .map(|e| e.to_string()),
+                    );
+                    if !errs.is_empty() {
+                        mgr.errored = true;
+                        mgr.teardown_marking_dirty();
+                        journal_best("errored ovpn");
+                        eprintln!(
+                            "ripley-vpn-broker: openvpn network apply failed — torn down: {}",
+                            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")
+                        );
+                        return;
+                    }
+                    mgr.ovpn_connected = true;
+                    mgr.degraded = false;
+                    mgr.dirty = false;
+                    journal_best("connected ovpn");
+                    eprintln!("ripley-vpn-broker: openvpn connected (worker)");
+                }
+                Err(e) => {
+                    // Fail closed: tear down the half-open tunnel, stay blocked.
+                    let _ = netops_ovpn::ovpn_down();
+                    mgr.errored = true;
+                    mgr.teardown_marking_dirty();
+                    mgr.configured = false;
+                    mgr.tunnel_kind = None;
+                    journal_best("blocked");
+                    eprintln!("ripley-vpn-broker: openvpn connect failed fail-closed ({e})");
+                }
+            }
+
+            // Child-death reaper continues AFTER successful apply too: an ovpn
+            // process that dies later must never leave a silent 'connected'.
+            // Detached watcher: poll pidfile identity + waitpid-style probe.
+            let gen_at_watch = mgr.connect_gen;
+            drop(mgr);
+            loop {
+                sleep_sleep(Duration::from_secs(1));
+                let locked = match crate_state_lock() {
+                    Some(g) => g,
+                    None => return,
+                };
+                if locked.connect_gen != gen_at_watch {
+                    drop(locked);
+                    return; // superseded/reaped elsewhere
+                }
+                if !netops_ovpn::child_alive_by_pidfile() {
+                    // Unexpected death of a live child.
+                    let _ = netops_ovpn::ovpn_down();
+                    let mut m2 = match crate_state_lock() {
+                        Some(g) => g,
+                        None => return,
+                    };
+                    m2.dirty = true;
+                    drop(m2);
+                    journal_best("blocked");
+                    eprintln!("ripley-vpn-broker: openvpn child died unexpectedly — reconciled to blocked");
+                    return;
+                }
+                drop(locked);
+            }
         });
 
         Ok(())
     }
+
+    pub fn ovpn_connected(&self) -> bool {
+        self.ovpn_connected
+    }
 }
+
+fn crate_state_lock() -> Option<std::sync::MutexGuard<'static, Manager>> {
+    manager().lock().ok()
+}
+
 
 /// Kill-switch transport for the parsed OVPN profile.
 fn crate_killswitch_proto(
@@ -859,4 +1001,15 @@ fn crate_killswitch_proto(
         ripley_vpn_broker::parser_ovpn::TransportProto::Udp => killswitch::EndpointProto::Udp,
         ripley_vpn_broker::parser_ovpn::TransportProto::Tcp => killswitch::EndpointProto::Tcp,
     }
+}
+
+fn sleep_sleep(d: Duration) {
+    std::thread::sleep(d);
+}
+
+/// Policy-routing install for the ovpn tun — reuses the EXACT WG constants
+/// (fwmark rule pair + table 51820) via netops' internal helper, exposed as
+/// pub(crate).
+fn netops_policy_routing_up() -> Vec<netops::NetError> {
+    netops::ovpn_routes_up()
 }

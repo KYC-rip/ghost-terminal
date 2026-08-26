@@ -409,7 +409,8 @@ pub fn wg_up(cfg: &WgConfig, endpoint_ip: IpAddr) -> Result<(), NetError> {
     Ok(())
 }
 
-fn install_policy_routing(family: &str) -> Result<(), NetError> {
+/// pub(crate): shared with the OpenVPN bring-up path (same rule constants).
+pub(crate) fn install_policy_routing(family: &str) -> Result<(), NetError> {
     // Both rules BEFORE the tunnel default (wg-quick ordering): the table stays
     // ineffective until the suppress-main rule exists.
     run(
@@ -469,6 +470,15 @@ pub fn dns_up(cfg: &WgConfig) -> Result<(), NetError> {
 /// list of failures so the caller can decide (a normal restore must NOT re-open
 /// egress if teardown was incomplete). Rules are deleted by their FULL selector
 /// (not pref alone) so we only ever remove our own.
+/// Route the ovpn tun + install the same policy-routing pair wg_up uses.
+pub fn ovpn_routes_up() -> Vec<NetError> {
+    let mut errs = Vec::new();
+    if let Err(e) = install_policy_routing("-4") {
+        errs.push(e);
+    }
+    errs
+}
+
 pub fn wg_down() -> Vec<NetError> {
     let mut errs = Vec::new();
     for family in ["-4", "-6"] {
