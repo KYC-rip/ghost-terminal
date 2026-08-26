@@ -713,3 +713,55 @@ mod tests {
         assert_eq!(v.egress, Egress::Open);
     }
 }
+
+impl Manager {
+    /// Content-based protocol sniff for the Up envelope (no filename exists
+    /// there). Exact two-field rule: WG needs BOTH markers; OVPN needs a
+    /// line-anchored client/remote token; anything else (both or neither) is
+    /// ambiguous ⇒ invalid config.
+    pub fn sniff_tunnel_kind(text: &str) -> Result<TunnelKind, String> {
+        let lower = text.to_ascii_lowercase();
+        let wg_present = lower.contains("[interface]") && lower.contains("[peer]");
+        let ovpn_present = text
+            .lines()
+            .any(|l| {
+                let t = l.trim_start();
+                t.starts_with("client ") || t == "client" || t.starts_with("remote ")
+                    || t.starts_with("--client") || t.starts_with("--remote")
+            });
+        match (wg_present, ovpn_present) {
+            (true, false) => Ok(TunnelKind::WireGuard),
+            (false, true) => Ok(TunnelKind::OpenVpn),
+            (true, true) | (false, false) => {
+                Err("unknown protocol: cannot determine tunnel kind".into())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod sniff_tests {
+    use super::*;
+
+    #[test]
+    fn sniffs_wireguard_conf() {
+        let wg = "[Interface]\nPrivateKey = x\n[Peer]\nPublicKey = y\n";
+        assert!(matches!(sniff_tunnel_kind(wg), Ok(TunnelKind::WireGuard)));
+    }
+
+    #[test]
+    fn sniffs_ovpn_by_client_or_remote_line() {
+        let ovpn = "client\nremote vpn.example.net 443 tcp\n<ca>x</ca>\n";
+        assert!(matches!(sniff_tunnel_kind(ovpn), Ok(TunnelKind::OpenVpn)));
+        let remote_only = "  remote other.example.net 1194\n";
+        assert!(matches!(sniff_tunnel_kind(remote_only), Ok(TunnelKind::OpenVpn)));
+    }
+
+    #[test]
+    fn ambiguous_and_unknown_are_invalid() {
+        let both = "[Interface]\n[Peer]\nclient\nremote a 443\n";
+        assert!(sniff_tunnel_kind(both).is_err());
+        let neither = "hello world\n";
+        assert!(sniff_tunnel_kind(neither).is_err());
+    }
+}
