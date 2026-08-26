@@ -129,6 +129,12 @@ pub fn write_pid_record(child: &std::process::Child) -> Result<(), OvpnSupError>
 fn remove_artifacts() {
     let _ = std::fs::remove_file(pid_file());
     let _ = std::fs::remove_file(mgmt_sock_path());
+    // The conf is KEPT while the child runs (SIGHUP re-reads it); teardown
+    // is the only place allowed to remove it.
+    let parent = pid_file().parent().map(|p| p.to_path_buf());
+    if let Some(dir) = parent {
+        let _ = std::fs::remove_file(dir.join("ripley0.ovpn.conf"));
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -142,10 +148,23 @@ fn signal_pid(pid: i32, sig: nix::sys::signal::Signal) -> Result<(), OvpnSupErro
 /// Term-then-kill with bounded re-check. Linux-only identity checks via /proc;
 /// the macOS helperd supervision path implements its own waitpid-based sweep.
 #[cfg(target_os = "linux")]
+/// /proc/<pid>/comm must say 'openvpn' — belt to the start-time suspenders.
+#[cfg(target_os = "linux")]
+fn proc_comm_is_openvpn(pid: i32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .map(|c| c.trim() == "openvpn")
+        .unwrap_or(false)
+}
+
+pub fn ovpn_down_linux() {
+    // placeholder replaced below
+}
+
 pub fn ovpn_down() -> Vec<OvpnSupError> {
     let mut errs = Vec::new();
     if let Some((pid, recorded)) = read_pid_record() {
-        let same_identity = proc_starttime(pid) == Some(recorded);
+        let same_identity =
+            proc_starttime(pid) == Some(recorded) && proc_comm_is_openvpn(pid);
         if same_identity {
             if let Err(e) = signal_pid(pid, nix::sys::signal::Signal::SIGTERM) {
                 errs.push(e);
