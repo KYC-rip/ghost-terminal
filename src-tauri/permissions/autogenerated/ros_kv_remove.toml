@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ros-kv-remove"
+description = "Enables the ros_kv_remove command without any pre-configured scope."
+commands.allow = ["ros_kv_remove"]
+
+[[permission]]
+identifier = "deny-ros-kv-remove"
+description = "Denies the ros_kv_remove command without any pre-configured scope."
+commands.deny = ["ros_kv_remove"]

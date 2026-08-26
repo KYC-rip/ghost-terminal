@@ -2637,6 +2637,30 @@
           "markdownDescription": "Enables the ros_channel_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the ros_kv_clear command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ros-kv-clear",
+          "markdownDescription": "Enables the ros_kv_clear command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ros_kv_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ros-kv-load",
+          "markdownDescription": "Enables the ros_kv_load command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ros_kv_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ros-kv-remove",
+          "markdownDescription": "Enables the ros_kv_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ros_kv_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ros-kv-set",
+          "markdownDescription": "Enables the ros_kv_set command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ros_native_fetch command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ros-native-fetch",
@@ -3337,6 +3361,30 @@
           "type": "string",
           "const": "deny-ros-channel-status",
           "markdownDescription": "Denies the ros_channel_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ros_kv_clear command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ros-kv-clear",
+          "markdownDescription": "Denies the ros_kv_clear command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ros_kv_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ros-kv-load",
+          "markdownDescription": "Denies the ros_kv_load command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ros_kv_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ros-kv-remove",
+          "markdownDescription": "Denies the ros_kv_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ros_kv_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ros-kv-set",
+          "markdownDescription": "Denies the ros_kv_set command without any pre-configured scope."
         },
         {
           "description": "Denies the ros_native_fetch command without any pre-configured scope.",

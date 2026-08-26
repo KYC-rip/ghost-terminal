@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ros-kv-clear"
+description = "Enables the ros_kv_clear command without any pre-configured scope."
+commands.allow = ["ros_kv_clear"]
+
+[[permission]]
+identifier = "deny-ros-kv-clear"
+description = "Denies the ros_kv_clear command without any pre-configured scope."
+commands.deny = ["ros_kv_clear"]
