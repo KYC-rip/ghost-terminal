@@ -185,3 +185,188 @@ pub fn ovpn_transfer_bytes() -> Option<(u64, u64)> {
     // Managed by the Linux worker in Step 4 — see netops_ovpn::MgmtClient.
     None
 }
+
+// ---- management-socket client (mgmt protocol, single-client discipline) ----
+//
+// The client speaks the OpenVPN management line protocol over a root-owned
+// unix socket in a 0700 dir. It sends ONLY compile-time commands
+// (`state on`, `status`, `bytecount 1`) — never `log on`/`signal`/arbitrary
+// text — and parses returned endpoints as typed IPs or discards them.
+
+pub const MGMT_CONNECT_DEADLINE: Duration = Duration::from_secs(90);
+
+#[derive(Debug)]
+pub enum MgmtError {
+    Connect(String),
+    Io(String),
+    Timeout,
+    Protocol(String),
+}
+
+/// One blocking management-socket session. Created per operation; closed on
+/// drop so finalize/status can open their own short-lived sessions later
+/// (single-client-at-a-time discipline).
+pub struct MgmtClient {
+    #[cfg(target_os = "linux")]
+    stream: std::os::unix::net::UnixStream,
+    buffer: Vec<String>,
+}
+
+impl MgmtClient {
+    pub fn connect() -> Result<Self, MgmtError> {
+        Self::connect_to(mgmt_sock_path())
+    }
+
+    fn connect_to(path: PathBuf) -> Result<Self, MgmtError> {
+        let stream = std::os::unix::net::UnixStream::connect(&path)
+            .map_err(|e| MgmtError::Connect(format!("{}: {e}", path.display())))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| MgmtError::Io(e.to_string()))?;
+        let mut c = MgmtClient {
+            #[cfg(target_os = "linux")]
+            stream,
+            buffer: Vec::new(),
+        };
+        // Drain the banner (INFO lines + possibly HOLD until we speak).
+        let _ = c.drain_banner();
+        Ok(c)
+    }
+
+    /// Consume INFO/HOLD banner lines emitted at connect.
+    fn drain_banner(&mut self) -> Result<(), MgmtError> {
+        for _ in 0..32 {
+            match self.read_line()? {
+                Some(line) if line.starts_with("INFO:") => continue,
+                Some(line) if line.starts_with("HOLD:") => continue,
+                Some(_) => break, // first real prompt/state line — banner done
+                None => break,
+            }
+        }
+        Ok(())
+    }
+
+    fn read_line(&mut self) -> Result<Option<String>, MgmtError> {
+        if let Some(line) = self.buffer.pop() {
+            return Ok(Some(line));
+        }
+        let mut buf = [0u8; 512];
+        let mut acc = Vec::new();
+        loop {
+            let n = self
+                .read_stream(&mut buf)
+                .map_err(|e| MgmtError::Io(e.to_string()))?;
+            if n == 0 {
+                return Ok(None);
+            }
+            acc.extend_from_slice(&buf[..n]);
+            while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = acc.drain(..=pos).collect();
+                let text = String::from_utf8_lossy(&line[..line.len() - 1]).trim_end().to_string();
+                if !text.is_empty() {
+                    return Ok(Some(text));
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read_stream(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::Read;
+        self.stream.read(buf)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn read_stream(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "mgmt client is Linux-supervised"))
+    }
+
+    fn send_command(&mut self, cmd: &str) -> Result<(), MgmtError> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::io::Write;
+            self.stream
+                .write_all(format!("{cmd}\n").as_bytes())
+                .map_err(|e| MgmtError::Io(e.to_string()))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = cmd;
+            Err(MgmtError::Io("mgmt client is Linux-supervised".into()))
+        }
+    }
+}
+
+/// Parsed management STATE entry. Only (d) carries network semantics:
+/// per OpenVPN management-notes: d=tun local IPv4, e/f=remote transport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MgmtState<'a> {
+    /// TUN local IPv4 from field (d). SOLE source of the tun address.
+    pub tun_local_v4: Option<std::net::Ipv4Addr>,
+    /// Transport verification only — NEVER used as ifconfig peer/gateway.
+    pub remote_host_ref: Option<&'a str>,
+    pub remote_port: Option<u16>,
+}
+
+impl MgmtState<'_> {
+    pub fn parse(line: &str) -> MgmtState<'_> {
+        // >STATE:1660000000,CONNECTED,SUCCESS,<ip>,<port>,<local_d>,…
+        let mut m = MgmtState { tun_local_v4: None, remote_host_ref: None, remote_port: None };
+        if let Some(rest) = line.strip_prefix(">STATE:") {
+            let fields: Vec<&str> = rest.splitn(7, ',').collect();
+            if fields.len() >= 6 && fields[1] == "CONNECTED" && fields[2] == "SUCCESS" {
+                m.remote_host_ref = Some(fields[3]);
+                m.remote_port = fields[4].parse().ok();
+                m.tun_local_v4 = fields[5].parse::<std::net::Ipv4Addr>().ok();
+            }
+        }
+        m
+    }
+}
+
+/// Wait (blocking, ≤ deadline) for a CONNECTED state line; returns the parsed
+/// tun address when present. Used by the bring-up worker AFTER up()'s RPC has
+/// already returned `connecting` to the caller.
+pub fn wait_connected(deadline: Instant) -> Result<Option<std::net::Ipv4Addr>, MgmtError> {
+    let mut c = MgmtClient::connect()?;
+    c.send_command("state on")?;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(MgmtError::Timeout);
+        }
+        match c.read_line()? {
+            Some(line) if line.starts_with(">STATE:") => {
+                let s = MgmtState::parse(&line);
+                let connected = line.contains(",CONNECTED,SUCCESS,");
+                if connected {
+                    return Ok(s.tun_local_v4);
+                }
+                if line.contains(",EXITING,") || line.contains(",RECONNECTING,") {
+                    return Err(MgmtError::Protocol(line));
+                }
+            }
+            Some(_) => continue,
+            None => return Err(MgmtError::Protocol("connection closed".into())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_line_parses_d_as_tun_addr_and_ef_as_transport_only() {
+        let line = ">STATE:1660000000,CONNECTED,SUCCESS,203.0.113.9,443,10.8.0.2,255.255.255.0";
+        let s = MgmtState::parse(line);
+        assert_eq!(s.tun_local_v4, Some("10.8.0.2".parse().unwrap()));
+        assert_eq!(s.remote_port, Some(443));
+        assert!(s.remote_host_ref.is_some());
+    }
+
+    #[test]
+    fn non_connected_state_lines_yield_nothing() {
+        let s = MgmtState::parse(">STATE:1660000000,WAIT,,");
+        assert_eq!(s.tun_local_v4, None);
+    }
+}
