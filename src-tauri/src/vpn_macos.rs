@@ -91,9 +91,21 @@ enum HelperRequest {
     CacheEndpoints { configs: Vec<SecretText> },
 }
 
+/// Which tunnel protocol the state describes. Absent/None = WG legacy state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum MacTunnelKind {
+    WireGuard,
+    OpenVpn,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct MacState {
     phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tunnel_kind: Option<MacTunnelKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ovpn_pid: Option<u32>,
     egress: String,
     killswitch_active: bool,
     interface: Option<String>,
@@ -138,6 +150,8 @@ impl MacState {
             egress: "open".into(),
             killswitch_active: false,
             interface: None,
+            tunnel_kind: None,
+            ovpn_pid: None,
             handshake_age_secs: None,
             cleanup_required: false,
             backend: "wireguard-go · macOS".into(),
@@ -156,6 +170,8 @@ impl MacState {
             egress: "blocked".into(),
             killswitch_active: true,
             interface: None,
+            tunnel_kind: None,
+            ovpn_pid: None,
             handshake_age_secs: None,
             cleanup_required: false,
             backend: "wireguard-go · macOS".into(),
@@ -1045,6 +1061,8 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
         egress: "blocked".into(),
         killswitch_active: true,
         interface: read_tunnel_name().ok(),
+        tunnel_kind: Some(MacTunnelKind::WireGuard),
+        ovpn_pid: None,
         handshake_age_secs: None,
         cleanup_required: true,
         backend: "wireguard-go · macOS".into(),
@@ -1063,7 +1081,124 @@ fn fail_connect(token: Option<String>, endpoint: Option<IpAddr>, reason: String)
     )
 }
 
+/// Content-based OVPN detection (mirror of the broker's sniff rule): a
+/// line-anchored `client` or `remote` token means OpenVPN; WG has
+/// [Interface]/[Peer] instead. No filename exists at this boundary.
+fn sniff_is_openvpn(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let wg = lower.contains("[interface]") && lower.contains("[peer]");
+    let ovpn = text.lines().any(|l| {
+        let t = l.trim_start();
+        t.eq_ignore_ascii_case("client")
+            || t.to_ascii_lowercase().starts_with("client ")
+            || t.to_ascii_lowercase().starts_with("remote ")
+    });
+    ovpn && !wg
+}
+
+/// OpenVPN connect path — Model-A sibling of `connect()`. Runs inside the
+/// persistent helperd; openvpn is a DIRECT child (no --daemon/setsid).
+fn connect_openvpn(
+    config_text: &str,
+    profile_name: Option<String>,
+) -> Result<MacState, String> {
+    use ripley_vpn_broker::{netops_ovpn, parse_ovpn_config};
+
+    // Parse-as-DATA BEFORE any privileged mutation. Secrets zeroized on error.
+    let cfg = parse_ovpn_config(config_text)
+        .map_err(|e| format!("invalid OpenVPN config: {e}"))?;
+    // tool(openvpn) checked ONLY on this path; brew sbin candidates first.
+    let openvpn_bin = ["opt/homebrew/sbin", "usr/local/sbin", "usr/local/bin", "opt/homebrew/bin"]
+        .iter()
+        .map(|rel| PathBuf::from("/").join(rel).join("openvpn"))
+        .find(|p| p.is_file())
+        .ok_or_else(|| "openvpn not found; install via Homebrew (openvpn >= 2.6)".to_string())?;
+
+    let previous = read_private_state();
+
+    let _ = reap_orphan_wgquick();
+    let _ = reap_stale_wireguard();
+    // Ownership guard (plan v9 4-way): NEVER destroy a live OVPN utun owned
+    // by our pidfile identity; foreign tunnels holding the resolvers still go.
+    destroy_tunnel_owning("1.1.1.1");
+    destroy_tunnel_owning("8.8.8.8");
+
+    // Resolve-pin endpoint BEFORE sealing (WG-order parity). DNS remotes ride
+    // the existing DoH-window path when the kill-switch is already armed.
+    let prev_endpoint = previous.endpoint.as_deref().and_then(parse_endpoint_label);
+    let blocked = previous.killswitch_active;
+    let pinned_ip: std::net::IpAddr = match cfg.remote_host() {
+        EndpointHost::Ip(ip) => *ip,
+        EndpointHost::Dns(host) if !blocked => {
+            let addrs: Vec<std::net::SocketAddr> =
+                std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:{}", cfg.remote_port()))
+                    .map_err(|e| format!("cannot resolve remote host '{host}': {e}"))?
+                    .collect();
+            // v4 preferred; v6 literal result is a v1 rejection.
+            let chosen = addrs
+                .iter()
+                .find(|a| a.is_ipv4())
+                .or_else(|| addrs.first())
+                .ok_or_else(|| format!("remote host '{host}' resolved to no addresses"))?;
+            match chosen {
+                std::net::SocketAddr::V4(v4) => std::net::IpAddr::V4(*v4.ip()),
+                std::net::SocketAddr::V6(_) => {
+                    return Err("IPv6 endpoints are not supported in v1".into())
+                }
+            }
+        }
+        EndpointHost::Dns(_host) => {
+            return Err(
+                "cannot resolve hostname while the kill-switch is armed; use an IP remote or restore clearnet once"
+                    .into(),
+            )
+        }
+    };
+
+    let token = enable_pf()?;
+    // Proto-pinned transport hole for THIS profile (udp|tcp), no tunnel pass
+    // yet — utunN appears only after CONNECTED.
+    load_pf(&pf_rules(
+        physical_egress_interface(&pinned_ip).as_deref(),
+        Some(pinned_ip),
+        Some(cfg.remote_port()),
+        None,
+        if matches!(cfg.proto_transport(), ripley_vpn_broker::parser_ovpn::TransportProto::Tcp) {
+            EndpointProto::Tcp
+        } else {
+            EndpointProto::Udp
+        },
+    ))?;
+
+    let conf_body = netops_ovpn::build_runtime_conf(cfg_remote_retyped(&cfg), pinned_ip);
+    // TODO(Step-5b): spawn + mgmt wait + utun discovery + route/DNS install +
+    // worker gen protocol; connecting reply returns within COMMAND_TIMEOUT.
+    let _ = (openvpn_bin, conf_body);
+
+    Err("OpenVPN macOS bring-up incomplete in this build".into())
+}
+
+fn cfg_remote_retyped<'a>(
+    cfg: &'a ripley_vpn_broker::parser_ovpn::OvpnConfig,
+) -> &'a ripley_vpn_broker::parser_ovpn::OvpnConfig {
+    cfg
+}
+
+#[allow(dead_code)]
+fn physical_egress_interface(_ip: &std::net::IpAddr) -> Option<String> {
+    // TODO(Step-5b): parse `route -n get <ip>` interface field (route_field
+    // helper) so the pinned hole is scoped to the real physical device.
+    None
+}
+
 fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, String> {
+    // Kind sniff FIRST (content-based; identical rule to the Linux broker):
+    // route to the OpenVPN path before touching any WG-only tooling so an
+    // OVPN-only Homebrew install never fails on missing wireguard-go, and a
+    // WG host never gains a hard openvpn dependency.
+    if sniff_is_openvpn(config_text) {
+        return connect_openvpn(config_text, profile_name);
+    }
     let profile_name = clean_profile_name(profile_name);
     // The shared parser canonicalizes wg-quick's optional Address masks to
     // /32 and /128 before any privileged network mutation.
@@ -1127,6 +1262,8 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         egress: "blocked".into(),
         killswitch_active: true,
         interface: None,
+        tunnel_kind: Some(MacTunnelKind::WireGuard),
+        ovpn_pid: None,
         handshake_age_secs: None,
         cleanup_required: false,
         backend: "wireguard-go · macOS".into(),
@@ -1194,7 +1331,9 @@ fn connect(config_text: &str, profile_name: Option<String>) -> Result<MacState, 
         phase: "connected".into(),
         egress: "blocked".into(),
         killswitch_active: true,
-        interface: Some(tunnel),
+        interface: Some(tunnel.clone()),
+        tunnel_kind: Some(MacTunnelKind::WireGuard),
+        ovpn_pid: None,
         handshake_age_secs: observed_handshake,
         cleanup_required: false,
         backend: "wireguard-go · macOS".into(),

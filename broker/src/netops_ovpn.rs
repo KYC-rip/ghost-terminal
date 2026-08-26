@@ -190,8 +190,11 @@ pub fn ovpn_transfer_bytes() -> Option<(u64, u64)> {
 
 // ---- management-socket client + conf builder + spawn ------------------------
 
+use std::process::{Child};
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
 use zeroize::Zeroizing;
 
 pub const MGMT_CONNECT_DEADLINE: Duration = Duration::from_secs(90);
