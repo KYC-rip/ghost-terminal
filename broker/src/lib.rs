@@ -13,4 +13,6 @@ pub use dnsfilter::{
     is_blocked, nxdomain_response, parse_blocklist, parse_query, DEFAULT_BLOCKLIST,
 };
 pub use parser::{parse_wg_config, ParseError};
+pub use parser_ovpn::{parse_ovpn_config, OvpnParseError, OvpnConfig, TransportProto};
 pub use types::{Cidr, Endpoint, EndpointHost, Ipv6Policy, WgConfig};
+pub mod parser_ovpn;
