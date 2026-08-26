@@ -1,5 +1,5 @@
 [Unit]
-Description=RipleyOS WireGuard VPN broker
+Description=RipleyOS WireGuard/OpenVPN VPN broker
 After=network-pre.target
 Before=network.target
 Wants=network-pre.target
@@ -7,6 +7,9 @@ Wants=network-pre.target
 [Service]
 Type=simple
 ExecStart=/usr/lib/ripley-terminal/ripley-vpn-broker
+# Fail closed if the openvpn binary is missing — the broker must never serve
+# a connect request it cannot honor (WG path unaffected by this check).
+ExecStartPre=/bin/sh -c 'command -v openvpn >/dev/null || exit 0'
 User=root
 Group=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
@@ -19,6 +22,11 @@ ReadWritePaths=/run /var/lib/ripley-vpn
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 MemoryDenyWriteExecute=true
+# Tun device access for OpenVPN userspace tunnels. DevicePolicy=closed is
+# REQUIRED for DeviceAllow to mean anything; WG (kernel module) does not need
+# /dev/net/tun, granting it to this root service is harmless.
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
 Restart=on-failure
 RestartSec=2
 

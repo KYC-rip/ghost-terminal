@@ -307,6 +307,12 @@ impl Manager {
     /// Replay the journal and converge to a safe state before serving.
     fn boot() -> Manager {
         let mut m = Manager::fresh();
+        // OpenVPN artifact sweep runs on EVERY boot (before the journal read):
+        // a pidfile surviving our own clean-exit path would be unusual, but a
+        // sweep is idempotent and covers any drift. /run scope => reboot-safe.
+        if !ripley_vpn_broker::netops_ovpn::ovpn_down().is_empty() {
+            m.dirty = true;
+        }
         let recover = match journal_read() {
             Journal::FirstRun => false,                 // never ran — genuinely open
             Journal::Marker(m) if m == "open" => false, // clean shutdown
@@ -458,6 +464,9 @@ impl Manager {
     }
 
     pub fn disconnect_blocked(&mut self) -> Result<(), String> {
+        // Cancel any in-flight bring-up worker FIRST: gen mismatch means the
+        // worker must not install routes/DNS or journal 'connected' after us.
+        self.bump_connect_gen();
         // Fail-closed intent is persisted BEFORE the mutation, so a crash can only
         // ever recover toward blocked.
         journal_persist("blocked").map_err(|e| format!("cannot persist intent: {e}"))?;
@@ -552,6 +561,7 @@ impl Manager {
     /// Reconcile toward the fail-closed blocked state (clears stale rules WITHOUT
     /// re-opening egress).
     pub fn reconcile_blocked(&mut self) -> Result<(), String> {
+        self.bump_connect_gen();
         journal_persist("blocked").map_err(|e| format!("cannot persist intent: {e}"))?;
         self.teardown_marking_dirty();
         self.seal().map_err(|e| {
