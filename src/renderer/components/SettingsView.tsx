@@ -260,8 +260,8 @@ export function SettingsView() {
                     checked={localSettings.include_prereleases}
                     onChange={(e) => setLocalSettings({ ...localSettings, include_prereleases: e.target.checked })}
                   />
-                  <div className={`w-10 h-5 border flex items-center px-1 transition-all ${localSettings.include_prereleases ? 'border-xmr-accent bg-xmr-accent/10' : 'border-xmr-border bg-xmr-base'}`}>
-                    <div className={`w-3 h-3 transition-all ${localSettings.include_prereleases ? 'bg-xmr-accent translate-x-5' : 'bg-xmr-dim translate-x-0'}`} />
+                  <div className={`w-10 h-5 rounded-full border flex items-center px-1 transition-all ${localSettings.include_prereleases ? 'border-xmr-accent bg-xmr-accent/10' : 'border-xmr-border bg-xmr-base'}`}>
+                    <div className={`w-3 h-3 rounded-full transition-all ${localSettings.include_prereleases ? 'bg-xmr-accent translate-x-5' : 'bg-xmr-dim translate-x-0'}`} />
                   </div>
                 </label>
                 <button
@@ -433,7 +433,7 @@ export function SettingsView() {
             {/* Fast sync (trusts the node) */}
             <div className="flex items-start justify-between border-t border-xmr-border/10 pt-6 gap-4">
               <div className="space-y-1 flex-1">
-                <span className="text-xs text-amber-400 font-black uppercase">Fast_Sync ⚡</span>
+                <span className="text-xs text-xmr-warning font-black uppercase">Fast_Sync ⚡</span>
                 <p className="text-[11px] text-xmr-dim uppercase font-black leading-relaxed">
                   Sync dramatically faster (~50-100×) by bulk-downloading blocks.
                 </p>
@@ -447,7 +447,7 @@ export function SettingsView() {
               </div>
               <button
                 onClick={() => setLocalSettings({ ...localSettings, fast_sync: !localSettings.fast_sync })}
-                className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.fast_sync ? 'bg-amber-400' : 'bg-xmr-base border border-xmr-border'}`}
+                className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.fast_sync ? 'bg-xmr-warning' : 'bg-xmr-base border border-xmr-border'}`}
               >
                 <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.fast_sync ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
               </button>

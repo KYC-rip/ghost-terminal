@@ -4,7 +4,6 @@ import { Card } from '../Card';
 import { TableHeader } from './TableHeader';
 import { AddressDisplay } from '../common/AddressDisplay';
 import { SubaddressInfo, useVault } from '../../contexts/VaultContext';
-import { RpcClient } from '../../services/rpcClient';
 import { useStats } from '../../hooks/useStats';
 
 interface Transaction {
@@ -98,7 +97,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
   useEffect(() => {
     const fetchGhostTrades = async () => {
       try {
-        const result = await (window as any).api.getGhostTrades();
+        const result = await window.api.getGhostTrades();
         if (result.success) {
           setGhostTrades(result.trades || {});
         }
@@ -108,7 +107,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
     };
     const fetchXmr402Payments = async () => {
       try {
-        const result = await (window as any).api.getAllXmr402Payments();
+        const result = await window.api.getAllXmr402Payments();
         if (result.success) {
           setXmr402Payments(result.payments || {});
         }
@@ -420,7 +419,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                     const callbackUrl = new URL(decodeURIComponent(xmr402Info.returnUrl));
                                     callbackUrl.searchParams.set('xmr402_txid', tx.id);
                                     if (xmr402Info.proof) callbackUrl.searchParams.set('xmr402_proof', xmr402Info.proof);
-                                    (window as any).api.openExternal(callbackUrl.toString());
+                                    window.api.openExternal(callbackUrl.toString());
                                   }}
                                   className="shrink-0 ml-4 px-3 py-1.5 bg-xmr-warning hover:opacity-90 text-xmr-base text-[10px] font-black uppercase tracking-wider rounded-sm transition-colors cursor-pointer flex items-center gap-1 shadow-[0_0_10px_var(--warning-color)]"
                                 >
@@ -440,7 +439,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                     e.stopPropagation();
                                     const tradeId = ghostTrades[tx.id].tradeId;
                                     const url = `https://kyc.rip/swap?id=${tradeId}`;
-                                    (window as any).api.openExternal(url, { width: 940, height: 820 });
+                                    window.api.openExternal(url, { width: 940, height: 820 });
                                   }}
                                   className="text-[10px] text-xmr-accent hover:text-xmr-green underline uppercase tracking-tighter flex items-center gap-1 cursor-pointer"
                                 >
