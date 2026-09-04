@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronUp, Copy, ExternalLink, Info, Loader2, Key, ShieldCheck, Fingerprint, CheckCircle, ShieldAlert, Zap, Ghost } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, Info, Loader2, Key, ShieldCheck, Fingerprint, CheckCircle, ShieldAlert, Zap } from 'lucide-react';
 import { Card } from '../Card';
 import { TableHeader } from './TableHeader';
 import { AddressDisplay } from '../common/AddressDisplay';

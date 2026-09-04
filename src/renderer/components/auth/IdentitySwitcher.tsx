@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PlusCircle, Check, Trash2, ChevronDown, ChevronUp, Users } from 'lucide-react';
+import { PlusCircle, Trash2, ChevronDown, ChevronUp, Users } from 'lucide-react';
 
 interface Identity {
   id: string;
@@ -16,9 +16,6 @@ interface IdentitySwitcherProps {
 
 export function IdentitySwitcher({ identities, activeId, onSwitchIdentity, onStartNew, onPurge }: IdentitySwitcherProps) {
   const [showSwitcher, setShowSwitcher] = useState(false);
-
-  // Even with one identity, show "New Identity" button for expandability
-  const hasMultiple = identities.length > 1;
 
   return (
     <div className="mt-6 pt-4 border-t border-xmr-border/20">

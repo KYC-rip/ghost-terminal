@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Wallet, DollarSign, Send, Loader2, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy, AlertTriangle, Info, ExternalLink } from 'lucide-react';
+import { Wallet, DollarSign, Send, Loader2, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy } from 'lucide-react';
 import { useVault } from '../../contexts/VaultContext';
 import { useStats } from '../../hooks/useStats';
 import { WalletService } from '../../services/walletService';
@@ -78,13 +78,11 @@ export function DirectSendTab({
   // --- xmr.bio Resolver ---
   const [bioProfile, setBioProfile] = useState<any>(null);
   const [isResolvingBio, setIsResolvingBio] = useState(false);
-  const [bioError, setBioError] = useState('');
   const resolveBioRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (sendMode !== 'single') {
       setBioProfile(null);
-      setBioError('');
       return;
     }
 
@@ -93,7 +91,6 @@ export function DirectSendTab({
       if (resolveBioRef.current) clearTimeout(resolveBioRef.current);
 
       setIsResolvingBio(true);
-      setBioError('');
       setBioProfile(null);
 
       const handle = val.startsWith('@') ? val.substring(1) : val;
@@ -106,18 +103,15 @@ export function DirectSendTab({
           const data = JSON.parse(body);
           if (data && data.address) {
             setBioProfile(data);
-          } else {
-            setBioError('No address found for this user.');
           }
         } catch (e) {
-          setBioError('User not found on xmr.bio');
+          // xmr.bio lookup failed — profile stays null
         } finally {
           setIsResolvingBio(false);
         }
       }, 600);
     } else {
       setBioProfile(null);
-      setBioError('');
       setIsResolvingBio(false);
       if (resolveBioRef.current) clearTimeout(resolveBioRef.current);
     }

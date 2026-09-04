@@ -100,7 +100,7 @@ export function AuthForm({
       <div className="space-y-1">
         <label className="text-[11px] font-black text-xmr-dim uppercase ml-1">{step === 'AUTH' ? 'Vault_Secret' : 'Set_Master_Password'}</label>
         <div className="relative">
-          <input autoFocus type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••••••" className="w-full bg-xmr-base border border-xmr-border p-2 text-xl font-black text-xmr-green focus:border-xmr-green outline-none transition-all placeholder:opacity-20" />
+          <input autoFocus type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••••••" className="w-full bg-xmr-base border border-xmr-border p-3 text-xl font-black text-xmr-green focus:border-xmr-green outline-none transition-all placeholder:opacity-20" />
           <Lock className="absolute right-4 top-1/2 -translate-y-1/2 text-xmr-dim opacity-30" size={20} />
         </div>
       </div>
@@ -108,7 +108,7 @@ export function AuthForm({
       {step !== 'AUTH' && (
         <div className="space-y-1">
           <label className="text-[11px] font-black text-xmr-dim uppercase ml-1">Confirm_Password</label>
-          <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••••••" className="w-full bg-xmr-base border border-xmr-border p-2 text-xl font-black text-xmr-green focus:border-xmr-green outline-none transition-all placeholder:opacity-20" />
+          <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="••••••••••••" className="w-full bg-xmr-base border border-xmr-border p-3 text-xl font-black text-xmr-green focus:border-xmr-green outline-none transition-all placeholder:opacity-20" />
         </div>
       )}
 

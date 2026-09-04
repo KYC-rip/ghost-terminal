@@ -125,7 +125,7 @@ export function AgentTab() {
               </p>
             </div>
             <button
-              onClick={() => setIsEnabled(!isEnabled)}
+              onClick={handleToggle}
               className={`w-12 h-6 rounded-full relative transition-all cursor-pointer ${isEnabled ? 'bg-xmr-green shadow-[0_0_15px_var(--color-xmr-green)]' : 'bg-xmr-base border border-xmr-border'}`}
             >
               <div className={`absolute top-1 w-4 h-4 rounded-full transition-all ${isEnabled ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-dim'}`}></div>
