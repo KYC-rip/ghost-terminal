@@ -136,11 +136,11 @@ export interface IApi {
   // --- App Info & Updates ---
   getAppInfo: () => Promise<{ version: string; appDataPath: string; walletsPath: string; platform: NodeJS.Platform; isPackaged: boolean }>;
   openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
-  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  openExternal: (url: string, options?: { width?: number; height?: number }) => Promise<{ success: boolean; error?: string }>;
   checkForUpdates: (include_prereleases: boolean) => Promise<{ success: boolean; hasUpdate?: boolean; latestVersion?: string; releaseUrl?: string; body?: string; publishedAt?: string; error?: string }>;
   selectBackgroundImage: () => Promise<{ success: boolean; data?: string; error?: string }>;
   saveGhostTrade: (txHash: string, tradeId: string) => Promise<{ success: boolean; error?: string }>;
-  getGhostTrades: () => Promise<{ success: boolean; trades: any[]; error?: string }>;
+  getGhostTrades: () => Promise<{ success: boolean; trades: Record<string, { tradeId: string; timestamp: number }>; error?: string }>;
 
   // XMR402 Payment Cache
   saveXmr402Payment: (nonce: string, txid: string, proof: string, amount: string, returnUrl?: string) => Promise<{ success: boolean; error?: string }>;

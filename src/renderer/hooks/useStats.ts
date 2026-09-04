@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 export interface Stats {
   price: { paper: string; street: string; premium: string, source: string };
@@ -30,7 +30,7 @@ export function useStats() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       // Route through the configured uplink (Tor/SOCKS/clearnet) in the main
       // process — a direct clearnet fetch() here would leak the user's IP to the
@@ -44,7 +44,7 @@ export function useStats() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
@@ -52,5 +52,5 @@ export function useStats() {
     return () => clearInterval(interval);
   }, []);
 
-  return useMemo(() => ({ stats, loading, refresh: fetchData }), [stats, loading]);
+  return useMemo(() => ({ stats, loading, refresh: fetchData }), [stats, loading, fetchData]);
 }

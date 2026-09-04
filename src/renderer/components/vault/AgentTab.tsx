@@ -67,7 +67,7 @@ export function AgentTab() {
 
   const handleRegenKey = async () => {
     if (confirm("Regenerate Agent API Key? Existing agent connections will be severed.")) {
-      const newKey = "RG-" + Math.random().toString(36).substring(2, 15).toUpperCase();
+      const newKey = "RG-" + crypto.randomUUID().replace(/-/g, '').substring(0, 13).toUpperCase();
       setApiKey(newKey);
       await syncConfig({ apiKey: newKey });
       alert("NEW_KEY_GENERATED: Update your agent configuration.");

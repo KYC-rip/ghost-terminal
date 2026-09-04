@@ -331,7 +331,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                 {/* When some funds are locked (e.g. change still maturing), the headline
                     shows the TOTAL; surface the spendable portion so it's clear. */}
                 {currentAcc?.unlockedBalance && currentAcc.unlockedBalance !== currentAccBalance && (
-                  <div className="text-[10px] font-bold text-amber-500/80 uppercase tracking-[0.1em] mb-2">
+                  <div className="text-[10px] font-bold text-xmr-warning/80 uppercase tracking-[0.1em] mb-2">
                     {currentAcc.unlockedBalance} available · rest locked (maturing)
                   </div>
                 )}
@@ -375,7 +375,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                 <div className="space-y-1 mt-3 pt-3 border-t border-xmr-border/15">
                   <div className="flex justify-between text-[10px] uppercase font-black">
                     <span className="text-xmr-dim/40">Uplink:</span>
-                    <span className={`flex items-center gap-1 ${nodeStale ? 'text-yellow-500' : isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
+                    <span className={`flex items-center gap-1 ${nodeStale ? 'text-xmr-warning' : isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
                       {isSyncing && <Loader2 size={8} className="animate-spin" />}
                       {nodeStale ? `Node stale −${nodeLag}` : status}{nodeLabel ? ` (${nodeLabel})` : ''}
                       <button

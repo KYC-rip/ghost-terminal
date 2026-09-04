@@ -203,7 +203,7 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
 
         {/* 🔁 MIGRATION BANNER: wallets from a previous (Electron) Ripley install */}
         {!isProcessing && step === 'AUTH' && legacy.length > 0 && !importDismissed && (
-          <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-xmr-green/5 border border-xmr-green/30 rounded-lg">
+          <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-xmr-green/5 border border-xmr-green/30 rounded-sm">
             <span className="text-[11px] text-xmr-dim leading-snug">
               <span className="text-xmr-green font-black">↦ {legacy.length}</span> wallet{legacy.length > 1 ? 's' : ''} from your previous Ripley
             </span>
@@ -228,7 +228,7 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
 
         {/* Expanded import list (only when the banner's Import is clicked) */}
         {!isProcessing && step === 'AUTH' && showImportList && !importDismissed && legacy.length > 0 && (
-          <div className="px-4 py-3 bg-xmr-surface/40 border border-xmr-border/30 rounded-lg flex flex-col gap-2">
+          <div className="px-4 py-3 bg-xmr-surface/40 border border-xmr-border/30 rounded-sm flex flex-col gap-2">
             <div className="text-[10px] text-xmr-dim/70 mb-1 leading-relaxed">
               Your funds are safe on disk — restore each with its seed phrase to use it here.
             </div>
@@ -341,9 +341,9 @@ export function AuthView({ onUnlock, isInitialSetup, identities, activeId, onSwi
             isn't buried three clicks deep. Tauri only. */}
         {/* Unlock (AUTH) or first-run create (no vault yet) — don't bury beta behind Settings. */}
         {canRos && !isProcessing && (step === 'AUTH' || (step === 'NEW_PASSWORD' && identities.length === 0)) && (
-          <div className="rounded-lg border border-xmr-green/25 bg-xmr-green/5 px-4 py-3.5 space-y-2.5">
+          <div className="rounded-sm border border-xmr-green/25 bg-xmr-green/5 px-4 py-3.5 space-y-2.5">
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-xmr-green/30 bg-xmr-base/60">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-xmr-green/30 bg-xmr-base/60">
                 <LayoutGrid size={16} className="text-xmr-green" />
               </span>
               <div className="min-w-0 flex-1 space-y-0.5">

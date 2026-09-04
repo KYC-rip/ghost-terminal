@@ -15,6 +15,59 @@ import { VpnView } from './components/VpnView';
 import { XMR402Modal } from './components/common/XMR402Modal';
 import { VaultProvider } from './contexts/VaultContext';
 
+type ViewId = 'home' | 'vault' | 'settings' | 'agent' | 'exchange' | 'vpn';
+
+interface NavButtonProps {
+  id: ViewId;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  badge?: string | null;
+  activeView: string;
+  onNavigate: (id: ViewId) => void;
+}
+
+const NavButton = ({ id, label, icon: Icon, badge, activeView, onNavigate }: NavButtonProps) => (
+  <button
+    onClick={() => onNavigate(id)}
+    className={`w-full flex items-center justify-between px-5 py-3 border-l-2 transition-all cursor-pointer group ${activeView === id ? 'bg-xmr-green/5 border-xmr-green text-xmr-green' : 'border-transparent text-xmr-dim hover:text-xmr-green hover:bg-xmr-green/5'}`}
+  >
+    <div className="flex items-center gap-3">
+      <Icon size={16} className={activeView === id ? 'drop-shadow-[0_0_8px_rgba(0,255,65,0.5)]' : 'opacity-50 group-hover:opacity-100'} />
+      <span className="text-[11px] font-black uppercase tracking-[0.15em]">{label}</span>
+    </div>
+    {badge && (
+      <span className="text-[9px] font-black bg-xmr-green/10 px-1.5 py-0.5 rounded-sm border border-xmr-green/20 animate-pulse">
+        {badge}
+      </span>
+    )}
+  </button>
+);
+
+interface NavGroupProps {
+  label: string;
+  groupKey: string;
+  expanded: boolean;
+  onToggle: (g: string) => void;
+  children: React.ReactNode;
+}
+
+const NavGroup = ({ label, groupKey, expanded, onToggle, children }: NavGroupProps) => {
+  const childArray = React.Children.toArray(children).filter(Boolean);
+  if (childArray.length === 1) return <>{childArray[0]}</>;
+  return (
+    <div>
+      <button
+        onClick={() => onToggle(groupKey)}
+        className="w-full flex items-center gap-2 px-5 py-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-xmr-dim/60 hover:text-xmr-dim transition-colors cursor-pointer"
+      >
+        <ChevronRight size={10} className={`transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+        {label}
+      </button>
+      {expanded && children}
+    </div>
+  );
+};
+
 const SkinOverlay = ({ config }: { config: any }) => {
   if (!config?.skin_background) return null;
   return (
@@ -32,7 +85,7 @@ const SkinOverlay = ({ config }: { config: any }) => {
 };
 
 function MainApp() {
-  const [view, setView] = useState<'home' | 'vault' | 'settings' | 'agent' | 'exchange' | 'vpn'>('home');
+  const [view, setView] = useState<ViewId>('home');
   const [showConsole, setShowConsole] = useState(false);
   const [consoleMaximized, setConsoleMaximized] = useState(false);
   const [consoleCopied, setConsoleCopied] = useState(false);
@@ -87,7 +140,6 @@ function MainApp() {
 
   const activeIdentity = identities.find(i => i.id === activeId);
 
-  const [showScanlines, setShowScanlines] = useState(resolvedTheme === 'dark');
   const [autoLockMinutes, setAutoLockMinutes] = useState(0);
 
   const [uplink, setUplink] = useState<string>('SCANNING...');
@@ -133,8 +185,6 @@ function MainApp() {
       const config = await window.api.getConfig();
       setAppConfig(config);
 
-      // Maintain compatibility with legacy single-setting logic
-      if (config.show_scanlines !== undefined) setShowScanlines(config.show_scanlines && resolvedTheme === 'dark');
       if (config.auto_lock_minutes !== undefined) setAutoLockMinutes(config.auto_lock_minutes);
     };
     loadConfig();
@@ -358,40 +408,6 @@ function MainApp() {
 
   const toggleGroup = (g: string) => setExpandedGroups(prev => ({ ...prev, [g]: !prev[g] }));
 
-  const NavButton = ({ id, label, icon: Icon, badge, compact }: any) => (
-    <button
-      onClick={() => setView(id)}
-      className={`w-full flex items-center justify-between px-5 py-3 border-l-2 transition-all cursor-pointer group ${view === id ? 'bg-xmr-green/5 border-xmr-green text-xmr-green' : 'border-transparent text-xmr-dim hover:text-xmr-green hover:bg-xmr-green/5'}`}
-    >
-      <div className="flex items-center gap-3">
-        <Icon size={16} className={view === id ? 'drop-shadow-[0_0_8px_rgba(0,255,65,0.5)]' : 'opacity-50 group-hover:opacity-100'} />
-        <span className="text-[11px] font-black uppercase tracking-[0.15em]">{label}</span>
-      </div>
-      {badge && (
-        <span className="text-[9px] font-black bg-xmr-green/10 px-1.5 py-0.5 rounded-sm border border-xmr-green/20 animate-pulse">
-          {badge}
-        </span>
-      )}
-    </button>
-  );
-
-  const NavGroup = ({ label, groupKey, children }: { label: string; groupKey: string; children: React.ReactNode }) => {
-    const childArray = React.Children.toArray(children).filter(Boolean);
-    if (childArray.length === 1) return <>{childArray[0]}</>;
-    return (
-      <div>
-        <button
-          onClick={() => toggleGroup(groupKey)}
-          className="w-full flex items-center gap-2 px-5 py-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-xmr-dim/60 hover:text-xmr-dim transition-colors cursor-pointer"
-        >
-          <ChevronRight size={10} className={`transition-transform duration-200 ${expandedGroups[groupKey] ? 'rotate-90' : ''}`} />
-          {label}
-        </button>
-        {expandedGroups[groupKey] && children}
-      </div>
-    );
-  };
-
   return (
     <div className="flex h-screen bg-xmr-base text-xmr-green font-mono relative overflow-hidden select-none transition-colors duration-300">
       <SkinOverlay config={appConfig} />
@@ -445,17 +461,17 @@ function MainApp() {
 
         {/* ─── Grouped Navigation ─── */}
         <nav className="flex-grow overflow-y-auto custom-scrollbar space-y-1 pb-2" style={{ WebkitAppRegion: 'no-drag' } as any}>
-          <NavButton id="home" label="Dashboard" icon={Ghost} />
-          <NavButton id="vault" label="Vault" icon={Shield} badge={isSyncing ? `${syncPercent.toFixed(1)}%` : null} />
+          <NavButton id="home" label="Dashboard" icon={Ghost} activeView={view} onNavigate={setView} />
+          <NavButton id="vault" label="Vault" icon={Shield} badge={isSyncing ? `${syncPercent.toFixed(1)}%` : null} activeView={view} onNavigate={setView} />
 
-          <NavGroup label="Exchange" groupKey="exchange">
-            <NavButton id="exchange" label="Exchange" icon={ArrowDown} />
+          <NavGroup label="Exchange" groupKey="exchange" expanded={!!expandedGroups['exchange']} onToggle={toggleGroup}>
+            <NavButton id="exchange" label="Exchange" icon={ArrowDown} activeView={view} onNavigate={setView} />
           </NavGroup>
 
-          <NavGroup label="Tools" groupKey="tools">
-            <NavButton id="agent" label="Agent" icon={Bot} />
-            <NavButton id="settings" label="Settings" icon={Settings} />
-            <NavButton id="vpn" label="VPN" icon={Network} />
+          <NavGroup label="Tools" groupKey="tools" expanded={!!expandedGroups['tools']} onToggle={toggleGroup}>
+            <NavButton id="agent" label="Agent" icon={Bot} activeView={view} onNavigate={setView} />
+            <NavButton id="settings" label="Settings" icon={Settings} activeView={view} onNavigate={setView} />
+            <NavButton id="vpn" label="VPN" icon={Network} activeView={view} onNavigate={setView} />
           </NavGroup>
           <button
             onClick={() => { setShowFeedbackModal(true); setFeedbackText(''); }}

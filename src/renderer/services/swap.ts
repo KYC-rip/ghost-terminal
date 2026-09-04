@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { apiClient, apiClient as client } from './client';
+import { apiClient } from './client';
 import {
   type BatchQuoteRequest,
   type BatchQuoteResult,
@@ -233,7 +233,7 @@ export function createTrade(params: CreateTradeParams): Promise<ExchangeResponse
     });
   }
 
-  return client<ExchangeResponse>('/v2/exchange/create', {
+  return apiClient<ExchangeResponse>('/v2/exchange/create', {
     body: {
       ...params.extra,
       trade_id: params.id, amount_from: params.amountFrom, amount_to: params.amountTo,
@@ -308,7 +308,7 @@ export function getTradeStatus(id: string) {
     } as any);
   }
 
-  return client<TradeStatus>(`/v2/exchange/status/${id}`).then(normalizeTradeStatus) as Promise<TradeStatus>;
+  return apiClient<TradeStatus>(`/v2/exchange/status/${id}`).then(normalizeTradeStatus) as Promise<TradeStatus>;
 }
 
 /**
@@ -349,7 +349,7 @@ export async function fetchQuote(
     kyc: kycMap[kyc], log: logMap[log],
   });
 
-  return client<ExchangeQuote>(`/v2/exchange/estimate?${params.toString()}`);
+  return apiClient<ExchangeQuote>(`/v2/exchange/estimate?${params.toString()}`);
 }
 
 /**
