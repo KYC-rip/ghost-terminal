@@ -38,5 +38,6 @@ not code-signing. Re-download to update; there is no native self-updater.
 ## Notes
 
 - Builds: universal macOS `.dmg`, Linux AppImage + `.deb`, Windows NSIS + `.msi`.
-- The bundled ROS fallback in this build is the 2.1.0 RipleyOS build
-  (`sha256 835ca840…`), including the new sync-settings toggles.
+- The bundled ROS fallback in this build is RipleyOS **2.1.1**
+  (`sha256 0ce529a1…`, built 2026-08-27 from `ripley-os` main), including
+  native KV persistence. `minBackend` 2.1.0.

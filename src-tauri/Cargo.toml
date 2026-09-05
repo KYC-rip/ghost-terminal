@@ -1,6 +1,6 @@
 [package]
 name = "ripley-terminal"
-version = "2.0.0"
+version = "2.1.0"
 description = "Tactical Monero Desktop Wallet"
 authors = ["KYC.rip"]
 edition = "2021"
