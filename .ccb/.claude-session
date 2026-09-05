@@ -1,0 +1,16 @@
+{
+  "work_dir": "/Users/anton/Projects/kyc-rip/packages/ripley-terminal",
+  "work_dir_norm": "/Users/anton/Projects/kyc-rip/packages/ripley-terminal",
+  "ccb_project_id": "4128fe703f94342b43d622a25ff345178bdee9d3d26466eaf9d2d49d8f70c897",
+  "claude_session_path": "/Users/anton/.claude/projects/-Users-anton-Projects-kyc-rip-packages-ripley-terminal/f00b96f2-488e-4571-9eeb-134988ce23d6.jsonl",
+  "claude_session_id": "f00b96f2-488e-4571-9eeb-134988ce23d6",
+  "updated_at": "2026-04-01 00:21:12",
+  "active": false,
+  "ended_at": "2026-04-01 00:21:42",
+  "session_id": "ai-1774974071-50220",
+  "start_dir": "/Users/anton/Projects/kyc-rip/packages/ripley-terminal",
+  "terminal": "tmux",
+  "started_at": "2026-03-22 17:09:08",
+  "pane_id": "%3",
+  "pane_title_marker": "CCB-Claude"
+}

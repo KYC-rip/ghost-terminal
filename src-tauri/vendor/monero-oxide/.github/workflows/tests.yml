@@ -1,0 +1,99 @@
+name: Monero Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "monero-oxide/**"
+
+  pull_request:
+    paths:
+      - "monero-oxide/**"
+
+  workflow_dispatch:
+
+jobs:
+  # Only run these once since they will be consistent regardless of any node
+  unit-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-15-intel, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Test Dependencies
+        uses: ./.github/actions/test-dependencies
+
+      - name: Run Unit Tests With and Without `--all-features`
+        shell: bash
+        run: |
+          function check_workspace {
+            # Get the members array from the workspace's `Cargo.toml`
+            cargo_toml_lines=$(cat ./Cargo.toml | wc -l)
+            # Keep all lines after the start of the array, then keep all lines before the next "]"
+            members=$(cat Cargo.toml | grep "members\ \=\ \[" -m1 -A$cargo_toml_lines | grep "]" -m1 -B$cargo_toml_lines)
+
+            # Parse out any comments, whitespace, including comments post-fixed on the same line as an entry
+            # We accomplish the latter by pruning all characters after the entry's ","
+            members=$(echo "$members" | grep -Ev "^[[:space:]]*(#|$)" | awk -F',' '{print $1","}')
+            # Replace the first line, which was "members = [" and is now "members = [,", with "["
+            members=$(echo "$members" | sed "1s/.*/\[/")
+            # Correct the last line, which was malleated to "],"
+            members=$(echo "$members" | sed "$(echo "$members" | wc -l)s/\]\,/\]/")
+
+            # Remove monero-oxide-verify-chain which isn't a lib and can't be tested as a lib
+            members=$(echo "$members" | grep -v "verify-chain")
+
+            # Remove the trailing comma by replacing the last line's "," with ""
+            members=$(echo "$members" | sed "$(($(echo "$members" | wc -l) - 1))s/\,//")
+
+            echo $members | jq -r ".[]" | while read -r member; do
+              member=$(echo "$member" | tr -d "[:space:]")
+              echo "Testing $member"
+
+              GITHUB_CI=true RUST_BACKTRACE=1 cargo test --manifest-path $member/Cargo.toml --lib
+              correct=$?
+              if [ $correct -ne 0 ]; then
+                return $correct
+              fi
+
+              GITHUB_CI=true RUST_BACKTRACE=1 cargo test --manifest-path $member/Cargo.toml --lib --all-features
+              correct=$?
+              if [ $correct -ne 0 ]; then
+                return $correct
+              fi
+            done
+          }
+          check_workspace
+
+  integration-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-15-intel, macos-latest, windows-latest]
+        # Test against all supported protocol versions
+        version: [v0.17.3.2, v0.18.4.4]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Test Dependencies
+        uses: ./.github/actions/test-dependencies
+        with:
+          monero-version: ${{ matrix.version }}
+
+      - name: Run Integration Tests
+        shell: bash
+        run: |
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-oxide --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-simple-request-rpc --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-wallet --test '*'
+
+      - name: Run Integration Tests With All Features
+        shell: bash
+        run: |
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-oxide --all-features --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-simple-request-rpc --all-features --test '*'
+          GITHUB_CI=true RUST_BACKTRACE=1 cargo test --package monero-wallet --all-features --test '*'

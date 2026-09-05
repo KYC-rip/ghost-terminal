@@ -1,0 +1,89 @@
+# MIT License
+#
+# Copyright (c) 2022 just-the-docs
+# Copyright (c) 2022-2025 Luke Parker
+# Copyright (c) 2025-2026 monero-oxide Developers
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+name: Deploy Rust docs to Pages
+
+on:
+  push:
+    branches:
+      - "main"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only allow one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  # Build job
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # 5.0.0
+
+      - name: Get nightly version to use
+        id: nightly
+        shell: bash
+        run: echo "version=$(cat .github/nightly-version)" >> $GITHUB_OUTPUT
+      - name: Build Dependencies
+        uses: ./.github/actions/build-dependencies
+      - name: Buld Rust docs
+        shell: bash
+        run: |
+          cargo fetch
+          # Handle https://github.com/rust-lang/rust/pull/138907 in dependencies which haven't updated
+          sed -i -s s/"doc_auto_cfg"/"doc_cfg"/ $(find ~/.cargo -type f -name "*.rs")
+          sed -i -s s/"doc_cfg, doc_cfg"/"doc_cfg"/g $(find ~/.cargo -type f -name "*.rs")
+          sed -i -s s/"doc_cfg_hide"/"doc_cfg"/ $(find ~/.cargo -type f -name "*.rs")
+          sed -i -s s/"doc_cfg, doc_cfg"/"doc_cfg"/g $(find ~/.cargo -type f -name "*.rs")
+          rustup toolchain install ${{ steps.nightly.outputs.version }} --profile minimal --component rust-docs
+          RUSTDOCFLAGS="--cfg docsrs -Z unstable-options --document-hidden-items" cargo +${{ steps.nightly.outputs.version }} doc --workspace --all-features --document-private-items
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # 4.0.0
+        with:
+          path: "target/doc/"
+
+  # Deployment job
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-slim
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # 4.0.5

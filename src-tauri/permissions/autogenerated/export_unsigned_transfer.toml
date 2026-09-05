@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-unsigned-transfer"
+description = "Enables the export_unsigned_transfer command without any pre-configured scope."
+commands.allow = ["export_unsigned_transfer"]
+
+[[permission]]
+identifier = "deny-export-unsigned-transfer"
+description = "Denies the export_unsigned_transfer command without any pre-configured scope."
+commands.deny = ["export_unsigned_transfer"]

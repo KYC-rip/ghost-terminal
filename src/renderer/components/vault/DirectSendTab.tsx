@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Wallet, DollarSign, Send, Loader2, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy, AlertTriangle, Info, ExternalLink } from 'lucide-react';
+import { Wallet, DollarSign, Send, Loader2, CheckCircle2, ChevronDown, ChevronUp, Coins, Copy } from 'lucide-react';
 import { useVault } from '../../contexts/VaultContext';
 import { useStats } from '../../hooks/useStats';
 import { WalletService } from '../../services/walletService';
@@ -38,6 +38,7 @@ interface DirectSendTabProps {
   initialAddress: string;
   sourceSubaddressIndex?: number;
   outputs: any[];
+  contacts?: { name: string; address: string }[];
   onRequirePassword: (action: () => Promise<void>) => void;
   onClose: () => void;
 }
@@ -46,6 +47,7 @@ export function DirectSendTab({
   initialAddress,
   sourceSubaddressIndex,
   outputs,
+  contacts = [],
   onRequirePassword,
   onClose,
 }: DirectSendTabProps) {
@@ -57,6 +59,8 @@ export function DirectSendTab({
 
   const [sendMode, setSendMode] = useState<'single' | 'multi'>('single');
   const [destAddr, setDestAddr] = useState(initialAddress);
+  const [showContacts, setShowContacts] = useState(false);
+  const [contactSearch, setContactSearch] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   const [multiText, setMultiText] = useState('');
   const [isBanned, setIsBanned] = useState(false);
@@ -74,13 +78,11 @@ export function DirectSendTab({
   // --- xmr.bio Resolver ---
   const [bioProfile, setBioProfile] = useState<any>(null);
   const [isResolvingBio, setIsResolvingBio] = useState(false);
-  const [bioError, setBioError] = useState('');
   const resolveBioRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (sendMode !== 'single') {
       setBioProfile(null);
-      setBioError('');
       return;
     }
 
@@ -89,33 +91,27 @@ export function DirectSendTab({
       if (resolveBioRef.current) clearTimeout(resolveBioRef.current);
 
       setIsResolvingBio(true);
-      setBioError('');
       setBioProfile(null);
 
       const handle = val.startsWith('@') ? val.substring(1) : val;
 
       resolveBioRef.current = setTimeout(async () => {
         try {
-          const res = await fetch(`https://api.xmr.bio/${handle}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.address) {
-              setBioProfile(data);
-            } else {
-              setBioError('No address found for this user.');
-            }
-          } else {
-            setBioError('User not found on xmr.bio');
+          // Routed through the uplink so resolving an @handle doesn't leak the
+          // user's IP (or who they're paying) to xmr.bio over clearnet.
+          const body = await window.api.proxiedGet(`https://api.xmr.bio/${handle}`);
+          const data = JSON.parse(body);
+          if (data && data.address) {
+            setBioProfile(data);
           }
         } catch (e) {
-          setBioError('Failed to contact xmr.bio');
+          // xmr.bio lookup failed — profile stays null
         } finally {
           setIsResolvingBio(false);
         }
       }, 600);
     } else {
       setBioProfile(null);
-      setBioError('');
       setIsResolvingBio(false);
       if (resolveBioRef.current) clearTimeout(resolveBioRef.current);
     }
@@ -132,12 +128,12 @@ export function DirectSendTab({
     }
   }, [deepLinkData, clearDeepLinkData]);
 
-  // Ban check
+  // Ban check — routed through the uplink so the payee address isn't sent to a
+  // clearnet server (which would reveal who you're paying) while on Tor.
   useEffect(() => {
     if (sendMode === 'single' && destAddr.length > 30) {
-      fetch(`https://api.kyc.rip/v1/tools/ban-list?address=${destAddr}`)
-        .then((res) => res.json())
-        .then((data: any) => setIsBanned(data.results && data.results.length > 0))
+      window.api.proxiedGet(`https://api.kyc.rip/v1/tools/ban-list?address=${destAddr}`)
+        .then((body: string) => { const data = JSON.parse(body); setIsBanned(data.results && data.results.length > 0); })
         .catch(() => setIsBanned(false));
     } else setIsBanned(false);
   }, [destAddr, sendMode]);
@@ -339,7 +335,18 @@ export function DirectSendTab({
                 <Wallet size={10} /> Destination
                 {isResolvingBio && <Loader2 size={10} className="animate-spin text-xmr-accent ml-1" />}
               </label>
-              {isBanned && <span className="text-xs text-xmr-error animate-pulse uppercase">Intercepted</span>}
+              <div className="flex items-center gap-2">
+                {isBanned && <span className="text-xs text-xmr-error animate-pulse uppercase">Intercepted</span>}
+                {contacts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowContacts(v => !v)}
+                    className="text-[10px] font-black uppercase tracking-widest text-xmr-accent hover:text-xmr-green transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    Contacts <ChevronDown size={10} className={`transition-transform ${showContacts ? 'rotate-180' : ''}`} />
+                  </button>
+                )}
+              </div>
             </div>
             <input
               type="text"
@@ -350,6 +357,43 @@ export function DirectSendTab({
                 isBanned ? 'border-xmr-error' : 'border-xmr-border'
               }`}
             />
+
+            {/* Contact picker — fill the destination from the address book.
+                Searchable so it scales to a large address book without a drawer. */}
+            {showContacts && contacts.length > 0 && (() => {
+              const q = contactSearch.trim().toLowerCase();
+              const filtered = q
+                ? contacts.filter(c => c.name.toLowerCase().includes(q) || c.address.toLowerCase().includes(q))
+                : contacts;
+              return (
+                <div className="mt-1 border border-xmr-border/40 bg-xmr-surface/50 animate-in fade-in slide-in-from-top-1">
+                  {contacts.length > 6 && (
+                    <input
+                      autoFocus
+                      value={contactSearch}
+                      onChange={(e) => setContactSearch(e.target.value)}
+                      placeholder="Search contacts…"
+                      className="w-full bg-xmr-base border-b border-xmr-border/40 px-3 py-2 text-[11px] text-xmr-green placeholder:text-xmr-dim/40 focus:outline-none"
+                    />
+                  )}
+                  <div className="max-h-44 overflow-y-auto divide-y divide-xmr-border/20">
+                    {filtered.length === 0 ? (
+                      <div className="px-3 py-3 text-[10px] text-xmr-dim/60 uppercase tracking-widest text-center">No matches</div>
+                    ) : filtered.map((c, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => { setDestAddr(c.address); setShowContacts(false); setContactSearch(''); }}
+                        className="w-full flex flex-col items-start px-3 py-2 hover:bg-xmr-green/10 transition-colors cursor-pointer text-left"
+                      >
+                        <span className="text-xs font-black text-xmr-green uppercase">{c.name}</span>
+                        <code className="text-[10px] opacity-40 truncate w-full">{c.address}</code>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* xmr.bio Profile Card */}
             {bioProfile && (
@@ -422,6 +466,18 @@ export function DirectSendTab({
               </div>
             </div>
 
+            {/* Live USD equivalent of the entered amount (same street price the fee uses) */}
+            {(() => {
+              const amt = parseFloat(sendAmount);
+              const streetPrice = parseFloat((stats?.price?.street || '0').replace(/[$,]/g, ''));
+              if (!isFinite(amt) || amt <= 0 || !streetPrice) return null;
+              return (
+                <div className="mt-1 text-[11px] text-xmr-dim font-mono">
+                  ≈ ${(amt * streetPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                </div>
+              );
+            })()}
+
             {/* Percentage Slider / Quick Select */}
             <div className="grid grid-cols-4 gap-1 mt-2">
               {[25, 50, 75, 100].map(pct => (
@@ -440,7 +496,7 @@ export function DirectSendTab({
                       }
                     }
                   }}
-                  className="py-1.5 bg-xmr-surface/50 border border-xmr-border/30 text-[9px] text-xmr-dim font-black uppercase hover:border-xmr-accent hover:text-xmr-accent transition-all cursor-pointer"
+                  className="py-1.5 bg-xmr-surface/50 border border-xmr-border/30 text-[9px] text-xmr-dim font-black uppercase hover:border-xmr-accent hover:text-xmr-accent transition-all cursor-pointer rounded-sm"
                 >
                   {pct}%
                 </button>

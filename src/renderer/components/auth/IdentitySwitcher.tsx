@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PlusCircle, Check, Trash2, ChevronDown, ChevronUp, Users } from 'lucide-react';
+import { PlusCircle, Trash2, ChevronDown, ChevronUp, Users } from 'lucide-react';
 
 interface Identity {
   id: string;
@@ -16,9 +16,6 @@ interface IdentitySwitcherProps {
 
 export function IdentitySwitcher({ identities, activeId, onSwitchIdentity, onStartNew, onPurge }: IdentitySwitcherProps) {
   const [showSwitcher, setShowSwitcher] = useState(false);
-
-  // Even with one identity, show "New Identity" button for expandability
-  const hasMultiple = identities.length > 1;
 
   return (
     <div className="mt-6 pt-4 border-t border-xmr-border/20">
@@ -73,13 +70,19 @@ export function IdentitySwitcher({ identities, activeId, onSwitchIdentity, onSta
                 </button>
 
                 {/* Delete button: includes confirmation logic */}
-                <button 
+                <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (confirm(`⚠️ PURGE IDENTITY: [${id.name}]?\nThis action will erase local keys for this profile.`)) {
-                      onPurge(id.id);
-                    }
+                    // Async Tauri dialog — window.confirm() isn't reliably
+                    // blocking in the webview, which would let a destructive
+                    // purge proceed without real confirmation.
+                    const { ask } = await import('@tauri-apps/plugin-dialog');
+                    const ok = await ask(
+                      `This will erase local keys for [${id.name}]. Continue?`,
+                      { title: "⚠️ PURGE IDENTITY", kind: "warning" }
+                    );
+                    if (ok) onPurge(id.id);
                   }}
                   className="px-2 border border-xmr-error/20 text-xmr-error/40 hover:border-xmr-error hover:text-xmr-error hover:bg-xmr-error/5 transition-all cursor-pointer"
                 >

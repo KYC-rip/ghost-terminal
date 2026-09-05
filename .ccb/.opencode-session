@@ -1,0 +1,17 @@
+{
+  "session_id": "ai-1774974071-50220",
+  "ccb_session_id": "ai-1774974071-50220",
+  "ccb_project_id": "4128fe703f94342b43d622a25ff345178bdee9d3d26466eaf9d2d49d8f70c897",
+  "runtime_dir": "/Users/anton/.cache/tmp/claude-ai-anton/ai-1774974071-50220/opencode",
+  "terminal": "tmux",
+  "tmux_session": null,
+  "pane_id": "%14",
+  "pane_title_marker": "CCB-OpenCode",
+  "work_dir": "/Users/anton/Projects/kyc-rip/packages/ripley-terminal",
+  "work_dir_norm": "/Users/anton/Projects/kyc-rip/packages/ripley-terminal",
+  "start_dir": "/Users/anton/Projects/kyc-rip/packages/ripley-terminal",
+  "active": false,
+  "started_at": "2026-04-01 00:21:12",
+  "start_cmd": "export CCB_MANAGED=1; export CCB_PARENT_PID=50220; export CCB_RUN_DIR=/Users/anton/.cache/ccb/projects/4128fe703f94342b; export CCB_CALLER=opencode; export PATH=/Users/anton/.local/share/codex-dual/bin:'/Users/anton/.bun/bin:/Users/anton/.opencode/bin:/Users/anton/.antigravity/antigravity/bin:/Users/anton/.antigravity/antigravity/bin:/Users/anton/.antigravity/antigravity/bin:/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/opt/python@3.12/bin:/Users/anton/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/anton/.nvm/versions/node/v23.8.0/bin:/Users/anton/.local/bin:/Users/anton/go/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Applications/Wireshark.app/Contents/MacOS:/usr/local/share/dotnet:~/.dotnet/tools:/usr/local/go/bin:/Library/Frameworks/Mono.framework/Versions/Current/Commands:/Users/anton/.bun/bin:/Users/anton/.opencode/bin:/Users/anton/.antigravity/antigravity/bin:/opt/homebrew/Caskroom/miniconda/base/bin:/opt/homebrew/Caskroom/miniconda/base/condabin:/opt/homebrew/opt/python@3.12/bin:/Users/anton/.codeium/windsurf/bin:/Users/anton/Library/pnpm:/Users/anton/.cargo/bin:/Applications/Ghostty.app/Contents/MacOS:/Users/anton/.orbstack/bin:/Applications/WezTerm.app/Contents/MacOS:/Users/anton/Library/Android/sdk/platform-tools:/Applications/极空间.app/Contents/Resources/app.asar.unpacked/bin/platform-tools:/Users/anton/Library/Android/sdk/platform-tools:/usr/local/go/bin:/Applications/极空间.app/Contents/Resources/app.asar.unpacked/bin/platform-tools:/Users/anton/.cargo/bin'; opencode",
+  "ended_at": "2026-04-01 00:21:42"
+}

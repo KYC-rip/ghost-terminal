@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-connect"
+description = "Enables the vpn_connect command without any pre-configured scope."
+commands.allow = ["vpn_connect"]
+
+[[permission]]
+identifier = "deny-vpn-connect"
+description = "Denies the vpn_connect command without any pre-configured scope."
+commands.deny = ["vpn_connect"]

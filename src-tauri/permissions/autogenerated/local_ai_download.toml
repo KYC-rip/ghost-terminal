@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-ai-download"
+description = "Enables the local_ai_download command without any pre-configured scope."
+commands.allow = ["local_ai_download"]
+
+[[permission]]
+identifier = "deny-local-ai-download"
+description = "Denies the local_ai_download command without any pre-configured scope."
+commands.deny = ["local_ai_download"]

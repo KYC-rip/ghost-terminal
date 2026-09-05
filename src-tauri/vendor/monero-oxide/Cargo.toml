@@ -1,0 +1,158 @@
+[workspace]
+resolver = "2"
+members = [
+  "monero-oxide/io",
+  "monero-oxide/ed25519",
+  "monero-oxide/primitives",
+  "monero-oxide/ringct/mlsag",
+  "monero-oxide/ringct/clsag",
+  "monero-oxide/ringct/borromean",
+  "monero-oxide/ringct/bulletproofs/generators",
+  "monero-oxide/ringct/bulletproofs",
+  "monero-oxide",
+
+  "monero-oxide/wallet/base58",
+  "monero-oxide/wallet/address",
+
+  "monero-oxide/epee",
+
+  "monero-oxide/interface",
+  "monero-oxide/interface/daemon",
+  "monero-oxide/interface/daemon/simple-request",
+
+  "monero-oxide/wallet",
+
+  "tests/no-std",
+  "tests/verify-chain",
+]
+
+# Always compile Monero (and a variety of dependencies) with optimizations
+[profile.dev.package]
+subtle = { opt-level = 3 }
+
+sha3 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+
+curve25519-dalek = { opt-level = 3 }
+
+ff = { opt-level = 3 }
+group = { opt-level = 3 }
+
+crypto-bigint = { opt-level = 3 }
+dalek-ff-group = { opt-level = 3 }
+
+multiexp = { opt-level = 3 }
+
+monero-io = { opt-level = 3 }
+monero-primitives = { opt-level = 3 }
+monero-ed25519 = { opt-level = 3 }
+monero-mlsag = { opt-level = 3 }
+monero-clsag = { opt-level = 3 }
+monero-borromean = { opt-level = 3 }
+monero-bulletproofs-generators = { opt-level = 3 }
+monero-bulletproofs = {opt-level = 3 }
+monero-oxide = { opt-level = 3 }
+
+[profile.dev]
+panic = "abort"
+overflow-checks = true
+[profile.release]
+panic = "abort"
+overflow-checks = true
+# These do not respect the `panic` configuration value, so we don't provide them
+[profile.test]
+# panic = "abort" # https://github.com/rust-lang/issues/67650
+overflow-checks = true
+[profile.bench]
+overflow-checks = true
+
+[workspace.lints.rust]
+# https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html
+ambiguous_negative_literals = "warn"
+closure_returning_async_block = "warn"
+deprecated_safe = "warn"
+deref_into_dyn_supertrait = "warn"
+explicit_outlives_requirements = "warn"
+impl_trait_redundant_captures = "warn"
+macro_use_extern_crate = "warn"
+meta_variable_misuse = "warn"
+missing_docs = "warn"
+non_ascii_idents = "warn"
+redundant_lifetimes = "warn"
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+unit_bindings = "warn"
+unsafe_attr_outside_unsafe = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+
+[workspace.lints.clippy]
+# Manually verified with a GitHub workflow
+incompatible_msrv = "allow"
+# `x % 2` is simple and straightforward
+manual_is_multiple_of = "allow"
+# `.unwrap_or(x)` unwraps to `x`. This lint then errors if `x == Default::default()`
+# Wanting to unwrap to `x` does not mean the caller wants to unwrap to `Default::default()`.
+# While this asserts the current value of `Default::default()`, it doesn't guarantee that value
+# will remain the default moving forward, which risks the unwrapped value changing unexpectedly.
+unwrap_or_default = "allow"
+# `.map(f).unwrap_or(x)` is clearer than `.map_or(x, f)`.
+map_unwrap_or = "allow"
+# Explicit `continue`s can increase readability.
+needless_continue = "allow"
+
+# Enable the off-by-default lint categories, before disabling those we don't want
+pedantic = { level = "warn", priority = -1 }
+explicit_deref_methods = "allow"
+if_not_else = "allow"
+inline_always = "allow"
+items_after_statements = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+naive_bytecount = "allow" # We don't want a suggestion to add an external dependency
+similar_names = "allow"
+# This triggers on the exhaustive `match opt { Some => {}, None => {} }`, which is excessive
+single_match_else = "allow"
+too_many_lines = "allow"
+wildcard_imports = "allow"
+
+style = { level = "warn", priority = -1 }
+items_after_test_module = "allow"
+
+# Cherry-pick lints from the `restrictions` group
+alloc_instead_of_core = "warn"
+as_conversions = "warn" # Checked conversions are preferred.
+as_pointer_underscore = "warn"
+as_underscore = "warn"
+assertions_on_result_states = "warn"
+cfg_not_test = "warn"
+create_dir = "warn"
+dbg_macro = "warn"
+filetype_is_file = "warn"
+float_arithmetic = "warn"
+float_cmp_const = "warn"
+fn_to_numeric_cast_any = "warn"
+get_unwrap = "warn"
+if_then_some_else_none = "warn"
+iter_over_hash_type = "warn"
+lossy_float_literal = "warn"
+partial_pub_fields = "warn"
+precedence_bits = "warn"
+rc_mutex = "warn"
+same_name_method = "warn"
+std_instead_of_alloc = "warn"
+std_instead_of_core = "warn"
+str_to_string = "warn"
+string_slice = "warn"
+suspicious_xor_used_as_pow = "warn"
+todo = "warn"
+unnecessary_self_imports = "warn"
+unused_trait_names = "warn"
+wildcard_enum_match_arm = "warn"
+
+# The following lints are marked as "TODO". We do not believe they should be
+# set to their current setting. They are for now however.
+doc_markdown = "allow" # Raises a shocking amount of warnings against the current codebase.

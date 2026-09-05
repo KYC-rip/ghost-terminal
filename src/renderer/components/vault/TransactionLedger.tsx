@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronUp, Copy, ExternalLink, Info, Loader2, Key, ShieldCheck, Fingerprint, CheckCircle, ShieldAlert, Zap, Ghost } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, Info, Loader2, Key, ShieldCheck, Fingerprint, CheckCircle, ShieldAlert, Zap } from 'lucide-react';
 import { Card } from '../Card';
 import { TableHeader } from './TableHeader';
 import { AddressDisplay } from '../common/AddressDisplay';
 import { SubaddressInfo, useVault } from '../../contexts/VaultContext';
-import { RpcClient } from '../../services/rpcClient';
 import { useStats } from '../../hooks/useStats';
 
 interface Transaction {
@@ -98,7 +97,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
   useEffect(() => {
     const fetchGhostTrades = async () => {
       try {
-        const result = await (window as any).api.getGhostTrades();
+        const result = await window.api.getGhostTrades();
         if (result.success) {
           setGhostTrades(result.trades || {});
         }
@@ -108,7 +107,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
     };
     const fetchXmr402Payments = async () => {
       try {
-        const result = await (window as any).api.getAllXmr402Payments();
+        const result = await window.api.getAllXmr402Payments();
         if (result.success) {
           setXmr402Payments(result.payments || {});
         }
@@ -203,7 +202,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
   };
 
   return (
-    <Card noPadding className="h-[430px] flex flex-col overflow-hidden">
+    <Card noPadding className="h-[400px] flex flex-col overflow-hidden">
       <TableHeader>
         <div className="flex items-center gap-2">
           <span>Transaction_History</span>
@@ -246,7 +245,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                     value={verifyTxId}
                     onChange={e => setVerifyTxId(e.target.value.trim())}
                     placeholder="Enter 64-char hash..."
-                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
+                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
                   />
                 </div>
 
@@ -257,7 +256,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                     value={verifyAddress}
                     onChange={e => setVerifyAddress(e.target.value.trim())}
                     placeholder="Enter recipient's public address..."
-                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
+                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
                   />
                 </div>
 
@@ -268,7 +267,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                     value={verifyKeyOrProof}
                     onChange={e => setVerifyKeyOrProof(e.target.value.trim())}
                     placeholder="Paste txKey or Proof signature here..."
-                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors resize-none"
+                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors resize-none"
                   />
                 </div>
 
@@ -280,7 +279,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                       value={verifyMessage}
                       onChange={e => setVerifyMessage(e.target.value)}
                       placeholder="e.g. For Order #123"
-                      className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] focus:border-xmr-green/50 outline-none transition-colors"
+                      className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] focus:border-xmr-green/50 outline-none transition-colors"
                     />
                   </div>
                   <div className="flex items-end">
@@ -420,7 +419,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                     const callbackUrl = new URL(decodeURIComponent(xmr402Info.returnUrl));
                                     callbackUrl.searchParams.set('xmr402_txid', tx.id);
                                     if (xmr402Info.proof) callbackUrl.searchParams.set('xmr402_proof', xmr402Info.proof);
-                                    (window as any).api.openExternal(callbackUrl.toString());
+                                    window.api.openExternal(callbackUrl.toString());
                                   }}
                                   className="shrink-0 ml-4 px-3 py-1.5 bg-xmr-warning hover:opacity-90 text-xmr-base text-[10px] font-black uppercase tracking-wider rounded-sm transition-colors cursor-pointer flex items-center gap-1 shadow-[0_0_10px_var(--warning-color)]"
                                 >
@@ -440,7 +439,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                     e.stopPropagation();
                                     const tradeId = ghostTrades[tx.id].tradeId;
                                     const url = `https://kyc.rip/swap?id=${tradeId}`;
-                                    (window as any).api.openExternal(url, { width: 940, height: 820 });
+                                    window.api.openExternal(url, { width: 940, height: 820 });
                                   }}
                                   className="text-[10px] text-xmr-accent hover:text-xmr-green underline uppercase tracking-tighter flex items-center gap-1 cursor-pointer"
                                 >
@@ -536,16 +535,11 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                       </button>
                                     </div>
                                   </div>
-                                ) : (
+                                ) : (tx.destinations?.[0]?.address || tx.address) ? (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      const targetAddress = tx.destinations?.[0]?.address || tx.address;
-                                      if (targetAddress) {
-                                        generateProof(tx.id, targetAddress);
-                                      } else {
-                                        addLog("Recipient address missing for proof generation", "error");
-                                      }
+                                      generateProof(tx.id, (tx.destinations?.[0]?.address || tx.address) as string);
                                     }}
                                     disabled={isLoadingDetails[tx.id]}
                                     className="w-full py-2 bg-xmr-green/5 border border-xmr-green/20 text-xmr-green text-[10px] uppercase font-black tracking-widest hover:bg-xmr-green/20 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
@@ -562,6 +556,15 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                                       </>
                                     )}
                                   </button>
+                                ) : (
+                                  // No stored recipient + no tx key → this was made from another device.
+                                  // An OutProof (get_tx_proof) needs both, so it's impossible here.
+                                  <div className="text-[10px] text-xmr-dim/70 leading-relaxed bg-xmr-surface border border-xmr-border/20 rounded-sm p-2.5">
+                                    Payment proof isn't available for this transaction — it was made from
+                                    another device, so this wallet holds neither the recipient address nor
+                                    the transaction key needed to prove it. Proofs work for sends you make
+                                    from this wallet.
+                                  </div>
                                 )}
                               </div>
                             </div>

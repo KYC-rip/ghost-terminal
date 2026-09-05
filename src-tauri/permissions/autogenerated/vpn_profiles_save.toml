@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-profiles-save"
+description = "Enables the vpn_profiles_save command without any pre-configured scope."
+commands.allow = ["vpn_profiles_save"]
+
+[[permission]]
+identifier = "deny-vpn-profiles-save"
+description = "Denies the vpn_profiles_save command without any pre-configured scope."
+commands.deny = ["vpn_profiles_save"]

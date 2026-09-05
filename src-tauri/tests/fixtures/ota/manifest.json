@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "version": "2.0.0",
+  "minBackend": "2.0.0",
+  "url": "https://ros.rip/ota/ros-2.0.0.tar.zst",
+  "sha256": "580b172eaa66d2977dbd35842efb785614013cbb864828c4a13def31ca4eadea",
+  "size": 795,
+  "released": "2026-07-08T20:29:45Z"
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clipboard-write-image"
+description = "Enables the clipboard_write_image command without any pre-configured scope."
+commands.allow = ["clipboard_write_image"]
+
+[[permission]]
+identifier = "deny-clipboard-write-image"
+description = "Denies the clipboard_write_image command without any pre-configured scope."
+commands.deny = ["clipboard_write_image"]

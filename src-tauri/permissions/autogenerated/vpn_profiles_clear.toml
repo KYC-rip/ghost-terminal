@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-profiles-clear"
+description = "Enables the vpn_profiles_clear command without any pre-configured scope."
+commands.allow = ["vpn_profiles_clear"]
+
+[[permission]]
+identifier = "deny-vpn-profiles-clear"
+description = "Denies the vpn_profiles_clear command without any pre-configured scope."
+commands.deny = ["vpn_profiles_clear"]

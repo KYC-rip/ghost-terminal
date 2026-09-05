@@ -1,0 +1,35 @@
+[package]
+name = "monero-ed25519"
+version = "0.1.0"
+description = "Ed25519 functionality, as within the Monero protocol"
+license = "MIT"
+repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/ed25519"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
+edition = "2021"
+rust-version = "1.68"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+
+subtle = { version = "^2.4", default-features = false }
+zeroize = { version = "^1.5", default-features = false, features = ["zeroize_derive", "alloc"] }
+
+rand_core = { version = "0.6", default-features = false }
+
+sha3 = { version = "0.10", default-features = false }
+
+crypto-bigint = { version = "0.5", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
+monero-io = { path = "../io", version = "0.1", default-features = false }
+
+[features]
+std = ["std-shims/std", "monero-io/std", "rand_core/std"]
+default = ["std"]

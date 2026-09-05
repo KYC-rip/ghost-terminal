@@ -55,7 +55,7 @@ const store = new Store({
     include_prereleases: false,
     agent_config: {
       enabled: false,
-      apiKey: 'RG-' + Math.random().toString(36).substring(2, 15).toUpperCase(),
+      apiKey: 'RG-' + crypto.randomUUID().replace(/-/g, '').substring(0, 13).toUpperCase(),
       dailyLimit: '0.1',
       totalLimit: '1.0',
       port: 38084,
@@ -250,28 +250,31 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-uplink-status', () => currentEngineState);
   ipcMain.handle('retry-engine', () => reloadEngine(true));
 
+  const skinBgPath = join(app.getPath('userData'), 'skin_bg.b64');
+
+  const persistSkinBackground = (configToSave: any) => {
+    if (!('skin_background' in configToSave)) return;
+    const fs = require('fs');
+    if (configToSave.skin_background) {
+      fs.writeFileSync(skinBgPath, configToSave.skin_background, 'utf8');
+    } else if (fs.existsSync(skinBgPath)) {
+      fs.unlinkSync(skinBgPath);
+    }
+    delete configToSave.skin_background;
+  };
+
   ipcMain.handle('get-config', () => {
     const config = { ...store.store } as any;
     const fs = require('fs');
-    const skinPath = join(app.getPath('userData'), 'skin_bg.b64');
-    if (fs.existsSync(skinPath)) {
-      try { config.skin_background = fs.readFileSync(skinPath, 'utf8'); } catch (e) { }
+    if (fs.existsSync(skinBgPath)) {
+      try { config.skin_background = fs.readFileSync(skinBgPath, 'utf8'); } catch (e) { }
     }
     return config;
   });
 
   ipcMain.handle('save-config-and-reload', async (_, newConfig: AppConfig) => {
     const configToSave = { ...newConfig } as any;
-    if ('skin_background' in configToSave) {
-      const fs = require('fs');
-      const skinPath = join(app.getPath('userData'), 'skin_bg.b64');
-      if (configToSave.skin_background) {
-        fs.writeFileSync(skinPath, configToSave.skin_background, 'utf8');
-      } else if (fs.existsSync(skinPath)) {
-        fs.unlinkSync(skinPath);
-      }
-      delete configToSave.skin_background;
-    }
+    persistSkinBackground(configToSave);
     store.set(configToSave);
     try {
       await reloadEngine();
@@ -283,16 +286,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('save-config-only', (_, newConfig: AppConfig) => {
     const configToSave = { ...newConfig } as any;
-    if ('skin_background' in configToSave) {
-      const fs = require('fs');
-      const skinPath = join(app.getPath('userData'), 'skin_bg.b64');
-      if (configToSave.skin_background) {
-        fs.writeFileSync(skinPath, configToSave.skin_background, 'utf8');
-      } else if (fs.existsSync(skinPath)) {
-        fs.unlinkSync(skinPath);
-      }
-      delete configToSave.skin_background;
-    }
+    persistSkinBackground(configToSave);
     store.set(configToSave);
     console.log('[Config] Logical settings updated (Scanlines/LockTime).');
     return { success: true };
@@ -667,7 +661,29 @@ app.whenReady().then(async () => {
     }
   });
 
-  if (app.isPackaged) {
+  // ── RipleyOS platform bridge ── general no-CORS HTTP for a hosted ROS renderer.
+  // ROS's platform/native.ts calls window.__rosNative.fetch(); we fulfil it with
+  // Electron's net.fetch (bypasses CORS → ROS can drop its api.kyc.rip proxies).
+  // Tor routing of arbitrary HTTP is a follow-up; Monero RPC already runs over Tor.
+  ipcMain.handle('ros:native-fetch', async (_e, req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) => {
+    try {
+      const res = await net.fetch(req.url, { method: req.method || 'GET', headers: req.headers, body: req.body });
+      const headers: Record<string, string> = {};
+      res.headers.forEach((v, k) => { headers[k] = v; });
+      return { ok: res.ok, status: res.status, headers, body: await res.text() };
+    } catch (e: any) {
+      return { ok: false, status: 502, headers: {}, body: String(e?.message || e) };
+    }
+  });
+
+  // Opt-in: host RipleyOS instead of the wallet renderer — the vision where ROS
+  // becomes the desktop and this wallet becomes a ROS app. Set ROS_URL to the ros
+  // dev server (http://localhost:5174) or a built/hosted ROS URL. Default behavior
+  // (the wallet renderer) is unchanged.
+  const rosUrl = process.env['ROS_URL'];
+  if (rosUrl) {
+    mainWindow.loadURL(rosUrl);
+  } else if (app.isPackaged) {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
   } else {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173');

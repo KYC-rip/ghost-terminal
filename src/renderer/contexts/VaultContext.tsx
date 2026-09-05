@@ -24,6 +24,7 @@ export interface VaultContextType {
   currentHeight: number;
   totalHeight: number;
   syncPercent: number;
+  nodeLabel: string;
   requestedAction: string | null;
   setRequestedAction: (action: string | null) => void;
   isAppLoading: boolean;
@@ -96,6 +97,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<string>('READY');
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [syncPercent, setSyncPercent] = useState(0);
+  const [nodeLabel, setNodeLabel] = useState('');
   const [isAppLoading, setIsAppLoading] = useState(true);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isLocked, setIsLocked] = useState(true);
@@ -216,6 +218,10 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     console.log("🔌 Initializing Core Log Listener...");
     if (window.api.onCoreLog) {
       const cleanup = window.api.onCoreLog((data) => {
+        // SYNC_DATA / TOR_STATUS are machine channels piggybacked on core-log
+        // (consumed by onWalletEvent / onTorStatus). Don't show them as logs.
+        if (data.source === 'SYNC_DATA' || data.source === 'TOR_STATUS') return;
+
         // Backend data usually looks like { source: 'TOR', level: 'info', message: '...' }
         const typeMap: Record<string, string> = {
           'info': 'info',
@@ -254,6 +260,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
           const { status: s, percent: p } = determineSyncStatus(newHeight, daemonHeightRef.current);
           setStatus(s);
           setSyncPercent(p);
+          // Track connected node name (Tauri scanner reports it in the event payload)
+          if (event.payload.nodeLabel) setNodeLabel(event.payload.nodeLabel);
         }
         if (event.type === 'BALANCE_CHANGED' && event.payload?.balance !== undefined) {
           // During sync, just update balance inline instead of triggering a full
@@ -477,7 +485,12 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setOutputs([]);
     setStatus('READY');
 
-    // 3. ⏳ Signal Soft Lock to backend (keeps RPC alive but acknowledges lock)
+    // 3. ⏳ Soft-lock the backend. On Tauri this ALWAYS runs (unlike Electron
+    // which skips the close for an armed EJECT) — the Rust soft-lock is the
+    // single source of truth: state.lock() zeroes the spend key UNLESS the
+    // vigil_hot flag is set (an armed EJECT, mirrored via set_vigil_hot), in
+    // which case it keeps the spend key resident so the order dispatches
+    // unattended. The view key + scanner always stay alive for background sync.
     window.api.walletAction('close', {}).catch(() => { });
 
   }, [addLog]);
@@ -698,7 +711,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
   const value = React.useMemo(() => ({
     accounts, selectedAccountIndex,
-    balance, address, subaddresses, status, logs, txs, currentHeight, totalHeight, syncPercent,
+    balance, address, subaddresses, status, logs, txs, currentHeight, totalHeight, syncPercent, nodeLabel,
     isAppLoading, isInitializing, isLocked, isSending, hasVaultFile, identities, activeId, isStagenet,
     unlock, lock, purgeIdentity, sendXmr, refresh, createSubaddress, renameIdentity, outputs, setSelectedAccountIndex, addLog,
     rescan, renameAccount, churn, splinter, vanishCoin, vanishSubaddress, setSubaddressLabel, switchIdentity,
@@ -709,7 +722,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     monero402Challenge, clearMonero402Challenge
   }), [
     accounts, selectedAccountIndex, balance, address, subaddresses, status, logs, txs,
-    currentHeight, totalHeight, syncPercent, isAppLoading, isInitializing, isLocked,
+    currentHeight, totalHeight, syncPercent, nodeLabel, isAppLoading, isInitializing, isLocked,
     isSending, hasVaultFile, identities, activeId, isStagenet, outputs,
     unlock, lock, purgeIdentity, sendXmr, refresh, createSubaddress, renameIdentity, setSelectedAccountIndex, addLog,
     rescan, renameAccount, churn, splinter, vanishCoin, vanishSubaddress, setSubaddressLabel, switchIdentity,

@@ -154,7 +154,7 @@ export function ReceiveModal({ onClose, existingAddress, inline }: ReceiveModalP
                 <AddressBlock
                   qrValue={`monero:${generatedAddress}`}
                   qrSize={180}
-                  imgSrc="https://cryptologos.cc/logos/monero-xmr-logo.png"
+                  imgSrc="/monero-xmr-logo.png"
                   imgSize={40}
                   copyText={generatedAddress}
                   copied={directCopied}
@@ -180,7 +180,7 @@ export function ReceiveModal({ onClose, existingAddress, inline }: ReceiveModalP
                   <AddressBlock
                     qrValue={ccLink || 'https://kyc.rip'}
                     qrSize={180}
-                    imgSrc="https://cryptologos.cc/logos/monero-xmr-logo.png"
+                    imgSrc="/monero-xmr-logo.png"
                     imgSize={40}
                     copyText={ccLink || 'Generating link...'}
                     copied={ccCopied}

@@ -23,7 +23,7 @@ export interface SubaddressEntry {
 export async function getOrCreateSubaddress(
   prefix: string,
   list: SubaddressEntry[],
-  createFn: (label: string) => Promise<string | null>,
+  createFn: (label?: string) => Promise<string | null | undefined>,
 ): Promise<string | null> {
   // Look for an existing subaddress with this prefix that has zero balance
   const unused = list.find(
@@ -37,5 +37,5 @@ export async function getOrCreateSubaddress(
 
   // All prefixed subaddresses have been used — create a fresh one
   const label = `${prefix}_${new Date().toISOString().replace('T', '_').slice(0, 19)}`;
-  return createFn(label);
+  return createFn(label).then(addr => addr ?? null);
 }

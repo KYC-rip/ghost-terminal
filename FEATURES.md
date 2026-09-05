@@ -57,7 +57,7 @@ This file tracks the tactical capabilities of the Ripley Terminal.
 - [x] **Dynamic Send Controls**: Real-time unlocked balance display, "Sweep All" integration, and percentage-based quick-select (25%, 50%, 75%, 100%) for high-speed dispatching.
 
 ## 📦 Deployment & Execution
-- [x] **Automated Packaging**: Cross-platform Electron build system (macOS `.dmg`, Windows `.exe`, Linux `.AppImage`).
+- [x] **Automated Packaging**: Cross-platform Tauri 2 build system (macOS `.dmg`/`.app`, Windows `.msi`/`.exe`, Linux `.deb`/`.AppImage`).
 - [x] **Secure Subtree CI/CD**: Custom deployment scripts that scrub the Git history for anonymity and push to a clean, public-facing repository natively.
 - [x] **Update Intelligence**: Automated update discovery with support for optional pre-release builds and graceful error handling.
 

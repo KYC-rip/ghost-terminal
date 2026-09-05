@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-detect-legacy-wallets"
+description = "Enables the detect_legacy_wallets command without any pre-configured scope."
+commands.allow = ["detect_legacy_wallets"]
+
+[[permission]]
+identifier = "deny-detect-legacy-wallets"
+description = "Denies the detect_legacy_wallets command without any pre-configured scope."
+commands.deny = ["detect_legacy_wallets"]

@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "vpn-control",
+  "description": "Dedicated local-only host VPN control window. Never loads ROS/remote content. It gets the structured broker client and no filesystem, shell, wallet, keychain, or generic network commands.",
+  "local": true,
+  "windows": ["vpn-control"],
+  "permissions": [
+    "allow-vpn-status",
+    "allow-vpn-probe-endpoints",
+    "allow-vpn-probe-exit-ip",
+    "allow-vpn-connect",
+    "allow-vpn-disconnect",
+    "allow-vpn-set-killswitch",
+    "allow-vpn-set-dns-filter",
+    "allow-vpn-cache-endpoints",
+    "allow-vpn-recover",
+    "allow-vpn-emergency-restore",
+    "allow-vpn-profiles-load",
+    "allow-vpn-profiles-save",
+    "allow-vpn-profiles-clear",
+    "allow-vpn-set-locale"
+  ]
+}

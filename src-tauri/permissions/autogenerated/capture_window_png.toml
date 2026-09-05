@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-window-png"
+description = "Enables the capture_window_png command without any pre-configured scope."
+commands.allow = ["capture_window_png"]
+
+[[permission]]
+identifier = "deny-capture-window-png"
+description = "Denies the capture_window_png command without any pre-configured scope."
+commands.deny = ["capture_window_png"]

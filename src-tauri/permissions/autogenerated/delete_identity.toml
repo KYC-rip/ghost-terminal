@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-identity"
+description = "Enables the delete_identity command without any pre-configured scope."
+commands.allow = ["delete_identity"]
+
+[[permission]]
+identifier = "deny-delete-identity"
+description = "Denies the delete_identity command without any pre-configured scope."
+commands.deny = ["delete_identity"]

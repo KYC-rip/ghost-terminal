@@ -43,9 +43,10 @@ export function useAddressValidator(ticker: string, network: string, address: st
           address: address.trim()
         });
 
-        const response = await fetch(`https://api.kyc.rip/v1/market/validate?${query.toString()}`);
-        if (!response.ok) throw new Error("Validation service error");
-        const res = await response.json();
+        // Routed through the uplink so the address being validated isn't sent to a
+        // clearnet server (revealing who you're paying) while on Tor.
+        const body = await window.api.proxiedGet(`https://api.kyc.rip/v1/market/validate?${query.toString()}`);
+        const res = JSON.parse(body);
         
         if (res.error) {
            setError("Validation service unavailable");

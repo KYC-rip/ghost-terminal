@@ -15,6 +15,8 @@ export interface AppConfig {
   };
   hide_zero_balances?: boolean;
   include_prereleases?: boolean;
+  sync_all_wallets?: boolean;
+  fast_sync?: boolean;
   agent_config?: {
     enabled: boolean;
     apiKey: string;
@@ -56,6 +58,30 @@ export interface WalletActionResponse {
 }
 
 export interface IApi {
+  // --- VPN (native host only; absent in the legacy Electron shell) ---
+  vpnStatus?: () => Promise<Record<string, unknown>>;
+  vpnProbeEndpoints?: (endpoints: string[]) => Promise<Array<number | null>>;
+  vpnProbeExitIp?: () => Promise<{ ip: string; source?: string }>;
+  vpnConnect?: (configText: string, profileName?: string) => Promise<Record<string, unknown>>;
+  vpnDisconnect?: (restore: boolean) => Promise<Record<string, unknown>>;
+  vpnSetKillswitch?: (on: boolean) => Promise<Record<string, unknown>>;
+  vpnRecover?: () => Promise<Record<string, unknown>>;
+  vpnSetDnsFilter?: (on: boolean) => Promise<Record<string, unknown>>;
+  vpnCacheEndpoints?: (configs: string[]) => Promise<Record<string, unknown>>;
+  vpnEmergencyRestore?: () => Promise<Record<string, unknown>>;
+  vpnProfilesLoad?: () => Promise<{
+    v: 1;
+    selectedProfileId: string | null;
+    profiles: import('./vpnProfiles').VpnProfile[];
+  } | null>;
+  vpnProfilesSave?: (store: {
+    v: 1;
+    selectedProfileId: string | null;
+    profiles: import('./vpnProfiles').VpnProfile[];
+  }) => Promise<void>;
+  vpnProfilesClear?: () => Promise<void>;
+  onVpnOpen?: (callback: () => void) => () => void;
+
   // --- Config & Settings ---
   getConfig: () => Promise<AppConfig>;
   saveConfigAndReload: (config: AppConfig) => Promise<{ success: boolean; error?: string }>;
@@ -63,6 +89,8 @@ export interface IApi {
 
   // --- Identity & Vault Management ---
   getIdentities: () => Promise<VaultIdentity[]>;
+  detectLegacyWallets: () => Promise<{ id: string; name: string; est_restore_height: number }[]>;
+  proxiedGet: (url: string) => Promise<string>;
   saveIdentities: (identities: VaultIdentity[]) => Promise<boolean>;
   getActiveIdentity: () => Promise<string>;
   setActiveIdentity: (id: string) => Promise<boolean>;
@@ -79,6 +107,7 @@ export interface IApi {
   // --- Event Listeners (Main -> Renderer) ---
   onEngineStatus: (callback: (status: EngineStatus) => void) => () => void;
   onCoreLog: (callback: (log: { source: string; level: 'info' | 'error'; message: string }) => void) => () => void;
+  onTorStatus: (callback: (status: { status: 'bootstrapping' | 'connected' | 'error'; percent: number; message: string }) => void) => () => void;
   onWalletEvent: (callback: (event: { type: 'SYNC_UPDATE' | 'BALANCE_CHANGED'; payload: any }) => void) => () => void;
   onVaultShutdown: (callback: () => void) => () => void;
   onDeepLink: (callback: (url: string) => void) => () => void;
@@ -88,15 +117,30 @@ export interface IApi {
 
   // --- Proxy RPC ---
   proxyRequest: (payload: { method: string; params: any }) => Promise<{ success: boolean; result?: any; error?: string }>;
+  fetchPriceHistory: (pair: string) => Promise<{ success: boolean; points?: { time: number; value: number }[]; error?: string }>;
+
+  verifyPassword: (identityId: string, password: string) => Promise<boolean>;
+
+  // --- Vigil strike wallet + session persistence ---
+  vigilSaveStrikeKey: (identityId: string, blob: { v: number; salt: string; iv: string; ct: string }) => Promise<{ success: boolean; error?: string }>;
+  vigilGetStrikeKey: (identityId: string) => Promise<{ v: number; salt: string; iv: string; ct: string } | null>;
+  vigilDeleteStrikeKey: (identityId: string) => Promise<{ success: boolean; error?: string }>;
+  vigilArchiveStrikeKey: (identityId: string) => Promise<{ success: boolean; error?: string }>;
+  vigilSaveSession: (identityId: string, session: object) => Promise<{ success: boolean; error?: string }>;
+  vigilGetSession: (identityId: string) => Promise<Record<string, any> | null>;
+  vigilClearSession: (identityId: string) => Promise<{ success: boolean; error?: string }>;
+
+  // --- Network ---
+  reselectNode: () => Promise<void>;
 
   // --- App Info & Updates ---
   getAppInfo: () => Promise<{ version: string; appDataPath: string; walletsPath: string; platform: NodeJS.Platform; isPackaged: boolean }>;
   openPath: (targetPath: string) => Promise<{ success: boolean; error?: string }>;
-  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+  openExternal: (url: string, options?: { width?: number; height?: number }) => Promise<{ success: boolean; error?: string }>;
   checkForUpdates: (include_prereleases: boolean) => Promise<{ success: boolean; hasUpdate?: boolean; latestVersion?: string; releaseUrl?: string; body?: string; publishedAt?: string; error?: string }>;
   selectBackgroundImage: () => Promise<{ success: boolean; data?: string; error?: string }>;
   saveGhostTrade: (txHash: string, tradeId: string) => Promise<{ success: boolean; error?: string }>;
-  getGhostTrades: () => Promise<{ success: boolean; trades: any[]; error?: string }>;
+  getGhostTrades: () => Promise<{ success: boolean; trades: Record<string, { tradeId: string; timestamp: number }>; error?: string }>;
 
   // XMR402 Payment Cache
   saveXmr402Payment: (nonce: string, txid: string, proof: string, amount: string, returnUrl?: string) => Promise<{ success: boolean; error?: string }>;

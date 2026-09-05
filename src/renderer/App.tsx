@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, Crosshair, ArrowDown } from 'lucide-react';
+import { Shield, Ghost, Lock, Settings, Sun, Moon, Monitor, Terminal as TerminalIcon, ChevronUp, ChevronDown, ChevronRight, X, RefreshCw, Download, Zap, Bot, ArrowDown, Maximize2, Minimize2, Copy, Check, Clock, Search, Network } from 'lucide-react';
 import { useVault } from './hooks/useVault';
 import { useStats } from './hooks/useStats';
 import { useTheme } from './hooks/useTheme';
@@ -11,9 +11,62 @@ import { AuthView } from './components/AuthView';
 import { AddressDisplay } from './components/common/AddressDisplay';
 import { AgentTab } from './components/vault/AgentTab';
 import { ExchangeView } from './components/ExchangeView';
-import { VigilView } from './components/VigilView';
+import { VpnView } from './components/VpnView';
 import { XMR402Modal } from './components/common/XMR402Modal';
 import { VaultProvider } from './contexts/VaultContext';
+
+type ViewId = 'home' | 'vault' | 'settings' | 'agent' | 'exchange' | 'vpn';
+
+interface NavButtonProps {
+  id: ViewId;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  badge?: string | null;
+  activeView: string;
+  onNavigate: (id: ViewId) => void;
+}
+
+const NavButton = ({ id, label, icon: Icon, badge, activeView, onNavigate }: NavButtonProps) => (
+  <button
+    onClick={() => onNavigate(id)}
+    className={`w-full flex items-center justify-between px-5 py-3 border-l-2 transition-all cursor-pointer group ${activeView === id ? 'bg-xmr-green/5 border-xmr-green text-xmr-green' : 'border-transparent text-xmr-dim hover:text-xmr-green hover:bg-xmr-green/5'}`}
+  >
+    <div className="flex items-center gap-3">
+      <Icon size={16} className={activeView === id ? 'drop-shadow-[0_0_8px_rgba(0,255,65,0.5)]' : 'opacity-50 group-hover:opacity-100'} />
+      <span className="text-[11px] font-black uppercase tracking-[0.15em]">{label}</span>
+    </div>
+    {badge && (
+      <span className="text-[9px] font-black bg-xmr-green/10 px-1.5 py-0.5 rounded-sm border border-xmr-green/20 animate-pulse">
+        {badge}
+      </span>
+    )}
+  </button>
+);
+
+interface NavGroupProps {
+  label: string;
+  groupKey: string;
+  expanded: boolean;
+  onToggle: (g: string) => void;
+  children: React.ReactNode;
+}
+
+const NavGroup = ({ label, groupKey, expanded, onToggle, children }: NavGroupProps) => {
+  const childArray = React.Children.toArray(children).filter(Boolean);
+  if (childArray.length === 1) return <>{childArray[0]}</>;
+  return (
+    <div>
+      <button
+        onClick={() => onToggle(groupKey)}
+        className="w-full flex items-center gap-2 px-5 py-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-xmr-dim/60 hover:text-xmr-dim transition-colors cursor-pointer"
+      >
+        <ChevronRight size={10} className={`transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+        {label}
+      </button>
+      {expanded && children}
+    </div>
+  );
+};
 
 const SkinOverlay = ({ config }: { config: any }) => {
   if (!config?.skin_background) return null;
@@ -32,8 +85,12 @@ const SkinOverlay = ({ config }: { config: any }) => {
 };
 
 function MainApp() {
-  const [view, setView] = useState<'home' | 'vault' | 'settings' | 'agent' | 'exchange' | 'vigil'>('home');
+  const [view, setView] = useState<ViewId>('home');
   const [showConsole, setShowConsole] = useState(false);
+  const [consoleMaximized, setConsoleMaximized] = useState(false);
+  const [consoleCopied, setConsoleCopied] = useState(false);
+  const [consoleTimestamps, setConsoleTimestamps] = useState(true);
+  const [consoleFilter, setConsoleFilter] = useState('');
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
   const [appVersion, setAppVersion] = useState('1.0');
@@ -52,19 +109,73 @@ function MainApp() {
     hasVaultFile, identities, activeId, switchIdentity
   } = vault;
 
+  const fmtLogTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.toLocaleTimeString([], { hour12: false })}.${String(ts % 1000).padStart(3, '0')}`;
+  };
+
+  const copyConsoleLogs = useCallback(async () => {
+    const q = consoleFilter.trim().toLowerCase();
+    const text = logs
+      .filter((l: any) => !q || String(l.msg).toLowerCase().includes(q))
+      .map((l: any) => (consoleTimestamps ? `[${fmtLogTime(l.timestamp)}] ${l.msg}` : l.msg))
+      .join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for webviews without async clipboard access
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+    setConsoleCopied(true);
+    setTimeout(() => setConsoleCopied(false), 1500);
+  }, [logs, consoleTimestamps, consoleFilter]);
+
   const { stats, loading: statsLoading } = useStats();
   const { mode, cycleTheme, resolvedTheme, skin, skinLabel, cycleSkin, contrast, toggleContrast } = useTheme();
 
   const activeIdentity = identities.find(i => i.id === activeId);
 
-  const [showScanlines, setShowScanlines] = useState(resolvedTheme === 'dark');
   const [autoLockMinutes, setAutoLockMinutes] = useState(0);
+
   const [uplink, setUplink] = useState<string>('SCANNING...');
   const [uplinkUrl, setUplinkUrl] = useState<string>('');
   const [sessionStartTime] = useState(Date.now());
   const [uptime, setUptime] = useState('00:00:00');
 
   const [updateBanner, setUpdateBanner] = useState<{ show: boolean; version: string; url: string } | null>(null);
+
+  // Tor bootstrap progress (Phase 3B). Updated from the TOR_STATUS channel.
+  const [torStatus, setTorStatus] = useState<{ status: string; percent: number } | null>(null);
+  useEffect(() => {
+    const off = window.api.onTorStatus?.((s) => setTorStatus({ status: s.status, percent: s.percent }));
+    return () => { off?.(); };
+  }, []);
+
+  // VPN is independent from Tor. Keep a small read-only snapshot for the
+  // status affordance; mutations remain inside the dedicated VPN surface.
+  const [vpnStatus, setVpnStatus] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    const read = async () => {
+      if (!window.api.vpnStatus) return;
+      try { setVpnStatus(await window.api.vpnStatus()); } catch { setVpnStatus(null); }
+    };
+    void read();
+    const timer = window.setInterval(read, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // The embedded ROS VPN app is read-only. Its "Open VPN controls" action is
+  // delivered here by the native host, which routes the trusted shell to this
+  // host-owned view rather than granting ROS mutation commands.
+  useEffect(() => {
+    const off = window.api.onVpnOpen?.(() => setView('vpn'));
+    return () => { off?.(); };
+  }, []);
 
   const lastActivityRef = useRef(Date.now());
   const resetActivity = useCallback(() => { lastActivityRef.current = Date.now(); }, []);
@@ -74,8 +185,6 @@ function MainApp() {
       const config = await window.api.getConfig();
       setAppConfig(config);
 
-      // Maintain compatibility with legacy single-setting logic
-      if (config.show_scanlines !== undefined) setShowScanlines(config.show_scanlines && resolvedTheme === 'dark');
       if (config.auto_lock_minutes !== undefined) setAutoLockMinutes(config.auto_lock_minutes);
     };
     loadConfig();
@@ -299,40 +408,6 @@ function MainApp() {
 
   const toggleGroup = (g: string) => setExpandedGroups(prev => ({ ...prev, [g]: !prev[g] }));
 
-  const NavButton = ({ id, label, icon: Icon, badge, compact }: any) => (
-    <button
-      onClick={() => setView(id)}
-      className={`w-full flex items-center justify-between px-5 py-3 border-l-2 transition-all cursor-pointer group ${view === id ? 'bg-xmr-green/5 border-xmr-green text-xmr-green' : 'border-transparent text-xmr-dim hover:text-xmr-green hover:bg-xmr-green/5'}`}
-    >
-      <div className="flex items-center gap-3">
-        <Icon size={16} className={view === id ? 'drop-shadow-[0_0_8px_rgba(0,255,65,0.5)]' : 'opacity-50 group-hover:opacity-100'} />
-        <span className="text-[11px] font-black uppercase tracking-[0.15em]">{label}</span>
-      </div>
-      {badge && (
-        <span className="text-[9px] font-black bg-xmr-green/10 px-1.5 py-0.5 rounded-sm border border-xmr-green/20 animate-pulse">
-          {badge}
-        </span>
-      )}
-    </button>
-  );
-
-  const NavGroup = ({ label, groupKey, children }: { label: string; groupKey: string; children: React.ReactNode }) => {
-    const childArray = React.Children.toArray(children).filter(Boolean);
-    if (childArray.length === 1) return <>{childArray[0]}</>;
-    return (
-      <div>
-        <button
-          onClick={() => toggleGroup(groupKey)}
-          className="w-full flex items-center gap-2 px-5 py-1.5 text-[9px] font-black uppercase tracking-[0.25em] text-xmr-dim/60 hover:text-xmr-dim transition-colors cursor-pointer"
-        >
-          <ChevronRight size={10} className={`transition-transform duration-200 ${expandedGroups[groupKey] ? 'rotate-90' : ''}`} />
-          {label}
-        </button>
-        {expandedGroups[groupKey] && children}
-      </div>
-    );
-  };
-
   return (
     <div className="flex h-screen bg-xmr-base text-xmr-green font-mono relative overflow-hidden select-none transition-colors duration-300">
       <SkinOverlay config={appConfig} />
@@ -386,17 +461,17 @@ function MainApp() {
 
         {/* ─── Grouped Navigation ─── */}
         <nav className="flex-grow overflow-y-auto custom-scrollbar space-y-1 pb-2" style={{ WebkitAppRegion: 'no-drag' } as any}>
-          <NavButton id="home" label="Dashboard" icon={Ghost} />
-          <NavButton id="vault" label="Vault" icon={Shield} badge={isSyncing ? `${syncPercent.toFixed(1)}%` : null} />
+          <NavButton id="home" label="Dashboard" icon={Ghost} activeView={view} onNavigate={setView} />
+          <NavButton id="vault" label="Vault" icon={Shield} badge={isSyncing ? `${syncPercent.toFixed(1)}%` : null} activeView={view} onNavigate={setView} />
 
-          <NavGroup label="Exchange" groupKey="exchange">
-            <NavButton id="exchange" label="Exchange" icon={ArrowDown} />
-            {!isPackaged && <NavButton id="vigil" label="Vigil / Limit" icon={Crosshair} />}
+          <NavGroup label="Exchange" groupKey="exchange" expanded={!!expandedGroups['exchange']} onToggle={toggleGroup}>
+            <NavButton id="exchange" label="Exchange" icon={ArrowDown} activeView={view} onNavigate={setView} />
           </NavGroup>
 
-          <NavGroup label="Tools" groupKey="tools">
-            <NavButton id="agent" label="Agent" icon={Bot} />
-            <NavButton id="settings" label="Settings" icon={Settings} />
+          <NavGroup label="Tools" groupKey="tools" expanded={!!expandedGroups['tools']} onToggle={toggleGroup}>
+            <NavButton id="agent" label="Agent" icon={Bot} activeView={view} onNavigate={setView} />
+            <NavButton id="settings" label="Settings" icon={Settings} activeView={view} onNavigate={setView} />
+            <NavButton id="vpn" label="VPN" icon={Network} activeView={view} onNavigate={setView} />
           </NavGroup>
           <button
             onClick={() => { setShowFeedbackModal(true); setFeedbackText(''); }}
@@ -420,7 +495,7 @@ function MainApp() {
           </div>
 
           {/* Theme + Skin + Network in one compact grid */}
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-4 gap-1.5">
             <button onClick={cycleTheme} className="flex flex-col items-center gap-0.5 py-1.5 rounded-sm border border-xmr-border/50 hover:bg-xmr-green/10 transition-all cursor-pointer text-xmr-green" title={`Theme: ${mode}`}>
               {mode === 'dark' ? <Moon size={12} /> : mode === 'light' ? <Sun size={12} /> : <Monitor size={12} />}
               <span className="text-[8px] font-black uppercase tracking-wide">{mode === 'system' ? 'SYS' : mode.substring(0, 4).toUpperCase()}</span>
@@ -429,10 +504,38 @@ function MainApp() {
               <span className="text-[10px]">◈</span>
               <span className="text-[8px] font-black uppercase tracking-wide">{skinLabel.substring(0, 4).toUpperCase()}</span>
             </button>
-            <button onClick={toggleTor} className={`flex flex-col items-center gap-0.5 py-1.5 rounded-sm border cursor-pointer ${appConfig.routingMode === 'tor' ? 'border-xmr-green/50 text-xmr-green' : 'border-xmr-accent/50 text-xmr-accent'}`} title={appConfig.routingMode === 'tor' ? 'Tor Only' : 'Clearnet'}>
-              <Shield size={12} />
-              <span className="text-[8px] font-black uppercase tracking-wide">{appConfig.routingMode === 'tor' ? 'TOR' : 'CLR'}</span>
-            </button>
+            {(() => {
+              const bootstrapping = appConfig.routingMode !== 'clearnet' && torStatus?.status === 'bootstrapping';
+              const label = appConfig.routingMode === 'clearnet'
+                ? 'CLR'
+                : bootstrapping
+                  ? `${torStatus?.percent ?? 0}%`
+                  : appConfig.routingMode === 'custom' ? 'PRXY' : 'TOR';
+              const title = bootstrapping
+                ? `Bootstrapping Tor… ${torStatus?.percent ?? 0}%`
+                : appConfig.routingMode === 'clearnet' ? 'Clearnet'
+                : appConfig.routingMode === 'custom' ? 'Custom proxy' : 'Tor Only';
+              return (
+                <button onClick={toggleTor} className={`flex flex-col items-center gap-0.5 py-1.5 rounded-sm border cursor-pointer ${appConfig.routingMode !== 'clearnet' ? 'border-xmr-green/50 text-xmr-green' : 'border-xmr-accent/50 text-xmr-accent'}`} title={title}>
+                  <Shield size={12} className={bootstrapping ? 'animate-pulse' : ''} />
+                  <span className="text-[8px] font-black uppercase tracking-wide">{label}</span>
+                </button>
+              );
+            })()}
+            {(() => {
+              const phase = String(vpnStatus?.phase ?? 'unknown');
+              const egress = String(vpnStatus?.egress ?? 'unknown');
+              const connected = phase === 'connected';
+              const blocked = egress === 'blocked';
+              const label = connected ? 'VPN' : blocked ? 'LOCK' : 'VPN';
+              const title = connected ? 'VPN connected · open controls' : blocked ? 'VPN blocked · open controls' : 'VPN inactive · open controls';
+              return (
+                <button onClick={() => setView('vpn')} className={`flex flex-col items-center gap-0.5 py-1.5 rounded-sm border cursor-pointer ${connected ? 'border-xmr-green/50 text-xmr-green' : blocked ? 'border-yellow-500/50 text-yellow-400' : 'border-xmr-border/50 text-xmr-dim'}`} title={title}>
+                  <Network size={12} className={connected ? 'animate-pulse' : ''} />
+                  <span className="text-[8px] font-black uppercase tracking-wide">{label}</span>
+                </button>
+              );
+            })()}
           </div>
 
           {/* Status row */}
@@ -505,9 +608,9 @@ function MainApp() {
                 )}
 
               <div className={view === 'home' ? 'block' : 'hidden'}><HomeView setView={setView} stats={stats} loading={statsLoading} /></div>
-                <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView setView={setView} vault={vault} handleBurn={() => purgeIdentity(activeId)} appConfig={appConfig} /></div>
+                <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView vault={vault} appConfig={appConfig} /></div>
                 <div className={view === 'exchange' ? 'block' : 'hidden'}><ExchangeView localXmrAddress={address} /></div>
-                {!isPackaged && <div className={view === 'vigil' ? 'block' : 'hidden'}><VigilView localXmrAddress={address} /></div>}
+                <div className={view === 'vpn' ? 'block' : 'hidden'}><VpnView /></div>
 
               <div className={view === 'settings' ? 'block' : 'hidden'}><SettingsView /></div>
                 <div className={view === 'agent' ? 'block' : 'hidden'}><AgentTab /></div>
@@ -518,18 +621,60 @@ function MainApp() {
         {showConsole && (
           <>
             <div className="fixed inset-0 z-50 bg-black/5" onClick={() => setShowConsole(false)} />
-            <div className="absolute inset-x-0 bottom-8 h-64 bg-xmr-base/95 backdrop-blur-xl border-t border-xmr-green/30 z-[60] flex flex-col animate-in slide-in-from-bottom-4 duration-300 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] select-text">
+            <div className={`absolute inset-x-0 bg-xmr-base/95 backdrop-blur-xl border-t border-xmr-green/30 z-[60] flex flex-col animate-in slide-in-from-bottom-4 duration-300 shadow-[0_-20px_50px_rgba(0,0,0,0.5)] select-text ${consoleMaximized ? 'top-10 bottom-8' : 'bottom-8 h-64'}`}>
               <div className="px-4 py-2 border-b border-xmr-green/10 flex justify-between items-center bg-xmr-green/5">
                 <div className="flex items-center gap-2 text-[11px] font-black text-xmr-green uppercase tracking-widest"><TerminalIcon size={12} /> System_Log_Output</div>
-                <div className="flex items-center gap-4">
-                  <span className="text-[11px] text-xmr-dim uppercase font-black opacity-50">[ PRESS ESC TO CLOSE ]</span>
-                  <button onClick={() => setShowConsole(false)} className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"><X size={14} /></button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setConsoleTimestamps(t => !t)}
+                    title={consoleTimestamps ? 'Hide timestamps' : 'Show timestamps'}
+                    className={`flex items-center gap-1 text-[10px] uppercase font-black transition-all cursor-pointer ${consoleTimestamps ? 'text-xmr-green' : 'text-xmr-dim hover:text-xmr-green'}`}
+                  >
+                    <Clock size={13} /> Time
+                  </button>
+                  <button
+                    onClick={copyConsoleLogs}
+                    title="Copy log contents"
+                    className={`flex items-center gap-1 text-[10px] uppercase font-black transition-all cursor-pointer ${consoleCopied ? 'text-xmr-green' : 'text-xmr-dim hover:text-xmr-green'}`}
+                  >
+                    {consoleCopied ? <Check size={13} /> : <Copy size={13} />}
+                    {consoleCopied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button
+                    onClick={() => setConsoleMaximized(m => !m)}
+                    title={consoleMaximized ? 'Restore' : 'Maximize'}
+                    className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"
+                  >
+                    {consoleMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                  </button>
+                  <button onClick={() => setShowConsole(false)} title="Close" className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer"><X size={14} /></button>
                 </div>
               </div>
+              {/* Filter bar */}
+              <div className="px-4 py-1.5 border-b border-xmr-green/10 flex items-center gap-2 bg-xmr-base/40">
+                <Search size={12} className="text-xmr-dim shrink-0" />
+                <input
+                  type="text"
+                  value={consoleFilter}
+                  onChange={(e) => setConsoleFilter(e.target.value)}
+                  placeholder="Filter logs… (e.g. spent, Detected, Scanned)"
+                  className="flex-grow bg-transparent text-[11px] font-mono text-xmr-green placeholder:text-xmr-dim/50 outline-none"
+                />
+                {consoleFilter && (
+                  <>
+                    <span className="text-[10px] text-xmr-dim font-black uppercase shrink-0">
+                      {logs.filter((l: any) => String(l.msg).toLowerCase().includes(consoleFilter.toLowerCase())).length} match
+                    </span>
+                    <button onClick={() => setConsoleFilter('')} title="Clear filter" className="text-xmr-dim hover:text-xmr-green transition-all cursor-pointer shrink-0"><X size={12} /></button>
+                  </>
+                )}
+              </div>
               <div className="flex-grow overflow-y-auto p-4 font-mono text-[11px] space-y-1.5 custom-scrollbar">
-                {logs.map((log, i) => (
+                {logs.filter((log: any) => !consoleFilter.trim() || String(log.msg).toLowerCase().includes(consoleFilter.toLowerCase())).map((log, i) => (
                   <div key={i} className="flex gap-3 group">
-                    <span className="text-xmr-dim opacity-85 shrink-0 hidden">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                    {consoleTimestamps && (
+                      <span className="text-xmr-dim opacity-60 shrink-0 tabular-nums">[{fmtLogTime(log.timestamp)}]</span>
+                    )}
                     <span className={`break-all ${log.type === 'error' ? 'text-red-500 font-bold' :
                       log.type === 'success' ? 'text-xmr-green font-bold' :
                         log.type === 'process' ? 'text-xmr-accent' :
@@ -614,9 +759,30 @@ function MainApp() {
 }
 
 export default function App() {
+  // A dedicated host-owned window created by `vpn_open_window`. Keeping this
+  // branch outside VaultProvider/MainApp ensures it mounts no wallet, updater,
+  // browser or identity UI. Its Tauri capability is independently restricted
+  // to the structured VPN broker commands.
+  if (new URLSearchParams(window.location.search).get('vpn-control') === '1') {
+    return <VpnControlApp />;
+  }
   return (
     <VaultProvider>
       <MainApp />
     </VaultProvider>
+  );
+}
+
+function VpnControlApp() {
+  // Apply the exact same mode, skin and contrast tokens as the main native
+  // window. A trusted, allow-listed hint supplied by the ROS opener takes
+  // precedence without overwriting the native renderer's own preference.
+  const rawTheme = new URLSearchParams(window.location.search).get('theme');
+  const theme = rawTheme === 'light' || rawTheme === 'dark' || rawTheme === 'system' ? rawTheme : undefined;
+  useTheme(theme);
+  return (
+    <div className="h-screen overflow-hidden bg-xmr-base text-xmr-text transition-colors duration-300">
+      <VpnView />
+    </div>
   );
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sign-offline-transfer"
+description = "Enables the sign_offline_transfer command without any pre-configured scope."
+commands.allow = ["sign_offline_transfer"]
+
+[[permission]]
+identifier = "deny-sign-offline-transfer"
+description = "Denies the sign_offline_transfer command without any pre-configured scope."
+commands.deny = ["sign_offline_transfer"]

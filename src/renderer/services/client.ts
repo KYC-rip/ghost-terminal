@@ -110,16 +110,9 @@ async function client<T>(type: APIType, endpoint: string, { body, ...customConfi
       return await customResponseHandler(result);
     }
 
-    const status = result.status;
-    const data = await result.json();
+    if (result.status === 204) return {} as T;
 
-    if (status === 204) return {} as T;
-
-    if (status >= 200 && status < 300) {
-      return data as T;
-    } else {
-      throw new APIError(data?.error || data?.message || `HTTP Error ${status}`, status, data);
-    }
+    return await result.json() as T;
   } catch (error: any) {
     if (error instanceof APIError) throw error;
     if (error.name === 'AbortError') throw new APIError('REQUEST_TIMEOUT', 408);

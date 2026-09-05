@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-revoke-transfer-grant"
+description = "Enables the revoke_transfer_grant command without any pre-configured scope."
+commands.allow = ["revoke_transfer_grant"]
+
+[[permission]]
+identifier = "deny-revoke-transfer-grant"
+description = "Denies the revoke_transfer_grant command without any pre-configured scope."
+commands.deny = ["revoke_transfer_grant"]

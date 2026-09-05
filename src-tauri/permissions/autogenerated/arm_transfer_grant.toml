@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-arm-transfer-grant"
+description = "Enables the arm_transfer_grant command without any pre-configured scope."
+commands.allow = ["arm_transfer_grant"]
+
+[[permission]]
+identifier = "deny-arm-transfer-grant"
+description = "Denies the arm_transfer_grant command without any pre-configured scope."
+commands.deny = ["arm_transfer_grant"]

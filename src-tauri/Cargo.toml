@@ -1,0 +1,182 @@
+[package]
+name = "ripley-terminal"
+version = "2.0.0"
+description = "Tactical Monero Desktop Wallet"
+authors = ["KYC.rip"]
+edition = "2021"
+
+[lib]
+name = "ripley_terminal_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Direct access to the embed's WKWebView (via tauri's with_webview) to read and
+# normalize its native zooms — `magnification` (visual, no reflow) and `pageZoom`
+# (layout) — which tauri doesn't expose. Same versions/features wry already pulls
+# in, so this adds no new build weight.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "objc2-app-kit", "block2", "WKWebView", "WKSnapshotConfiguration"] }
+# Native window capture (commands::system::capture_window_png): WKWebView snapshots ITSELF, so it
+# needs no Screen Recording permission — unlike a display-capture crate, which on macOS would put a
+# TCC prompt in front of copying a window.
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSData", "NSDictionary", "NSError"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSImage", "NSBitmapImageRep", "NSImageRep", "NSGraphics"] }
+block2 = "0.6"
+# Native Local AI: llama.cpp with Metal keeps inference out of the WKWebView
+# (where WebGPU is unavailable) and offloads the full quantized model to Apple GPU.
+llama-cpp-2 = { version = "0.1.152", default-features = false, features = ["metal", "sampler"] }
+ripley-vpn-broker = { path = "../broker" }
+libc = "0.2"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# CPU fallback for the native shells on platforms where we have not enabled a
+# llama.cpp GPU backend yet. The renderer surfaces the runtime honestly.
+llama-cpp-2 = { version = "0.1.152", default-features = false, features = ["sampler"] }
+
+# Device-bound key for the watch tier (encrypted output cache + persisted view
+# pairs). Feature set is deliberate: native stores on macOS/Windows, secret-service
+# on Linux — and NOT linux-keyutils (kernel keyring is in-memory only; the device
+# key would vanish every reboot, forcing a full rescan). keyring calls BLOCK and
+# must run inside spawn_blocking (they panic inside tokio on Linux otherwise).
+[dependencies.keyring]
+version = "3"
+features = ["apple-native", "windows-native", "sync-secret-service"]
+
+[dependencies]
+# Core framework
+# macos-proxy → wry/mac-proxy: without it WebviewWindowBuilder::proxy_url is a
+# silent no-op on macOS (the SOCKS/HTTP proxy code is cfg-gated). Needs macOS 14+.
+# image-png: lets tauri::image::Image decode the PNG the webview hands us for clipboard copy.
+tauri = { version = "2", features = ["tray-icon", "devtools", "macos-proxy", "unstable", "protocol-asset", "image-png"] }
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-deep-link = "2"
+# Used from RUST only (commands::system::clipboard_write_image), so it needs no JS capability:
+# WKWebView exposes a text-only clipboard, so the webview cannot write an image itself.
+tauri-plugin-clipboard-manager = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Monero wallet - pure Rust, no C++ FFI.
+# Pinned to our fork (base a941dff) which adds an OPT-IN fast bulk-sync path via
+# get_blocks.bin that trusts the node (bypasses the prunable_hash gate, monero
+# #10120, that forces slow per-block JSON). Additive only — see the fork's
+# FORK_NOTES.md. Rebase onto upstream = a clean cherry-pick of the one commit.
+monero-wallet = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e" }
+monero-oxide = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e" }
+monero-daemon-rpc = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e", package = "monero-daemon-rpc" }
+monero-address = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e", package = "monero-address" }
+monero-simple-request-rpc = { git = "https://github.com/KYC-rip/monero-oxide", rev = "31136bc913ebd8cc96b1e9048ce98c5c7c54de5e", package = "monero-simple-request-rpc" }
+monero-seed = { git = "https://github.com/kayabaNerve/monero-wallet-util" }
+
+# Crypto primitives (matching monero-oxide's versions)
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+zeroize = { version = "1.5", features = ["zeroize_derive"] }
+
+# arti (Tor) pulls in rusqlite/libsqlite3-sys for its directory-state store. Windows
+# has no system sqlite3.lib (build fails: LNK1181 cannot open input file 'sqlite3.lib'),
+# so force the `bundled` feature to compile SQLite from source. Cargo feature
+# unification applies it to arti's transitive rusqlite too; also makes the Linux
+# AppImage more self-contained. Not imported directly — present only to enable bundled.
+libsqlite3-sys = { version = "0.36", features = ["bundled"] }
+
+# Tor as library (no bundled binary)
+# onion-service-client is REQUIRED to dial .onion nodes (all our mainnet.tor
+# nodes are .onion); without it arti rejects onion addresses at runtime.
+arti-client = { version = "0.40", default-features = false, features = ["tokio", "native-tls", "onion-service-client"] }
+tor-rtcompat = { version = "0.40", features = ["tokio"] }
+
+# Time
+chrono = "0.4"
+
+# HTTP client (for daemon RPC)
+reqwest = { version = "0.12", features = ["json", "socks"] }
+
+# HTTP over arti DataStream (Tor transport). hyper decodes Content-Length AND
+# chunked transfer-encoding, so no hand-rolled HTTP parser is needed. Already in
+# the tree transitively via reqwest; declared directly for explicit use.
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-proxy-system"] }
+http-body-util = "0.1"
+bytes = "1"
+encoding_rs = "0.8"
+# TLS over the arti stream for HTTPS GETs (nodes.json, price). Pure-Rust rustls
+# (ring provider, enabled by tokio-rustls default features); native cert store.
+tokio-rustls = "0.26"
+rustls-native-certs = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# State persistence
+directories = "6"
+
+# Encryption for wallet files
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+rand_core = { version = "0.6", features = ["getrandom"] }
+# Domain separation for the device key (cache vs watch subkeys) — already in tree.
+hkdf = "0.12"
+sha2 = "0.10"
+
+# Hashing (keccak256 for view key derivation)
+tiny-keccak = { version = "2", features = ["keccak"] }
+
+# Hex encoding
+hex = "0.4"
+tokio-socks = "0.5.3"
+
+# Signed OTA updates for the RipleyOS UI bundle (see src/updater/): Ed25519 verify of
+# the manifest signature, a pinned pubkey, and .tar.zst archive decompression.
+ed25519-dalek = "2"
+hex-literal = "0.4"
+tar = "0.4"
+zstd = "0.13"
+# Base64 for the skin-background data URL (match the version already in-tree)
+base64 = "0.21"
+# DNS wire-format build/parse for OpenAlias resolution (RFC 8484 binary DoH). We do
+# the transport ourselves over Tor, so only the message codec is needed — no resolver
+# or async runtime features.
+hickory-proto = { version = "0.24", default-features = false }
+
+# Offline-signing accessor patch (offline signing P0): the vendored copy of the
+# fork at the pinned rev adds 4 additive API surface points to monero-wallet —
+# pub `SignableTransaction::real_inputs()` / `payments()` and pub `InternalPayment`
+# / `ChangeEnum` — needed to verify a signed transaction against a prepared one
+# (ring-offset multiset) and to classify change ownership on a cold signer. See
+# vendor/monero-oxide/FORK_DELTA.md; rebase onto upstream = apply the same small
+# delta to a newer rev.
+[patch."https://github.com/KYC-rip/monero-oxide"]
+monero-wallet = { path = "vendor/monero-oxide/monero-oxide/wallet" }
+monero-oxide = { path = "vendor/monero-oxide/monero-oxide" }
+monero-daemon-rpc = { path = "vendor/monero-oxide/monero-oxide/interface/daemon", package = "monero-daemon-rpc" }
+monero-address = { path = "vendor/monero-oxide/monero-oxide/wallet/address", package = "monero-address" }
+monero-simple-request-rpc = { path = "vendor/monero-oxide/monero-oxide/interface/daemon/simple-request", package = "monero-simple-request-rpc" }
+
+# Compile ALL dependencies with full optimization even in dev builds. Block
+# scanning is almost entirely ed25519/curve25519 work, which runs 10-50x slower
+# when unoptimized — so a debug `cargo tauri dev` makes scanning 1000 blocks take
+# MINUTES instead of seconds (the network fetch was never the bottleneck). Our own
+# crate stays at the default debug opt-level for fast incremental builds + debugging.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Optimize build scripts/proc-macros too (one-time, keeps the first build sane).
+[profile.dev.build-override]
+opt-level = 3

@@ -1,0 +1,22 @@
+name: test-dependencies
+description: Installs test dependencies for monero-oxide
+
+inputs:
+  monero-version:
+    description: "Monero version to download and run as a regtest node"
+    required: false
+    default: v0.18.4.4
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Build Dependencies
+      uses: ./.github/actions/build-dependencies
+
+    - name: Run a Monero Regtest Node
+      uses: ./.github/actions/monero
+      with:
+        version: ${{ inputs.monero-version }}
+
+    - name: Run a Monero Wallet-RPC
+      uses: ./.github/actions/monero-wallet-rpc

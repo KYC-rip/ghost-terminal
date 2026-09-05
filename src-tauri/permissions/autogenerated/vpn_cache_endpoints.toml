@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-cache-endpoints"
+description = "Enables the vpn_cache_endpoints command without any pre-configured scope."
+commands.allow = ["vpn_cache_endpoints"]
+
+[[permission]]
+identifier = "deny-vpn-cache-endpoints"
+description = "Denies the vpn_cache_endpoints command without any pre-configured scope."
+commands.deny = ["vpn_cache_endpoints"]

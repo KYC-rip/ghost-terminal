@@ -1,9 +1,25 @@
 import React, { Suspense } from 'react';
 import { Activity, BarChart3, Globe, Lock, Ghost, TrendingUp, AlertTriangle } from 'lucide-react';
-import { useTheme } from '../hooks/useTheme';
 import { Card } from './Card';
 
 const SpreadChart = React.lazy(() => import('./SpreadChart'));
+
+interface RowProps {
+  label: string;
+  value: string | number | undefined;
+  highlight?: boolean;
+  alert?: boolean;
+  loading?: boolean;
+}
+
+const Row = ({ label, value, highlight = false, alert = false, loading = false }: RowProps) => (
+  <div className="flex justify-between items-center py-1.5 border-b border-xmr-border/10 group/row">
+    <span className="text-xs text-xmr-dim uppercase tracking-wider group-hover/row:text-xmr-green transition-colors">{label}</span>
+    <span className={`text-[11px] font-black tracking-tight ${alert ? 'text-xmr-accent animate-pulse' : (highlight ? 'text-xmr-green' : 'text-xmr-green/80')}`}>
+      {loading ? '---' : value}
+    </span>
+  </div>
+);
 
 interface HomeViewProps {
    setView: (v: 'home' | 'vault' | 'settings') => void;
@@ -12,17 +28,6 @@ interface HomeViewProps {
 }
 
 export function HomeView({ setView, stats, loading }: HomeViewProps) {
-  const { resolvedTheme } = useTheme();
-
-  const Row = ({ label, value, highlight = false, alert = false }: any) => (
-    <div className="flex justify-between items-center py-1.5 border-b border-xmr-border/10 group/row">
-      <span className="text-xs text-xmr-dim uppercase tracking-wider group-hover/row:text-xmr-green transition-colors">{label}</span>
-      <span className={`text-[11px] font-black tracking-tight ${alert ? 'text-xmr-accent animate-pulse' : (highlight ? 'text-xmr-green' : 'text-xmr-green/80')}`}>
-        {loading ? '---' : value}
-      </span>
-    </div>
-  );
-
   return (
     <div className="max-w-6xl mx-auto space-y-10 py-4 animate-in fade-in duration-700 font-mono">
       {/* 1. HERO PRICE SECTION */}
@@ -78,12 +83,12 @@ export function HomeView({ setView, stats, loading }: HomeViewProps) {
             <Activity size={16} /> Network_Uplink_Intel
           </h3>
           <div className="space-y-1">
-             <Row label="Current_Height" value={stats?.network.height} highlight />
-             <Row label="Hashrate_Agg" value={stats?.network.hashrate} />
-             <Row label="Network_Difficulty" value={stats?.network.difficulty} />
-             <Row label="Tx_Fees_Est" value={stats?.network.fees} highlight />
-             <Row label="Block_Reward" value={stats?.network.reward} />
-             <Row label="Mempool_Congestion" value={`${stats?.network.mempool || 0} TXs`} alert={(stats?.network.mempool || 0) > 50} />
+             <Row loading={loading} label="Current_Height" value={stats?.network.height} highlight />
+             <Row loading={loading} label="Hashrate_Agg" value={stats?.network.hashrate} />
+             <Row loading={loading} label="Network_Difficulty" value={stats?.network.difficulty} />
+             <Row loading={loading} label="Tx_Fees_Est" value={stats?.network.fees} highlight />
+             <Row loading={loading} label="Block_Reward" value={stats?.network.reward} />
+             <Row loading={loading} label="Mempool_Congestion" value={`${stats?.network.mempool || 0} TXs`} alert={(stats?.network.mempool || 0) > 50} />
           </div>
         </Card>
 
@@ -92,12 +97,12 @@ export function HomeView({ setView, stats, loading }: HomeViewProps) {
             <BarChart3 size={16} /> Market_Resistance_Analysis
           </h3>
           <div className="space-y-1">
-             <Row label="XMR_BTC_Ratio" value={stats?.market.xmr_btc} highlight />
-             <Row label="Market_Cap" value={stats?.market.cap} />
-             <Row label="24H_Volume" value={stats?.market.volume} />
-             <Row label="Circulating_Supply" value={stats?.market.supply} />
-             <Row label="P2P_Liquidity_Est" value={stats?.resistance.p2p_liquidity} highlight />
-             <Row label="Total_Nodes_Global" value={stats?.resistance.total_nodes} />
+             <Row loading={loading} label="XMR_BTC_Ratio" value={stats?.market.xmr_btc} highlight />
+             <Row loading={loading} label="Market_Cap" value={stats?.market.cap} />
+             <Row loading={loading} label="24H_Volume" value={stats?.market.volume} />
+             <Row loading={loading} label="Circulating_Supply" value={stats?.market.supply} />
+             <Row loading={loading} label="P2P_Liquidity_Est" value={stats?.resistance.p2p_liquidity} highlight />
+             <Row loading={loading} label="Total_Nodes_Global" value={stats?.resistance.total_nodes} />
           </div>
         </Card>
       </div>

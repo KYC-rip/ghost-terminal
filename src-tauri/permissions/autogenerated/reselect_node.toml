@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reselect-node"
+description = "Enables the reselect_node command without any pre-configured scope."
+commands.allow = ["reselect_node"]
+
+[[permission]]
+identifier = "deny-reselect-node"
+description = "Denies the reselect_node command without any pre-configured scope."
+commands.deny = ["reselect_node"]

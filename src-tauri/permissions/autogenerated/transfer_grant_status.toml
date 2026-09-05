@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-transfer-grant-status"
+description = "Enables the transfer_grant_status command without any pre-configured scope."
+commands.allow = ["transfer_grant_status"]
+
+[[permission]]
+identifier = "deny-transfer-grant-status"
+description = "Denies the transfer_grant_status command without any pre-configured scope."
+commands.deny = ["transfer_grant_status"]

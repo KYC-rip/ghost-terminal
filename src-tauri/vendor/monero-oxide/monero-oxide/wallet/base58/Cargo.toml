@@ -1,0 +1,30 @@
+[package]
+name = "monero-base58"
+version = "0.1.0"
+description = "Rust implementation of Monero's base58 encoding scheme"
+license = "MIT"
+repository = "https://github.com/monero-oxide/monero-oxide/tree/main/monero-oxide/wallet/base58"
+authors = ["Luke Parker <lukeparker5132@gmail.com>"]
+edition = "2021"
+rust-version = "1.65"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+std-shims = { version = "0.1.5", default-features = false }
+monero-primitives = { path = "../../primitives", default-features = false }
+
+[dev-dependencies]
+rand_core = { version = "0.6", default-features = false, features = ["std"] }
+
+[features]
+std = [
+  "std-shims/std",
+  "monero-primitives/std",
+]
+default = ["std"]

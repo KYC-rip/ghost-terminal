@@ -134,8 +134,8 @@ export function CurrencySelector({
   useEffect(() => {
     if (isOpen && _currencies.length === 0 && !externalCurrencies) {
       setLoading(true);
-      fetch("https://api.kyc.rip/v2/exchange/currencies")
-        .then((res) => res.json())
+      window.api.proxiedGet("https://api.kyc.rip/v2/exchange/currencies")
+        .then((body: string) => JSON.parse(body))
         .then((data) => {
           setCurrencies(data);
           setLoading(false);

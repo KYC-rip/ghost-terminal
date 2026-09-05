@@ -140,8 +140,13 @@ export const WalletService = {
     const balRes = await RpcClient.call('getbalance', { account_index: accountIndex });
     const availablePico = balRes.unlocked_balance || 0;
 
-    // Safety check: leave 0.0005 XMR (500,000,000 pico) buffer for fees
-    const feeBuffer = 500000000;
+    // Fee-aware buffer: splinter spends ~all UTXOs and the tx fee grows with the
+    // input count, so a FIXED buffer underestimated multi-input wallets (8 inputs →
+    // fee ~0.00067 XMR, over the old 0.0005 → NotEnoughFunds). Scale by the unspent-
+    // output count; any unused remainder simply returns as change.
+    const utxoRes = await RpcClient.call('incoming_transfers', { account_index: accountIndex });
+    const numInputs = Math.max(1, (utxoRes.transfers || []).length);
+    const feeBuffer = 500000000 + numInputs * 150000000; // 0.0005 base + ~0.00015/input
     const splinterableAmount = availablePico - feeBuffer;
 
     if (splinterableAmount <= 0) {

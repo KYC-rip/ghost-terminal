@@ -34,7 +34,7 @@ export const XMR402Modal: React.FC = () => {
       } else {
         // Deep Link Flow - Duplicate Prevention
         setPaymentStep('Checking cached payments...');
-        const cacheRes = await (window as any).api.getXmr402Payment(message);
+        const cacheRes = await window.api.getXmr402Payment(message);
         let finalTxid = '';
         let finalProof = '';
 
@@ -74,7 +74,7 @@ export const XMR402Modal: React.FC = () => {
           }
 
           // 3. Store Payment Record
-          await (window as any).api.saveXmr402Payment(message, finalTxid, finalProof, amount, returnUrl);
+          await window.api.saveXmr402Payment(message, finalTxid, finalProof, amount, returnUrl);
         }
 
         // 4. Handle Transparent Handback or Fallback to Success View

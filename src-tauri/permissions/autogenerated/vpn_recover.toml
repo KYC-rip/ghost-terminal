@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-vpn-recover"
+description = "Enables the vpn_recover command without any pre-configured scope."
+commands.allow = ["vpn_recover"]
+
+[[permission]]
+identifier = "deny-vpn-recover"
+description = "Denies the vpn_recover command without any pre-configured scope."
+commands.deny = ["vpn_recover"]

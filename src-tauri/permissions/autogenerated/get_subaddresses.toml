@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-subaddresses"
+description = "Enables the get_subaddresses command without any pre-configured scope."
+commands.allow = ["get_subaddresses"]
+
+[[permission]]
+identifier = "deny-get-subaddresses"
+description = "Denies the get_subaddresses command without any pre-configured scope."
+commands.deny = ["get_subaddresses"]

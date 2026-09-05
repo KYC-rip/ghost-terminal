@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fetch-price-history"
+description = "Enables the fetch_price_history command without any pre-configured scope."
+commands.allow = ["fetch_price_history"]
+
+[[permission]]
+identifier = "deny-fetch-price-history"
+description = "Denies the fetch_price_history command without any pre-configured scope."
+commands.deny = ["fetch_price_history"]

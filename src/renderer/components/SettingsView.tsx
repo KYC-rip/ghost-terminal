@@ -24,12 +24,34 @@ export function SettingsView() {
     skin_style: 'cover',
     shortcuts: {} as Record<string, string>,
     hide_zero_balances: false,
-    include_prereleases: false
+    include_prereleases: false,
+    sync_all_wallets: false,
+    fast_sync: false
   });
 
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [targetHeight, setTargetHeight] = useState<string>('');
+  const [restoreDate, setRestoreDate] = useState<string>('');
   const [isRescanning, setIsRescanning] = useState(false);
+
+  // Convert date to approximate Monero block height
+  // Genesis: April 18, 2014. Average: 1 block per 2 minutes (720 blocks/day)
+  const dateToHeight = (dateStr: string): number => {
+    const genesis = new Date('2014-04-18T00:00:00Z');
+    const target = new Date(dateStr);
+    const diffMs = target.getTime() - genesis.getTime();
+    if (diffMs <= 0) return 0;
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+    return Math.floor(diffDays * 720);
+  };
+
+  const handleDateChange = (dateStr: string) => {
+    setRestoreDate(dateStr);
+    if (dateStr) {
+      const h = dateToHeight(dateStr);
+      setTargetHeight(h.toString());
+    }
+  };
 
   // 📦 App Info & Updates state
   const [appInfo, setAppInfo] = useState<{ version: string; appDataPath: string; walletsPath: string; platform: string } | null>(null);
@@ -65,7 +87,9 @@ export function SettingsView() {
         skin_style: fullConfig.skin_style || 'cover',
         shortcuts: fullConfig.shortcuts || {},
         hide_zero_balances: fullConfig.hide_zero_balances || false,
-        include_prereleases: fullConfig.include_prereleases || false
+        include_prereleases: fullConfig.include_prereleases || false,
+        sync_all_wallets: fullConfig.sync_all_wallets || false,
+        fast_sync: fullConfig.fast_sync || false
       });
 
       const info = await window.api.getAppInfo();
@@ -120,7 +144,9 @@ export function SettingsView() {
         localSettings.network !== config.network ||
         localSettings.customNodeAddress !== config.customNodeAddress ||
         localSettings.useSystemProxy !== config.useSystemProxy ||
-        localSettings.systemProxyAddress !== config.systemProxyAddress;
+        localSettings.systemProxyAddress !== config.systemProxyAddress ||
+        localSettings.sync_all_wallets !== config.sync_all_wallets ||
+        localSettings.fast_sync !== config.fast_sync;
 
       const newConfig = {
         ...config,
@@ -136,7 +162,9 @@ export function SettingsView() {
         skin_style: localSettings.skin_style,
         shortcuts: localSettings.shortcuts,
         hide_zero_balances: localSettings.hide_zero_balances,
-        include_prereleases: localSettings.include_prereleases
+        include_prereleases: localSettings.include_prereleases,
+        sync_all_wallets: localSettings.sync_all_wallets,
+        fast_sync: localSettings.fast_sync
       };
 
       if (needsPhysicalReload) {
@@ -163,20 +191,24 @@ export function SettingsView() {
     }
   };
 
+  const [rescanStatus, setRescanStatus] = useState<'idle' | 'scanning' | 'started' | 'error'>('idle');
   const handleRescan = async () => {
     const h = parseInt(targetHeight);
-    if (isNaN(h)) return alert("INVALID_HEIGHT");
+    if (isNaN(h)) return;
 
-    if (confirm(`INITIATE_RESCAN from height ${h}? This will clear local wallet cache.`)) {
-      setIsRescanning(true);
-      try {
-        await rescan(h);
-        alert("RESCAN_SIGNAL_BROADCASTED.");
-      } catch (e: any) {
-        alert(`RESCAN_FAILED: ${e.message}`);
-      } finally {
-        setIsRescanning(false);
-      }
+    setIsRescanning(true);
+    setRescanStatus('scanning');
+    try {
+      await rescan(h);
+      setRescanStatus('started');
+      // Reset after 3 seconds
+      setTimeout(() => setRescanStatus('idle'), 3000);
+    } catch (e: any) {
+      console.error(`RESCAN_FAILED: ${e.message}`);
+      setRescanStatus('error');
+      setTimeout(() => setRescanStatus('idle'), 3000);
+    } finally {
+      setIsRescanning(false);
     }
   };
 
@@ -228,8 +260,8 @@ export function SettingsView() {
                     checked={localSettings.include_prereleases}
                     onChange={(e) => setLocalSettings({ ...localSettings, include_prereleases: e.target.checked })}
                   />
-                  <div className={`w-10 h-5 border flex items-center px-1 transition-all ${localSettings.include_prereleases ? 'border-xmr-accent bg-xmr-accent/10' : 'border-xmr-border bg-xmr-base'}`}>
-                    <div className={`w-3 h-3 transition-all ${localSettings.include_prereleases ? 'bg-xmr-accent translate-x-5' : 'bg-xmr-dim translate-x-0'}`} />
+                  <div className={`w-10 h-5 rounded-full border flex items-center px-1 transition-all ${localSettings.include_prereleases ? 'border-xmr-accent bg-xmr-accent/10' : 'border-xmr-border bg-xmr-base'}`}>
+                    <div className={`w-3 h-3 rounded-full transition-all ${localSettings.include_prereleases ? 'bg-xmr-accent translate-x-5' : 'bg-xmr-dim translate-x-0'}`} />
                   </div>
                 </label>
                 <button
@@ -284,21 +316,34 @@ export function SettingsView() {
           <h3 className="text-xs font-black text-xmr-green flex items-center gap-2 uppercase"><Server size={14} /> Uplink_Protocols</h3>
           <Card className="p-6 bg-xmr-surface border-xmr-border/40 space-y-6">
 
-            {/* Routing Mode Toggle (Tor vs Clearnet) */}
-            <div className="flex items-center justify-between p-4 bg-xmr-green/5 border border-xmr-green/20 rounded-sm">
+            {/* Routing Mode Selector (Clearnet / Tor / Custom SOCKS proxy) */}
+            <div className="p-4 bg-xmr-green/5 border border-xmr-green/20 rounded-sm space-y-3">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <Zap size={14} className={localSettings.routingMode === 'tor' ? "text-xmr-green animate-pulse" : "text-xmr-dim"} />
-                  <span className="text-xs text-xmr-green font-black uppercase">Tor_Darknet_Routing</span>
+                  <Zap size={14} className={localSettings.routingMode !== 'clearnet' ? "text-xmr-green animate-pulse" : "text-xmr-dim"} />
+                  <span className="text-xs text-xmr-green font-black uppercase">Uplink_Routing</span>
                 </div>
-                <p className="text-xs text-xmr-dim uppercase font-black">Onion_Tunnel_Privacy_Active</p>
+                <p className="text-xs text-xmr-dim uppercase font-black">
+                  {localSettings.routingMode === 'tor' ? 'Onion_Tunnel_Privacy_Active (built-in Tor)'
+                    : localSettings.routingMode === 'custom' ? 'External_SOCKS_Proxy (Whonix / system Tor)'
+                    : 'Direct_Clearnet — your IP is visible to nodes'}
+                </p>
               </div>
-              <button
-                onClick={() => setLocalSettings({ ...localSettings, routingMode: localSettings.routingMode === 'tor' ? 'clearnet' : 'tor' })}
-                className={`w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.routingMode === 'tor' ? 'bg-xmr-green' : 'bg-xmr-base border border-xmr-border'}`}
-              >
-                <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.routingMode === 'tor' ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
-              </button>
+              <div className="grid grid-cols-3 gap-1">
+                {(['clearnet', 'tor', 'custom'] as const).map((modeOption) => (
+                  <button
+                    key={modeOption}
+                    onClick={() => setLocalSettings({ ...localSettings, routingMode: modeOption })}
+                    className={`py-2 rounded-sm border text-[10px] font-black uppercase tracking-wide transition-all cursor-pointer ${
+                      localSettings.routingMode === modeOption
+                        ? (modeOption === 'clearnet' ? 'border-xmr-accent/60 bg-xmr-accent/15 text-xmr-accent' : 'border-xmr-green/60 bg-xmr-green/15 text-xmr-green')
+                        : 'border-xmr-border/50 text-xmr-dim hover:border-xmr-green/30'
+                    }`}
+                  >
+                    {modeOption === 'clearnet' ? 'Clearnet' : modeOption === 'tor' ? 'Tor' : 'Custom'}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Network Toggle (Mainnet vs Stagenet) */}
@@ -334,16 +379,21 @@ export function SettingsView() {
               </button>
             </div>
 
-            {!localSettings.useSystemProxy && (
+            {(localSettings.routingMode === 'custom' || !localSettings.useSystemProxy) && (
               <div className="space-y-2 mt-2">
-                <label className="text-[11px] font-black text-xmr-dim uppercase border-l-2 border-xmr-border pl-2">Manual_Proxy_Override (Optional)</label>
+                <label className="text-[11px] font-black text-xmr-dim uppercase border-l-2 border-xmr-border pl-2">
+                  {localSettings.routingMode === 'custom' ? 'SOCKS_Proxy_Address (Required)' : 'Manual_Proxy_Override (Optional)'}
+                </label>
                 <input
                   type="text"
-                  placeholder="e.g., socks5://127.0.0.1:7890"
+                  placeholder="e.g., 127.0.0.1:9050 (Whonix: 10.152.152.10:9050)"
                   value={localSettings.systemProxyAddress}
                   onChange={(e) => setLocalSettings({ ...localSettings, systemProxyAddress: e.target.value })}
                   className="w-full bg-xmr-base border border-xmr-border focus:border-xmr-green/50 hover:border-xmr-green/30 p-3 text-xs text-xmr-green outline-none font-black transition-colors"
                 />
+                {localSettings.routingMode === 'custom' && (
+                  <p className="text-[10px] text-xmr-dim font-black">Daemon RPC + price are dialed through this SOCKS5 proxy. .onion nodes resolve at the proxy's Tor.</p>
+                )}
               </div>
             )}
 
@@ -358,6 +408,50 @@ export function SettingsView() {
                 className="w-full bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
               />
             </div>
+
+            {/* Sync all wallets */}
+            <div className="flex items-start justify-between border-t border-xmr-border/10 pt-6 gap-4">
+              <div className="space-y-1 flex-1">
+                <span className="text-xs text-xmr-green font-black uppercase">Sync_All_Wallets</span>
+                <p className="text-[11px] text-xmr-dim uppercase font-black leading-relaxed">
+                  Keep ALL your wallets syncing in the background, not just the open one.
+                </p>
+                <p className="text-[10px] text-xmr-dim/80 font-bold leading-relaxed normal-case">
+                  When you unlock one wallet, Ripley tries that password on your other wallets (in memory only —
+                  nothing is ever written to disk) and keeps the ones it can open syncing too, so switching to
+                  them is instant. View-only: spending always still requires that wallet's password.
+                </p>
+              </div>
+              <button
+                onClick={() => setLocalSettings({ ...localSettings, sync_all_wallets: !localSettings.sync_all_wallets })}
+                className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.sync_all_wallets ? 'bg-xmr-green' : 'bg-xmr-base border border-xmr-border'}`}
+              >
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.sync_all_wallets ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
+              </button>
+            </div>
+
+            {/* Fast sync (trusts the node) */}
+            <div className="flex items-start justify-between border-t border-xmr-border/10 pt-6 gap-4">
+              <div className="space-y-1 flex-1">
+                <span className="text-xs text-xmr-warning font-black uppercase">Fast_Sync ⚡</span>
+                <p className="text-[11px] text-xmr-dim uppercase font-black leading-relaxed">
+                  Sync dramatically faster (~50-100×) by bulk-downloading blocks.
+                </p>
+                <p className="text-[10px] text-xmr-dim/80 font-bold leading-relaxed normal-case">
+                  Restores in minutes instead of hours. The catch: this trusts your node — Ripley skips
+                  per-transaction validation. Your funds can NOT be stolen and a fake balance can never be
+                  spent (ownership is always verified by your keys). The only risk is a malicious node
+                  HIDING incoming transactions, which you'd recover by rescanning against another node.
+                  Use only with a node you trust. Off by default.
+                </p>
+              </div>
+              <button
+                onClick={() => setLocalSettings({ ...localSettings, fast_sync: !localSettings.fast_sync })}
+                className={`shrink-0 mt-1 w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.fast_sync ? 'bg-xmr-warning' : 'bg-xmr-base border border-xmr-border'}`}
+              >
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.fast_sync ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-border'}`}></div>
+              </button>
+            </div>
           </Card>
         </section>
 
@@ -370,13 +464,22 @@ export function SettingsView() {
               <span className="text-xmr-green">{currentHeight || 'FETCHING...'}</span>
             </div>
             <div className="space-y-2">
-              <label className="text-[11px] font-black text-xmr-dim uppercase">Target_Restore_Height</label>
+              <label className="text-[11px] font-black text-xmr-dim uppercase">Restore_From_Date</label>
+              <input
+                type="date"
+                min="2014-04-18"
+                max={new Date().toISOString().split('T')[0]}
+                value={restoreDate}
+                onChange={(e) => handleDateChange(e.target.value)}
+                className="w-full bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
+              />
+              <label className="text-[11px] font-black text-xmr-dim uppercase">Or_Block_Height</label>
               <div className="flex gap-2">
                 <input
                   type="number"
                   placeholder="3100000"
                   value={targetHeight}
-                  onChange={(e) => setTargetHeight(e.target.value)}
+                  onChange={(e) => { setTargetHeight(e.target.value); setRestoreDate(''); }}
                   className="flex-grow bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
                 />
                 <button
@@ -384,9 +487,14 @@ export function SettingsView() {
                   onClick={handleRescan}
                   className="px-4 bg-xmr-green text-xmr-base text-xs font-black uppercase hover:bg-white transition-all disabled:opacity-50 cursor-pointer"
                 >
-                  {isRescanning ? 'Scanning...' : 'Trigger_Rescan'}
+                  {isRescanning ? 'Starting...' : rescanStatus === 'started' ? '✅ Rescan Started' : rescanStatus === 'error' ? '❌ Failed' : 'Trigger_Rescan'}
                 </button>
               </div>
+              {rescanStatus === 'started' && (
+                <div className="text-[10px] text-xmr-green uppercase tracking-widest animate-pulse">
+                  Rescan initiated from block {targetHeight}. Check sync progress in the vault.
+                </div>
+              )}
             </div>
           </Card>
         </section>
@@ -427,6 +535,30 @@ export function SettingsView() {
         <section className="space-y-4">
           <h3 className="text-xs font-black text-xmr-green flex items-center gap-2 uppercase"><EyeOff size={14} /> Countermeasures & UI</h3>
           <Card className="p-6 bg-xmr-surface border-xmr-border/40 space-y-6">
+            {/* Interface: classic ↔ RipleyOS (Tauri shell only — Electron's preload has no setUiMode) */}
+            {(window.api as any).setUiMode && (
+              <div className="flex items-center justify-between border-b border-xmr-border/10 pb-6">
+                <div className="space-y-1">
+                  <span className="text-xs text-xmr-green font-black uppercase">Use_RipleyOS_Desktop <span className="text-xmr-accent">(BETA)</span></span>
+                  <p className="text-xs text-xmr-dim uppercase font-black">Switch to the RipleyOS interface — the app relaunches. Exit anytime via RipleyOS Settings.</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!confirm('Switch to RipleyOS (beta)? The app will relaunch. You can return via RipleyOS Settings → "Exit to classic wallet".')) return;
+                    try {
+                      await (window.api as any).setUiMode('ros');
+                      // On success the process relaunches — this line never runs.
+                    } catch (e: any) {
+                      alert(`SWITCH_FAILED: ${e}`);
+                    }
+                  }}
+                  className="px-3 py-1.5 border border-xmr-border text-[10px] uppercase font-black hover:border-xmr-green hover:text-xmr-green transition-all cursor-pointer"
+                >
+                  Switch_&_Relaunch
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <div className="space-y-1"><span className="text-xs text-xmr-green font-black uppercase">CRT_Visual_Scanlines</span><p className="text-xs text-xmr-dim uppercase font-black">Overlay_Effect</p></div>
               <button
@@ -447,7 +579,7 @@ export function SettingsView() {
                   type="number"
                   value={localSettings.auto_lock_minutes}
                   onChange={(e) => setLocalSettings({ ...localSettings, auto_lock_minutes: parseInt(e.target.value) || 0 })}
-                  className="w-20 bg-xmr-base border border-xmr-border p-2 text-right text-xs text-xmr-green outline-none font-black"
+                  className="w-20 bg-xmr-base border border-xmr-border p-3 text-right text-xs text-xmr-green outline-none font-black"
                 />
               </div>
             </div>
@@ -528,7 +660,7 @@ export function SettingsView() {
                       <select
                         value={localSettings.skin_style}
                         onChange={(e) => setLocalSettings({ ...localSettings, skin_style: e.target.value as any })}
-                        className="w-full bg-xmr-surface border border-xmr-border/50 p-2 text-xs text-xmr-green uppercase outline-none focus:border-xmr-accent"
+                        className="w-full bg-xmr-surface border border-xmr-border/50 p-3 text-xs text-xmr-green uppercase outline-none focus:border-xmr-accent"
                       >
                         <option value="cover">Cover (Center)</option>
                         <option value="contain">Contain (Fit)</option>
@@ -579,7 +711,7 @@ export function SettingsView() {
                       const newShortcuts = { ...localSettings.shortcuts, [action]: e.target.value };
                       setLocalSettings({ ...localSettings, shortcuts: newShortcuts });
                     }}
-                    className="bg-xmr-base border border-xmr-border p-2 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
+                    className="bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
                     placeholder="e.g. Mod+S"
                   />
                 </div>

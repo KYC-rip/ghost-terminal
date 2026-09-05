@@ -47,6 +47,23 @@ On **Qubes/Whonix**, run it inside the workstation qube and set routing to your
 gateway's SOCKS proxy in Settings (e.g. `10.152.152.10:9050`) — no bundled Tor is
 started in that mode.
 
+#### Optional Linux VPN panel
+
+The WireGuard panel on Linux uses the separate root-owned `ripley-vpn-broker`. Install
+the broker as a systemd service, install
+`polkit/org.ripley.vpn.policy` under `/usr/share/polkit-1/actions/`, create the
+`ripley` group, and add the desktop user to it before starting the service:
+
+```sh
+sudo groupadd --system ripley 2>/dev/null || true
+sudo usermod -aG ripley "$USER"
+sudo install -m 0644 polkit/org.ripley.vpn.policy /usr/share/polkit-1/actions/
+```
+
+Log in again after the group change. The broker socket is `root:ripley` with
+mode `0660`; connect, clearnet restoration, and kill-switch disable each trigger
+an interactive Polkit authorization. Do not run the desktop app as root.
+
 ### macOS — `.dmg`
 Because the app is unsigned, macOS will say it "can't be opened" / "is from an
 unidentified developer." To open it the first time:
@@ -56,6 +73,23 @@ unidentified developer." To open it the first time:
   ```sh
   xattr -dr com.apple.quarantine "/Applications/Ripley Terminal.app"
   ```
+
+#### Optional macOS VPN panel
+
+The development/native WireGuard backend uses the upstream Homebrew runtime:
+
+```sh
+brew install wireguard-tools
+```
+
+Each host-wide connect, disconnect, kill-switch, or recovery action displays a macOS
+administrator prompt. Ripley Terminal remains unprivileged; the authorized helper
+validates one structured request, applies a dedicated fail-closed PF anchor, and exits.
+The imported private key is never placed on the command line.
+
+Packaged builds must be Apple-signed before this privileged backend will launch. Until
+the project has the required signing identity, the feature is supported for source/dev
+builds only; unsigned downloadable builds continue to run without host VPN mutations.
 
 ### Windows — `.exe` / `.msi`
 SmartScreen will warn ("Windows protected your PC"). Click **More info → Run anyway**.

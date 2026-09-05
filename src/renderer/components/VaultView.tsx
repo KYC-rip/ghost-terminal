@@ -10,24 +10,47 @@ import { ReceiveModal } from './vault/ReceiveModal';
 import { type VaultContextType } from '../contexts/VaultContext';
 import { WalletService } from '../services/walletService';
 import { useFiatValue } from '../hooks/useFiatValue';
+import { useStats } from '../hooks/useStats';
 
 interface VaultViewProps {
-  setView: (v: any) => void;
   vault: VaultContextType;
-  handleBurn: () => void;
   appConfig: any;
 }
 
-export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewProps) {
+export function VaultView({ vault, appConfig }: VaultViewProps) {
   const {
     accounts, selectedAccountIndex, setSelectedAccountIndex,
     balance, address, subaddresses, outputs, refresh,
-    status, isSending, sendXmr, createSubaddress,
-    churn, splinter, txs, currentHeight, totalHeight, syncPercent, activeId, setSubaddressLabel,
+    status, isSending, createSubaddress,
+    churn, splinter, txs, currentHeight, totalHeight, syncPercent, nodeLabel, activeId, setSubaddressLabel,
     vanishSubaddress, requestedAction
   } = vault;
   const [tab, setTab] = useState<'ledger' | 'addresses' | 'coins' | 'contacts'>('ledger');
   const [modals, setModals] = useState({ seed: false, receive: false, send: false, splinter: false, churn: false });
+  const [reracing, setReracing] = useState(false);
+  const { stats } = useStats();
+  // A node can report "synced to my tip" while the tip itself lags the real
+  // network (a stale node) — then the wallet would falsely read SYNCED and miss
+  // recent txs. Compare the node's height against the network stats height.
+  const netHeight = parseInt((stats?.network?.height as any) || '0', 10) || 0;
+  const nodeLag = (netHeight > 0 && totalHeight > 0) ? netHeight - totalHeight : 0;
+  const nodeStale = status === 'SYNCED' && nodeLag >= 5;
+
+  // Auto-heal: when the connected node lags the network, re-race the pool for a
+  // caught-up one — no need for the user to notice + click ↻. Cooldown-gated so a
+  // pool that's broadly behind doesn't get hammered (and re-race can transiently
+  // land on another stale node before settling).
+  const lastAutoReselect = useRef(0);
+  useEffect(() => {
+    if (!nodeStale) return;
+    const now = Date.now();
+    if (now - lastAutoReselect.current < 60000) return;
+    lastAutoReselect.current = now;
+    setReracing(true);
+    window.api.reselectNode?.().catch(() => {});
+    const t = setTimeout(() => setReracing(false), 3000);
+    return () => clearTimeout(t);
+  }, [nodeStale]);
   const [mnemonic, setMnemonic] = useState('');
   const [contacts, setContacts] = useState<any[]>([]);
   const [dispatchAddr, setDispatchAddr] = useState('');
@@ -113,7 +136,15 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
   };
 
   const revealSeed = async () => {
-    if (!confirm("⚠️ SECURITY WARNING ⚠️\n\nReveal Master Seed?\nEnsure no cameras or screen recording software is active.")) return;
+    // Use Tauri's ASYNC dialog and await it. The webview's window.confirm() is
+    // not reliably blocking in Tauri, so a synchronous `if (!confirm())` would
+    // fall through and reveal the seed BEFORE the user confirms.
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    const ok = await ask(
+      "Reveal Master Seed?\nEnsure no cameras or screen recording software is active.",
+      { title: "⚠️ SECURITY WARNING ⚠️", kind: "warning" }
+    );
+    if (!ok) return;
 
     try {
       const res = await window.api.walletAction('mnemonic');
@@ -295,6 +326,13 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                 {usdValue && (
                   <div className="text-xs font-bold text-xmr-dim/60 uppercase tracking-[0.1em] mb-2">{usdValue} USD</div>
                 )}
+                {/* When some funds are locked (e.g. change still maturing), the headline
+                    shows the TOTAL; surface the spendable portion so it's clear. */}
+                {currentAcc?.unlockedBalance && currentAcc.unlockedBalance !== currentAccBalance && (
+                  <div className="text-[10px] font-bold text-xmr-warning/80 uppercase tracking-[0.1em] mb-2">
+                    {currentAcc.unlockedBalance} available · rest locked (maturing)
+                  </div>
+                )}
 
                 {/* Address */}
                 <div className="text-[10px] text-xmr-dim/30 tracking-wider mb-3">
@@ -335,9 +373,25 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                 <div className="space-y-1 mt-3 pt-3 border-t border-xmr-border/15">
                   <div className="flex justify-between text-[10px] uppercase font-black">
                     <span className="text-xmr-dim/40">Uplink:</span>
-                    <span className={`flex items-center gap-1 ${isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
+                    <span className={`flex items-center gap-1 ${nodeStale ? 'text-xmr-warning' : isSyncing ? 'text-xmr-accent' : 'text-xmr-green'}`}>
                       {isSyncing && <Loader2 size={8} className="animate-spin" />}
-                      {status}
+                      {nodeStale ? `Node stale −${nodeLag}` : status}{nodeLabel ? ` (${nodeLabel})` : ''}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (reracing) return;
+                          setReracing(true);
+                          window.api.reselectNode().catch(() => {});
+                          // Spin while the race runs (it resolves async via sync-status);
+                          // keep it visible long enough to confirm the click registered.
+                          setTimeout(() => setReracing(false), 3000);
+                        }}
+                        disabled={reracing}
+                        title="Re-select node — race the pool for a faster connection"
+                        className="ml-0.5 text-xmr-dim/50 hover:text-xmr-green transition-colors cursor-pointer disabled:opacity-60"
+                      >
+                        <RefreshCw size={9} className={reracing ? 'animate-spin text-xmr-accent' : ''} />
+                      </button>
                     </span>
                   </div>
                   <div className="flex justify-between text-[10px] uppercase font-black">
@@ -421,6 +475,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
             onClose={() => { setActivePanel(null); setDispatchSubIndex(undefined); }}
             initialAddress={dispatchAddr}
             sourceSubaddressIndex={dispatchSubIndex}
+            contacts={contacts}
           />
         ) : activePanel === 'receive' ? (
           <ReceiveModal
@@ -473,7 +528,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
       {/* 5. MODALS */}
       <VaultModals
         showSeed={modals.seed}
-        onCloseSeed={() => setModals(prev => ({ ...prev, seed: false }))}
+        onCloseSeed={() => { setModals(prev => ({ ...prev, seed: false })); setMnemonic(''); }}
         mnemonic={mnemonic}
         showReceive={modals.receive}
         onCloseReceive={() => { setModals(prev => ({ ...prev, receive: false })); setSelectedSubaddress(null); }}
@@ -481,8 +536,6 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
         selectedSubaddress={selectedSubaddress}
         showSend={modals.send}
         onCloseSend={() => { setModals(prev => ({ ...prev, send: false })); setDispatchSubIndex(undefined); }}
-        onSend={sendXmr}
-        isSending={isSending}
         initialAddr={dispatchAddr}
         sourceSubaddressIndex={dispatchSubIndex}
         showSplinter={modals.splinter}

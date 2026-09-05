@@ -86,13 +86,53 @@ const api = {
   confirmShutdown: () => ipcRenderer.send('confirm-shutdown')
 }
 
+// RipleyOS platform bridge — the small, STABLE contract ROS's platform/native.ts
+// consumes (window.__rosNative). Kept separate from `api` so ROS stays decoupled
+// from the wallet's internal IPC surface. Only `fetch` is wired in Phase 3a;
+// native KV, monero RPC and browser webviews follow.
+const rosNative = {
+  runtime: 'electron' as const,
+  fetch: (req: { url: string; method?: string; headers?: Record<string, string>; body?: string }) =>
+    ipcRenderer.invoke('ros:native-fetch', req),
+  caps: { tor: true, monero: true, browser: true },
+  // Network control surface — ROS's Privacy + Settings read/set routing + Tor status.
+  getConfig: async () => {
+    const c: any = await ipcRenderer.invoke('get-config')
+    return { routingMode: c?.routingMode, proxyAddress: c?.systemProxyAddress, network: c?.network }
+  },
+  setConfig: async (patch: { routingMode?: string; proxyAddress?: string; network?: string }) => {
+    const c: any = (await ipcRenderer.invoke('get-config')) || {}
+    if (patch.routingMode !== undefined) c.routingMode = patch.routingMode
+    if (patch.proxyAddress !== undefined) c.systemProxyAddress = patch.proxyAddress
+    if (patch.network !== undefined) c.network = patch.network
+    // reload the uplink so the routing change (Tor/clearnet) takes effect now.
+    await ipcRenderer.invoke('save-config-and-reload', c)
+  },
+  torStatus: async () => {
+    const s: any = await ipcRenderer.invoke('get-uplink-status')
+    return { status: String(s?.status || 'unknown').toLowerCase() }
+  },
+  // Stream the shell's core-log (Tor bootstrap, engine, daemon RPC) into ROS's console.
+  onLog: (cb: (e: { source?: string; level?: string; message?: string }) => void) => {
+    const h = (_: any, data: any) => cb(data)
+    ipcRenderer.on('core-log', h)
+    return () => ipcRenderer.removeListener('core-log', h)
+  },
+  // OS default browser (Telegram t.me, etc.) — not the in-app ROS browser.
+  openExternal: (url: string) =>
+    ipcRenderer.invoke('open-external', url).then(() => undefined),
+}
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('api', api)
+    contextBridge.exposeInMainWorld('__rosNative', rosNative)
   } catch (error) {
     console.error(error)
   }
 } else {
   // @ts-ignore (define in dts)
   window.api = api
+  // @ts-ignore (define in dts)
+  window.__rosNative = rosNative
 }

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
 import {
   createChart,
@@ -37,27 +37,28 @@ export default function SpreadChart() {
     dateStr: string;
   } | null>(null);
 
-  const root = getComputedStyle(document.documentElement);
-  const brandColor = root.getPropertyValue('--brand-color').trim();
-  const borderColor = root.getPropertyValue('--border-color').trim();
-  const textPrimary = root.getPropertyValue('--text-primary').trim();
-  const textDim = root.getPropertyValue('--text-dim').trim();
-  const chartLine = root.getPropertyValue('--chart-line').trim();
-  const chartAreaTop = root.getPropertyValue('--chart-area-top').trim();
-  const chartGrid = root.getPropertyValue('--chart-grid').trim();
-  const textAccent = root.getPropertyValue('--text-accent').trim();
-
-  const colors = {
-    text: textPrimary || '#00ff41',
-    grid: chartGrid || 'rgba(20, 60, 20, 0.3)',
-    border: borderColor || '#004d13',
-    areaLine: chartLine || brandColor,
-    areaTop: chartAreaTop || 'rgba(0, 255, 65, 0.15)',
-    paperLine: textDim || '#64748b',
-    liqLine: textAccent || '#ea580c',
-    nodeLine: '#0891b2',
-    volColor: theme === 'light' ? 'rgba(4, 120, 87, 0.3)' : 'rgba(0, 50, 0, 0.5)',
-  };
+  const colors = useMemo(() => {
+    const root = getComputedStyle(document.documentElement);
+    const brandColor = root.getPropertyValue('--brand-color').trim();
+    const borderColor = root.getPropertyValue('--border-color').trim();
+    const textPrimary = root.getPropertyValue('--text-primary').trim();
+    const textDim = root.getPropertyValue('--text-dim').trim();
+    const chartLine = root.getPropertyValue('--chart-line').trim();
+    const chartAreaTop = root.getPropertyValue('--chart-area-top').trim();
+    const chartGrid = root.getPropertyValue('--chart-grid').trim();
+    const textAccent = root.getPropertyValue('--text-accent').trim();
+    return {
+      text: textPrimary || '#00ff41',
+      grid: chartGrid || 'rgba(20, 60, 20, 0.3)',
+      border: borderColor || '#004d13',
+      areaLine: chartLine || brandColor,
+      areaTop: chartAreaTop || 'rgba(0, 255, 65, 0.15)',
+      paperLine: textDim || '#64748b',
+      liqLine: textAccent || '#ea580c',
+      nodeLine: '#0891b2',
+      volColor: theme === 'light' ? 'rgba(4, 120, 87, 0.3)' : 'rgba(0, 50, 0, 0.5)',
+    };
+  }, [theme]);
 
   const toggleSeries = (key: keyof typeof visibleSeries) => {
     setVisibleSeries((prev: any) => ({ ...prev, [key]: !prev[key] }));
@@ -68,11 +69,9 @@ export default function SpreadChart() {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const response = await fetch(`https://api.kyc.rip/v1/history?period=${timeframe}`, {
-          method: 'GET'
-        });
-
-        const result = await response.json();
+        // Routed through the uplink (Tor .onion mirror / clearnet) — no IP leak.
+        const body = await window.api.proxiedGet(`https://api.kyc.rip/v1/history?period=${timeframe}`);
+        const result = JSON.parse(body);
         
         if (active && Array.isArray(result)) {
           const cleanData = result

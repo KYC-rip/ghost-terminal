@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-embed-deliver-xmr402"
+description = "Enables the browser_embed_deliver_xmr402 command without any pre-configured scope."
+commands.allow = ["browser_embed_deliver_xmr402"]
+
+[[permission]]
+identifier = "deny-browser-embed-deliver-xmr402"
+description = "Denies the browser_embed_deliver_xmr402 command without any pre-configured scope."
+commands.deny = ["browser_embed_deliver_xmr402"]

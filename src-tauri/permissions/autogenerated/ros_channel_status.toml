@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ros-channel-status"
+description = "Enables the ros_channel_status command without any pre-configured scope."
+commands.allow = ["ros_channel_status"]
+
+[[permission]]
+identifier = "deny-ros-channel-status"
+description = "Denies the ros_channel_status command without any pre-configured scope."
+commands.deny = ["ros_channel_status"]

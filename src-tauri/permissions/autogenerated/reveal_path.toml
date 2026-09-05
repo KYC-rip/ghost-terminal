@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-path"
+description = "Enables the reveal_path command without any pre-configured scope."
+commands.allow = ["reveal_path"]
+
+[[permission]]
+identifier = "deny-reveal-path"
+description = "Denies the reveal_path command without any pre-configured scope."
+commands.deny = ["reveal_path"]

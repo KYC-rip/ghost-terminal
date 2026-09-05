@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-switch-identity"
+description = "Enables the switch_identity command without any pre-configured scope."
+commands.allow = ["switch_identity"]
+
+[[permission]]
+identifier = "deny-switch-identity"
+description = "Denies the switch_identity command without any pre-configured scope."
+commands.deny = ["switch_identity"]

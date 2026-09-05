@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ros-native-fetch"
+description = "Enables the ros_native_fetch command without any pre-configured scope."
+commands.allow = ["ros_native_fetch"]
+
+[[permission]]
+identifier = "deny-ros-native-fetch"
+description = "Denies the ros_native_fetch command without any pre-configured scope."
+commands.deny = ["ros_native_fetch"]
