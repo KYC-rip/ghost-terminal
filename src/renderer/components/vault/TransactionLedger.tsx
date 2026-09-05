@@ -202,7 +202,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
   };
 
   return (
-    <Card noPadding className="h-[430px] flex flex-col overflow-hidden">
+    <Card noPadding className="h-[400px] flex flex-col overflow-hidden">
       <TableHeader>
         <div className="flex items-center gap-2">
           <span>Transaction_History</span>
@@ -245,7 +245,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                     value={verifyTxId}
                     onChange={e => setVerifyTxId(e.target.value.trim())}
                     placeholder="Enter 64-char hash..."
-                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
+                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
                   />
                 </div>
 
@@ -256,7 +256,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                     value={verifyAddress}
                     onChange={e => setVerifyAddress(e.target.value.trim())}
                     placeholder="Enter recipient's public address..."
-                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
+                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors"
                   />
                 </div>
 
@@ -267,7 +267,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                     value={verifyKeyOrProof}
                     onChange={e => setVerifyKeyOrProof(e.target.value.trim())}
                     placeholder="Paste txKey or Proof signature here..."
-                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors resize-none"
+                    className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] font-mono focus:border-xmr-green/50 outline-none transition-colors resize-none"
                   />
                 </div>
 
@@ -279,7 +279,7 @@ export function TransactionLedger({ txs, subaddresses = [] }: TransactionLedgerP
                       value={verifyMessage}
                       onChange={e => setVerifyMessage(e.target.value)}
                       placeholder="e.g. For Order #123"
-                      className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm px-2 py-1.5 text-[10px] focus:border-xmr-green/50 outline-none transition-colors"
+                      className="w-full bg-xmr-surface border border-xmr-border/40 rounded-sm p-2.5 text-[10px] focus:border-xmr-green/50 outline-none transition-colors"
                     />
                   </div>
                   <div className="flex items-end">

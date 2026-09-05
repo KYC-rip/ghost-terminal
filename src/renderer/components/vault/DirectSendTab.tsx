@@ -496,7 +496,7 @@ export function DirectSendTab({
                       }
                     }
                   }}
-                  className="py-1.5 bg-xmr-surface/50 border border-xmr-border/30 text-[9px] text-xmr-dim font-black uppercase hover:border-xmr-accent hover:text-xmr-accent transition-all cursor-pointer"
+                  className="py-1.5 bg-xmr-surface/50 border border-xmr-border/30 text-[9px] text-xmr-dim font-black uppercase hover:border-xmr-accent hover:text-xmr-accent transition-all cursor-pointer rounded-sm"
                 >
                   {pct}%
                 </button>

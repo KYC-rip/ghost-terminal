@@ -608,7 +608,7 @@ function MainApp() {
                 )}
 
               <div className={view === 'home' ? 'block' : 'hidden'}><HomeView setView={setView} stats={stats} loading={statsLoading} /></div>
-                <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView setView={setView} vault={vault} handleBurn={() => purgeIdentity(activeId)} appConfig={appConfig} /></div>
+                <div className={view === 'vault' ? 'block' : 'hidden'}><VaultView vault={vault} appConfig={appConfig} /></div>
                 <div className={view === 'exchange' ? 'block' : 'hidden'}><ExchangeView localXmrAddress={address} /></div>
                 <div className={view === 'vpn' ? 'block' : 'hidden'}><VpnView /></div>
 

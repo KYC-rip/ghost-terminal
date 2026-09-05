@@ -13,13 +13,11 @@ import { useFiatValue } from '../hooks/useFiatValue';
 import { useStats } from '../hooks/useStats';
 
 interface VaultViewProps {
-  setView: (v: any) => void;
   vault: VaultContextType;
-  handleBurn: () => void;
   appConfig: any;
 }
 
-export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewProps) {
+export function VaultView({ vault, appConfig }: VaultViewProps) {
   const {
     accounts, selectedAccountIndex, setSelectedAccountIndex,
     balance, address, subaddresses, outputs, refresh,

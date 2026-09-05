@@ -579,7 +579,7 @@ export function SettingsView() {
                   type="number"
                   value={localSettings.auto_lock_minutes}
                   onChange={(e) => setLocalSettings({ ...localSettings, auto_lock_minutes: parseInt(e.target.value) || 0 })}
-                  className="w-20 bg-xmr-base border border-xmr-border p-2 text-right text-xs text-xmr-green outline-none font-black"
+                  className="w-20 bg-xmr-base border border-xmr-border p-3 text-right text-xs text-xmr-green outline-none font-black"
                 />
               </div>
             </div>
@@ -660,7 +660,7 @@ export function SettingsView() {
                       <select
                         value={localSettings.skin_style}
                         onChange={(e) => setLocalSettings({ ...localSettings, skin_style: e.target.value as any })}
-                        className="w-full bg-xmr-surface border border-xmr-border/50 p-2 text-xs text-xmr-green uppercase outline-none focus:border-xmr-accent"
+                        className="w-full bg-xmr-surface border border-xmr-border/50 p-3 text-xs text-xmr-green uppercase outline-none focus:border-xmr-accent"
                       >
                         <option value="cover">Cover (Center)</option>
                         <option value="contain">Contain (Fit)</option>
@@ -711,7 +711,7 @@ export function SettingsView() {
                       const newShortcuts = { ...localSettings.shortcuts, [action]: e.target.value };
                       setLocalSettings({ ...localSettings, shortcuts: newShortcuts });
                     }}
-                    className="bg-xmr-base border border-xmr-border p-2 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
+                    className="bg-xmr-base border border-xmr-border p-3 text-xs text-xmr-green focus:border-xmr-green outline-none font-black"
                     placeholder="e.g. Mod+S"
                   />
                 </div>

@@ -1,6 +1,5 @@
 import React, { Suspense } from 'react';
 import { Activity, BarChart3, Globe, Lock, Ghost, TrendingUp, AlertTriangle } from 'lucide-react';
-import { useTheme } from '../hooks/useTheme';
 import { Card } from './Card';
 
 const SpreadChart = React.lazy(() => import('./SpreadChart'));
@@ -29,8 +28,6 @@ interface HomeViewProps {
 }
 
 export function HomeView({ setView, stats, loading }: HomeViewProps) {
-  const { resolvedTheme } = useTheme();
-
   return (
     <div className="max-w-6xl mx-auto space-y-10 py-4 animate-in fade-in duration-700 font-mono">
       {/* 1. HERO PRICE SECTION */}
