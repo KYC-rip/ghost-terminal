@@ -19,8 +19,6 @@ interface VaultModalsProps {
   // Send Modal
   showSend: boolean;
   onCloseSend: () => void;
-  onSend: (address: string, amount: number) => void;
-  isSending: boolean;
   initialAddr?: string;
   sourceSubaddressIndex?: number;
 
@@ -38,7 +36,7 @@ interface VaultModalsProps {
 export function VaultModals({ 
   showSeed, onCloseSeed, mnemonic,
   showReceive, onCloseReceive, onCreateSub, selectedSubaddress,
-  showSend, onCloseSend, onSend, isSending,
+  showSend, onCloseSend,
   initialAddr = '', sourceSubaddressIndex,
   showSplinter, onCloseSplinter, onSplinter,
   showChurn, onCloseChurn, onChurn, unlockedBalance

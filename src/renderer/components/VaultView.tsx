@@ -21,7 +21,7 @@ export function VaultView({ vault, appConfig }: VaultViewProps) {
   const {
     accounts, selectedAccountIndex, setSelectedAccountIndex,
     balance, address, subaddresses, outputs, refresh,
-    status, isSending, sendXmr, createSubaddress,
+    status, isSending, createSubaddress,
     churn, splinter, txs, currentHeight, totalHeight, syncPercent, nodeLabel, activeId, setSubaddressLabel,
     vanishSubaddress, requestedAction
   } = vault;
@@ -536,8 +536,6 @@ export function VaultView({ vault, appConfig }: VaultViewProps) {
         selectedSubaddress={selectedSubaddress}
         showSend={modals.send}
         onCloseSend={() => { setModals(prev => ({ ...prev, send: false })); setDispatchSubIndex(undefined); }}
-        onSend={sendXmr}
-        isSending={isSending}
         initialAddr={dispatchAddr}
         sourceSubaddressIndex={dispatchSubIndex}
         showSplinter={modals.splinter}

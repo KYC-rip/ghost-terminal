@@ -58,7 +58,7 @@ export function AddressBook({ contacts, onAddContact, onRemoveContact, onDispatc
 
       {/* ADD CONTACT MODAL */}
       {showAdd && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-xmr-base/95 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed top-0 bottom-0 right-0 left-[14rem] z-[110] flex items-center justify-center p-6 bg-xmr-base/95 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="w-full max-w-md space-y-6">
             <h3 className="text-xl font-black text-xmr-green uppercase italic text-center">New_Contact_Archived</h3>
             <Card className="p-6 space-y-4">
