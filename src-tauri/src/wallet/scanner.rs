@@ -194,7 +194,10 @@ impl DaemonConnector for TorConnector {
         match ArtiTransport::connect(self.tor.clone(), url.clone()).await {
             Ok(daemon) => Some(daemon),
             Err(e) => {
-                log::warn!("Tor connect to {url} failed: {e:?}");
+                log::warn!(
+                    "Tor connect to {} failed: {e:?}",
+                    crate::wallet::reqwest_transport::redact_url(&url)
+                );
                 None
             }
         }
@@ -217,7 +220,11 @@ impl DaemonConnector for CustomProxyConnector {
         match SocksTransport::connect(self.proxy.clone(), url.clone()).await {
             Ok(daemon) => Some(daemon),
             Err(e) => {
-                log::warn!("SOCKS connect to {url} via {} failed: {e:?}", self.proxy);
+                log::warn!(
+                    "SOCKS connect to {} via {} failed: {e:?}",
+                    crate::wallet::reqwest_transport::redact_url(&url),
+                    self.proxy
+                );
                 None
             }
         }
@@ -246,7 +253,11 @@ pub(crate) async fn load_nodes(app: &AppHandle, section: &str) -> Vec<(String, S
         } else {
             format!("http://{}", custom)
         };
-        log::info!("Using manual node override: {url}");
+        // Path redacted: authenticating proxies (mnr.network) carry the token there.
+        log::info!(
+            "Using manual node override: {}",
+            crate::wallet::reqwest_transport::redact_url(&url)
+        );
         return vec![("custom".to_string(), url)];
     }
     load_pool_nodes(app, section).await
@@ -536,7 +547,7 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
                         }
                     }
                 } else if !custom.is_empty() {
-                    emit_log(&app_clone, "Network", "error", &format!("❌ Pinned node {custom} unreachable — check the address or clear the pin in Settings ▸ Node. Retrying in 10s..."));
+                    emit_log(&app_clone, "Network", "error", &format!("❌ Pinned node {} unreachable — check the address or clear the pin in Settings ▸ Node. Retrying in 10s...", crate::wallet::reqwest_transport::redact_url(&custom)));
                     sleep(Duration::from_secs(10)).await;
                     continue;
                 } else {
@@ -556,7 +567,11 @@ async fn run_outer<C: DaemonConnector>(app_clone: AppHandle, generation: u64, co
             &app_clone,
             "Network",
             "success",
-            &format!("✅ Fastest node: {} ({})", label, url),
+            &format!(
+                "✅ Fastest node: {} ({})",
+                label,
+                crate::wallet::reqwest_transport::redact_url(&url)
+            ),
         );
 
         // Store daemon URL so tx commands can connect
@@ -1682,6 +1697,90 @@ mod connect_smoke {
                 Err(e) => println!("❌ {url}: {e:?}"),
             }
         }
+    }
+
+    // Exercise the app's real clearnet transport (ReqwestTransport, the same path
+    // the custom-node setting takes) against an arbitrary daemon URL — every
+    // route a sync + spend needs, in the order the scanner uses them. Meant for
+    // proxies that allow-list methods (e.g. mnr.network's /v1/<token> URLs).
+    // Run: RIPLEY_PROBE_NODE=https://host/base cargo test -p ripley-terminal node_probe -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn node_probe() {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let url = std::env::var("RIPLEY_PROBE_NODE").expect("set RIPLEY_PROBE_NODE=<daemon url>");
+        // Never echo the URL: a proxy token may live in its path.
+        let daemon = crate::wallet::reqwest_transport::ReqwestTransport::connect(
+            url,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect("connect (get_height)");
+        let tip = daemon
+            .latest_block_number()
+            .await
+            .expect("latest_block_number");
+        println!("✅ /get_height -> {tip}");
+
+        let fee = daemon
+            .fee_rate(FeePriority::Normal, 500_000)
+            .await
+            .expect("get_fee_estimate");
+        println!("✅ get_fee_estimate -> {fee:?}");
+
+        let start = tip.saturating_sub(120);
+        let t = std::time::Instant::now();
+        let blocks = daemon
+            .bulk_scannable_blocks_trusting_node(start..=(start + 99))
+            .await
+            .expect("get_blocks.bin (trusting bulk)");
+        println!(
+            "✅ /get_blocks.bin -> {} blocks in {}ms",
+            blocks.len(),
+            t.elapsed().as_millis()
+        );
+        assert_eq!(blocks.len(), 100);
+
+        let dist = daemon
+            .ringct_output_distribution(start..=(start + 99))
+            .await
+            .expect("get_output_distribution.bin");
+        println!("✅ /get_output_distribution.bin -> {} entries", dist.len());
+        let last = *dist.last().expect("distribution non-empty");
+        assert!(last > 0);
+
+        let idx = [
+            last.saturating_sub(3),
+            last.saturating_sub(2),
+            last.saturating_sub(1),
+        ];
+        let outs = daemon.ringct_outputs(&idx).await.expect("get_outs.bin");
+        println!("✅ /get_outs.bin -> {} outputs", outs.len());
+        assert_eq!(outs.len(), idx.len());
+
+        let tx_hash = blocks
+            .iter()
+            .flat_map(|b| b.block.transactions.iter().copied())
+            .next()
+            .expect("a non-miner tx in the window");
+        let txs = daemon
+            .transactions(&[tx_hash])
+            .await
+            .expect("/get_transactions");
+        println!("✅ /get_transactions -> {} tx", txs.len());
+        let oi = daemon
+            .output_indexes(tx_hash)
+            .await
+            .expect("get_o_indexes.bin");
+        println!("✅ /get_o_indexes.bin -> {} indexes", oi.len());
+
+        let body = serde_json::json!({ "key_images": [format!("{:064x}", 1u8)] }).to_string();
+        let res = daemon
+            .rpc_call("is_key_image_spent", Some(body), 1024 * 1024)
+            .await
+            .expect("/is_key_image_spent");
+        println!("✅ /is_key_image_spent -> {} bytes", res.len());
+        println!("🎉 every sync/spend route answered (send_raw_transaction not exercised)");
     }
 
     // Measures the FORK's trusting bulk path (get_blocks.bin without prunable_hash).

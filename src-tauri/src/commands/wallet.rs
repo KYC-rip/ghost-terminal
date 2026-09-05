@@ -380,7 +380,12 @@ async fn prepare_with_failover(
             app,
             "Tx",
             "info",
-            &format!("🔗 Decoy selection — node {}/{}: {}", i + 1, total, url),
+            &format!(
+                "🔗 Decoy selection — node {}/{}: {}",
+                i + 1,
+                total,
+                crate::wallet::reqwest_transport::redact_url(&url)
+            ),
         );
         let outs = outputs.to_vec();
         let pays = payments.to_vec();
@@ -440,7 +445,10 @@ async fn prepare_with_failover(
                     app,
                     "Tx",
                     "success",
-                    &format!("✅ Decoys selected via {}", url),
+                    &format!(
+                        "✅ Decoys selected via {}",
+                        crate::wallet::reqwest_transport::redact_url(&url)
+                    ),
                 );
                 // Bias future sends/sync toward this proven-good node.
                 app.state::<WalletState>().set_daemon_url(&url).await;
@@ -454,14 +462,16 @@ async fn prepare_with_failover(
                     "warn",
                     &format!(
                         "⚠️ {} couldn't serve decoy selection ({}). Trying next node…",
-                        url, last_err
+                        crate::wallet::reqwest_transport::redact_url(&url),
+                        last_err
                     ),
                 );
             }
             Err(_) => {
                 last_err = format!(
                     "{} stalled >{}s on get_output_distribution.bin",
-                    url, per_node_secs
+                    crate::wallet::reqwest_transport::redact_url(&url),
+                    per_node_secs
                 );
                 emit_log(
                     app,
@@ -491,9 +501,14 @@ pub async fn prepare_transfer(
 ) -> Result<PreparedTx, String> {
     emit_log(&app, "Tx", "info", "🔧 Preparing transaction...");
 
-    let (tx_metadata, _meta_key, prepared) =
-        prepare_and_stage(&app, &state, destinations.clone(), priority, selected_output_ids)
-            .await?;
+    let (tx_metadata, _meta_key, prepared) = prepare_and_stage(
+        &app,
+        &state,
+        destinations.clone(),
+        priority,
+        selected_output_ids,
+    )
+    .await?;
 
     Ok(PreparedTx {
         fee: WalletState::format_xmr(prepared.fee),
@@ -1011,7 +1026,12 @@ async fn sweep_with_failover(
             app,
             "Tx",
             "info",
-            &format!("🔗 Sweep — node {}/{}: {}", i + 1, total, url),
+            &format!(
+                "🔗 Sweep — node {}/{}: {}",
+                i + 1,
+                total,
+                crate::wallet::reqwest_transport::redact_url(&url)
+            ),
         );
         let batch_c = batch.clone();
         let dest_c = dest.clone();
@@ -1072,12 +1092,17 @@ async fn sweep_with_failover(
                     "warn",
                     &format!(
                         "⚠️ {} couldn't sweep ({}). Trying next node…",
-                        url, last_err
+                        crate::wallet::reqwest_transport::redact_url(&url),
+                        last_err
                     ),
                 );
             }
             Err(_) => {
-                last_err = format!("{} stalled >{}s", url, per_node_secs);
+                last_err = format!(
+                    "{} stalled >{}s",
+                    crate::wallet::reqwest_transport::redact_url(&url),
+                    per_node_secs
+                );
                 emit_log(
                     app,
                     "Tx",
@@ -1738,7 +1763,10 @@ pub async fn estimate_fees(
         &app,
         "Fee",
         "info",
-        &format!("💸 Estimating fees via {}", daemon_url),
+        &format!(
+            "💸 Estimating fees via {}",
+            crate::wallet::reqwest_transport::redact_url(&daemon_url)
+        ),
     );
     let res = match crate::wallet::scanner::read_routing_mode(&app).as_str() {
         "tor" => {
@@ -2017,7 +2045,6 @@ pub async fn rescan(
     Ok(())
 }
 
-
 // ── Offline (sign-only) spending ──
 // Two-device cold-signing flow (docs/offline-signing-plan.md §5):
 //   hot:  export_watch_only ──(watchonly QR)──> cold: import_watch_only
@@ -2250,7 +2277,10 @@ pub async fn sign_offline_transfer(
 ) -> Result<serde_json::Value, String> {
     let env = crate::wallet::offline::decode_envelope(&envelope)?;
     if env.k != crate::wallet::offline::KIND_UNSIGNED {
-        return Err(format!("Expected an unsigned envelope, got kind '{}'", env.k));
+        return Err(format!(
+            "Expected an unsigned envelope, got kind '{}'",
+            env.k
+        ));
     }
     let payload = crate::wallet::offline::envelope_payload(&env)?;
     let signable = monero_wallet::send::SignableTransaction::read(&mut payload.as_slice())
@@ -2327,7 +2357,9 @@ pub async fn import_signed_transfer(
     }
     let join_key = env.meta.tx_key.clone();
     if join_key.is_empty() {
-        return Err("Signed envelope carries no join key — it was not produced by this flow".into());
+        return Err(
+            "Signed envelope carries no join key — it was not produced by this flow".into(),
+        );
     }
     let payload = crate::wallet::offline::envelope_payload(&env)?;
     let signed = monero_oxide::transaction::Transaction::read(&mut payload.as_slice())
@@ -2365,7 +2397,12 @@ pub async fn import_signed_transfer(
         if !ok {
             state.discard_pending_spend(&join_key).await;
             state.clear_offline_meta(&join_key).await;
-            emit_log(&app, "Tx", "warn", "Offline transaction cancelled at confirmation");
+            emit_log(
+                &app,
+                "Tx",
+                "warn",
+                "Offline transaction cancelled at confirmation",
+            );
             return Err("Transaction cancelled".into());
         }
     }

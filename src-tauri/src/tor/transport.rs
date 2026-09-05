@@ -481,20 +481,29 @@ pub fn parse_url(url: &str) -> Result<(bool, String, u16, String), String> {
     } else if let Some(r) = url.strip_prefix("http://") {
         (false, r)
     } else {
-        return Err(format!("unsupported URL scheme: {url}"));
+        return Err(format!(
+            "unsupported URL scheme: {}",
+            crate::wallet::reqwest_transport::redact_url(url)
+        ));
     };
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
     };
     if authority.is_empty() {
-        return Err(format!("invalid URL (no host): {url}"));
+        return Err(format!(
+            "invalid URL (no host): {}",
+            crate::wallet::reqwest_transport::redact_url(url)
+        ));
     }
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => {
-            let port: u16 = p
-                .parse()
-                .map_err(|_| format!("invalid port in URL: {url}"))?;
+            let port: u16 = p.parse().map_err(|_| {
+                format!(
+                    "invalid port in URL: {}",
+                    crate::wallet::reqwest_transport::redact_url(url)
+                )
+            })?;
             (h.to_string(), port)
         }
         None => (authority.to_string(), if https { 443 } else { 80 }),
@@ -510,13 +519,17 @@ fn parse_host_port(url: &str) -> Result<(String, u16), InterfaceError> {
     let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
     if authority.is_empty() {
         return Err(InterfaceError::InterfaceError(format!(
-            "invalid node URL: {url}"
+            "invalid node URL: {}",
+            crate::wallet::reqwest_transport::redact_url(url)
         )));
     }
     match authority.rsplit_once(':') {
         Some((host, port)) => {
             let port: u16 = port.parse().map_err(|_| {
-                InterfaceError::InterfaceError(format!("invalid port in URL: {url}"))
+                InterfaceError::InterfaceError(format!(
+                    "invalid port in URL: {}",
+                    crate::wallet::reqwest_transport::redact_url(url)
+                ))
             })?;
             Ok((host.to_string(), port))
         }
