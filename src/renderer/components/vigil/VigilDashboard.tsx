@@ -256,7 +256,7 @@ export function VigilDashboard({
       {/* ─── Abort Button ─── */}
       <button
         onClick={onCancel}
-        className="w-full py-3 bg-xmr-error/5 hover:bg-xmr-error/10 border border-xmr-error/20 hover:border-xmr-error/40 text-xmr-error text-[10px] font-bold uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all rounded-sm group hover:shadow-[0_0_15px_rgba(248,113,113,0.2)]"
+        className="w-full py-3 bg-xmr-error/5 hover:bg-xmr-error/10 border border-xmr-error/20 hover:border-xmr-error/40 text-xmr-error text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all rounded-sm group cursor-pointer hover:shadow-[0_0_15px_rgba(239,68,68,0.2)]"
       >
         <XCircle size={14} className="group-hover:rotate-90 transition-transform" />
         ABORT MISSION

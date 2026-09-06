@@ -10,7 +10,7 @@ import {
   fetchQuote, createTrade, getTradeStatus,
   fetchBridgeEstimateV2, createBridgeTradeV2, fetchBridgeStatusV2,
   type ExchangeQuote, type ExchangeRoute, type ComplianceState,
-  type BridgeEstimateV2, type BridgeRoute, type BridgeTradeV2,
+  type BridgeRoute, type BridgeTradeV2,
 } from '../services/swap';
 import { useVault } from '../hooks/useVault';
 import { getOrCreateSubaddress } from '../services/subaddressService';
@@ -691,7 +691,7 @@ export function ExchangeView({ localXmrAddress }: ExchangeViewProps) {
           )}
 
           <LogConsole label="GHOST_LOG" />
-          <button onClick={handleReset} className="w-full py-3 bg-xmr-error/5 hover:bg-xmr-error/10 border border-xmr-error/20 text-xmr-error text-[10px] font-bold uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all cursor-pointer rounded-sm"><X size={14} /> Abort_Session</button>
+          <button onClick={handleReset} className="w-full py-3 bg-xmr-error/5 hover:bg-xmr-error/10 border border-xmr-error/20 text-xmr-error text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all cursor-pointer rounded-sm"><X size={14} /> Abort_Session</button>
         </div>
       );
     }
@@ -760,7 +760,7 @@ export function ExchangeView({ localXmrAddress }: ExchangeViewProps) {
           )}
 
           <LogConsole label="SWAP_LOG" />
-          <button onClick={handleReset} className="w-full py-3 bg-xmr-error/5 hover:bg-xmr-error/10 border border-xmr-error/20 text-xmr-error text-[10px] font-bold uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all cursor-pointer rounded-sm"><X size={14} /> Cancel_Trade</button>
+          <button onClick={handleReset} className="w-full py-3 bg-xmr-error/5 hover:bg-xmr-error/10 border border-xmr-error/20 text-xmr-error text-[10px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-2 transition-all cursor-pointer rounded-sm"><X size={14} /> Cancel_Trade</button>
         </div>
       );
     }

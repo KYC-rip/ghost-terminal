@@ -213,7 +213,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   }, [isLocked, isInitializing, refresh, status]);
 
   useEffect(() => {
-    console.log("🔌 Initializing Core Log Listener...");
     if (window.api.onCoreLog) {
       const cleanup = window.api.onCoreLog((data) => {
         // Backend data usually looks like { source: 'TOR', level: 'info', message: '...' }

@@ -308,7 +308,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
                       key={action.label}
                       onClick={action.onClick}
                       disabled={action.disabled}
-                      className="flex items-center gap-2 px-4 py-2 rounded-sm border border-xmr-green/20 bg-xmr-base/40 text-xmr-green hover:border-xmr-green/50 hover:bg-xmr-green/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed group"
+                      className="flex items-center gap-2 px-4 py-2 rounded-sm border border-xmr-green/20 bg-xmr-base/40 text-xmr-green hover:border-xmr-green/50 hover:bg-xmr-green/10 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group"
                     >
                       <action.icon size={14} className={action.spin ? 'animate-spin' : ''} />
                       <span className="text-[9px] font-bold uppercase tracking-[0.12em] group-hover:text-xmr-green transition-colors">

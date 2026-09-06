@@ -405,7 +405,7 @@ export function CurrencySelector({
                       ref={inputRef}
                       type="text"
                       placeholder="SEARCH ASSETS..."
-                      className="w-full rounded-sm pl-10 pr-4 py-2 text-sm focus:outline-none uppercase bg-[var(--color-xmr-base)] border border-[var(--local-border)] text-[var(--text-primary)] focus:border-[var(--local-brand)] placeholder:text-[var(--local-text-dim)]"
+                      className="w-full rounded-sm pl-10 pr-4 py-2 text-xs focus:outline-none uppercase bg-[var(--color-xmr-base)] border border-[var(--local-border)] text-[var(--text-primary)] focus:border-[var(--local-brand)] placeholder:text-[var(--local-text-dim)]"
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                     />

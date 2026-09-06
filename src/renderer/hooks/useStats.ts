@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
 export interface Stats {
   price: { paper: string; street: string; premium: string, source: string };

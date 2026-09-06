@@ -25,4 +25,3 @@ const mockFs = {
 (window as any).fs = mockFs;
 (globalThis as any).fs = mockFs;
 
-console.log("[Polyfills] Tactical FS injected to global scope.");
