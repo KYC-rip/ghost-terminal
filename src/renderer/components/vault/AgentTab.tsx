@@ -4,7 +4,7 @@ import { Card } from '../Card';
 import { useVault } from '../../hooks/useVault';
 
 export function AgentTab() {
-  const { identities, activeId, accounts } = useVault();
+  const { activeId, accounts } = useVault();
   const [isEnabled, setIsEnabled] = useState(false);
   const [dailyLimit, setDailyLimit] = useState('0.1');
   const [totalLimit, setTotalLimit] = useState('1.0');
@@ -126,9 +126,9 @@ export function AgentTab() {
             </div>
             <button
               onClick={() => setIsEnabled(!isEnabled)}
-              className={`w-12 h-6 rounded-full relative transition-all cursor-pointer ${isEnabled ? 'bg-xmr-green shadow-[0_0_15px_var(--color-xmr-green)]' : 'bg-xmr-base border border-xmr-border'}`}
+              className={`w-10 h-5 rounded-full relative transition-all cursor-pointer ${isEnabled ? 'bg-xmr-green shadow-[0_0_15px_var(--color-xmr-green)]' : 'bg-xmr-base border border-xmr-border'}`}
             >
-              <div className={`absolute top-1 w-4 h-4 rounded-full transition-all ${isEnabled ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-dim'}`}></div>
+              <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isEnabled ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-dim'}`}></div>
             </button>
           </div>
         </div>

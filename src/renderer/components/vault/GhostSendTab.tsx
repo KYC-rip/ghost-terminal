@@ -297,7 +297,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
               isGhostAddrValid === false
             }
             onClick={handleGetQuote}
-            className="w-full py-3 bg-xmr-accent/20 border border-xmr-accent/40 text-xmr-accent font-black uppercase tracking-widest text-xs transition-all hover:bg-xmr-accent/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+            className="w-full py-3 bg-xmr-accent/20 border border-xmr-accent/40 text-xmr-accent font-black uppercase tracking-widest text-xs transition-all hover:bg-xmr-accent/30 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
           >
             <ArrowRight size={14} /> Get Quote
           </button>

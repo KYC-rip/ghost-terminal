@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { apiClient, apiClient as client } from './client';
+import { apiClient } from './client';
 import {
   type BatchQuoteRequest,
   type BatchQuoteResult,
@@ -233,7 +233,7 @@ export function createTrade(params: CreateTradeParams): Promise<ExchangeResponse
     });
   }
 
-  return client<ExchangeResponse>('/v2/exchange/create', {
+  return apiClient<ExchangeResponse>('/v2/exchange/create', {
     body: {
       ...params.extra,
       trade_id: params.id, amount_from: params.amountFrom, amount_to: params.amountTo,
@@ -308,7 +308,7 @@ export function getTradeStatus(id: string) {
     } as any);
   }
 
-  return client<TradeStatus>(`/v2/exchange/status/${id}`).then(normalizeTradeStatus) as Promise<TradeStatus>;
+  return apiClient<TradeStatus>(`/v2/exchange/status/${id}`).then(normalizeTradeStatus) as Promise<TradeStatus>;
 }
 
 /**
@@ -349,7 +349,7 @@ export async function fetchQuote(
     kyc: kycMap[kyc], log: logMap[log],
   });
 
-  return client<ExchangeQuote>(`/v2/exchange/estimate?${params.toString()}`);
+  return apiClient<ExchangeQuote>(`/v2/exchange/estimate?${params.toString()}`);
 }
 
 /**
@@ -468,8 +468,6 @@ const logMap: Record<ComplianceLevel, string> = {
 
 export const fetchBridgeEstimate = async (from: string, to: string, amount: number, network_from: string = "Mainnet", network_to: string = "Mainnet", kyc: ComplianceLevel, log: ComplianceLevel) => {
   const params = new URLSearchParams({ from, to, network_from, network_to, amount: amount.toString(), type: 'from', kyc: kycMap[kyc], log: logMap[log] });
-
-  console.log(`requesting API: /v1/exchange/bridge/estimate?${params.toString()}`);
 
   const data = await apiClient<BridgeEstimate>(`/v2/exchange/bridge/estimate?${params.toString()}`, {}, async (res) => {
     if (!res.ok) {

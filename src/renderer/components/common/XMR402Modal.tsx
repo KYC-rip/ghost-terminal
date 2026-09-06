@@ -41,7 +41,6 @@ export const XMR402Modal: React.FC = () => {
         if (cacheRes.success && cacheRes.payment) {
           // Re-use cached payment
           setPaymentStep('Cached payment found. Reusing...');
-          console.log('[XMR402] Cached payment found. Skipping physical execution.', cacheRes.payment);
           finalTxid = cacheRes.payment.txid;
           finalProof = cacheRes.payment.proof;
         } else {

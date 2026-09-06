@@ -78,7 +78,6 @@ export function useCurrencies() {
 
           let finalData = data;
           if (isTestnet) {
-            console.log("[useCurrencies] 🧪 Testnet Mode Active");
             finalData = [...data, ...TESTNET_COINS];
           }
 

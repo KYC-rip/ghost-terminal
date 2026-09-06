@@ -141,12 +141,10 @@ export function SettingsView() {
 
       if (needsPhysicalReload) {
         // 🚀 Trigger physical reload: Reboot Tor / RPC processes
-        console.log("⚙️ Physical parameters changed. Re-igniting Uplink...", "warning");
         const res = await window.api.saveConfigAndReload(newConfig);
         if (!res.success) throw new Error(res.error);
       } else {
         // 💾 Save config only: no interruption to current connection
-        console.log("💾 UI preferences synchronized.", "success");
         // note: if backend lacks saveConfigOnly, reloadEngine can skip reboot based on logic checks
         await window.api.saveConfigOnly?.(newConfig) || await window.api.saveConfigAndReload(newConfig);
       }
@@ -228,8 +226,8 @@ export function SettingsView() {
                     checked={localSettings.include_prereleases}
                     onChange={(e) => setLocalSettings({ ...localSettings, include_prereleases: e.target.checked })}
                   />
-                  <div className={`w-10 h-5 border flex items-center px-1 transition-all ${localSettings.include_prereleases ? 'border-xmr-accent bg-xmr-accent/10' : 'border-xmr-border bg-xmr-base'}`}>
-                    <div className={`w-3 h-3 transition-all ${localSettings.include_prereleases ? 'bg-xmr-accent translate-x-5' : 'bg-xmr-dim translate-x-0'}`} />
+                  <div className={`w-10 h-5 rounded-full relative transition-all cursor-pointer ${localSettings.include_prereleases ? 'bg-xmr-accent' : 'bg-xmr-base border border-xmr-border'}`}>
+                    <div className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${localSettings.include_prereleases ? 'right-1 bg-xmr-base' : 'left-1 bg-xmr-dim'}`} />
                   </div>
                 </label>
                 <button
@@ -253,7 +251,7 @@ export function SettingsView() {
                       <div className="flex items-center gap-2 font-black uppercase text-xs">
                         <Zap size={14} className="animate-pulse" /> Update Available: v{updateResult.latestVersion}
                       </div>
-                      <button onClick={() => updateResult.releaseUrl && window.open(updateResult.releaseUrl)} className="flex items-center gap-1.5 px-3 py-1.5 bg-xmr-accent text-xmr-base hover:bg-white transition-colors cursor-pointer font-black uppercase">
+                      <button onClick={() => updateResult.releaseUrl && window.open(updateResult.releaseUrl, '_blank', 'noopener,noreferrer')} className="flex items-center gap-1.5 px-3 py-1.5 bg-xmr-accent text-xmr-base hover:bg-white transition-colors cursor-pointer font-black uppercase">
                         <Download size={10} /> Download Release
                       </button>
                     </div>
@@ -602,7 +600,7 @@ export function SettingsView() {
         <button
           onClick={handleSave}
           disabled={saveStatus !== 'idle'}
-          className="px-10 py-4 font-black uppercase tracking-[0.3em] flex items-center gap-3 transition-all cursor-pointer bg-xmr-green text-xmr-base hover:opacity-90"
+          className="px-10 py-4 font-black uppercase tracking-[0.2em] flex items-center gap-3 transition-all cursor-pointer bg-xmr-green text-xmr-base hover:opacity-90"
         >
           {saveStatus === 'saving' ? <RefreshCw size={16} className="animate-spin" /> : saveStatus === 'saved' ? <Check size={16} /> : null}
           {saveStatus === 'saving' ? 'Applying_Uplink...' : saveStatus === 'saved' ? 'Config_Synchronized' : 'Commit_Changes'}
