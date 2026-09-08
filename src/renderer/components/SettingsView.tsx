@@ -32,7 +32,7 @@ export function SettingsView() {
   const [isRescanning, setIsRescanning] = useState(false);
 
   // 📦 App Info & Updates state
-  const [appInfo, setAppInfo] = useState<{ version: string; appDataPath: string; walletsPath: string; platform: string } | null>(null);
+  const [appInfo, setAppInfo] = useState<Awaited<ReturnType<typeof window.api.getAppInfo>> | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<{
     checked: boolean;
@@ -69,7 +69,7 @@ export function SettingsView() {
       });
 
       const info = await window.api.getAppInfo();
-      setAppInfo(info as any);
+      setAppInfo(info);
     };
     loadInitialConfig();
   }, [currentIdentity]);
@@ -253,7 +253,7 @@ export function SettingsView() {
                       <div className="flex items-center gap-2 font-black uppercase text-xs">
                         <Zap size={14} className="animate-pulse" /> Update Available: v{updateResult.latestVersion}
                       </div>
-                      <button onClick={() => updateResult.releaseUrl && window.open(updateResult.releaseUrl)} className="flex items-center gap-1.5 px-3 py-1.5 bg-xmr-accent text-xmr-base hover:bg-white transition-colors cursor-pointer font-black uppercase">
+                      <button onClick={() => updateResult.releaseUrl && window.api.openExternal(updateResult.releaseUrl)} className="flex items-center gap-1.5 px-3 py-1.5 bg-xmr-accent text-xmr-base hover:bg-white transition-colors cursor-pointer font-black uppercase">
                         <Download size={10} /> Download Release
                       </button>
                     </div>
@@ -527,7 +527,7 @@ export function SettingsView() {
                       <label className="text-[10px] text-xmr-dim uppercase font-black block">Skin_Position</label>
                       <select
                         value={localSettings.skin_style}
-                        onChange={(e) => setLocalSettings({ ...localSettings, skin_style: e.target.value as any })}
+                        onChange={(e) => setLocalSettings({ ...localSettings, skin_style: e.target.value as 'cover' | 'contain' | 'tile' | 'top-left' })}
                         className="w-full bg-xmr-surface border border-xmr-border/50 p-2 text-xs text-xmr-green uppercase outline-none focus:border-xmr-accent"
                       >
                         <option value="cover">Cover (Center)</option>
