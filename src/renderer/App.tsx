@@ -234,7 +234,6 @@ function MainApp() {
   // --- 🔗 DEEP LINK LISTENER ---
   useEffect(() => {
     const cleanup = window.api.onDeepLink((url: string) => {
-      console.log('[App] Received deep link:', url);
       try {
         const protocolRegex = /^(monero|ghost|ripley):([^?]+)(\?.*)?$/i;
         const match = url.match(protocolRegex);

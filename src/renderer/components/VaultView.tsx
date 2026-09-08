@@ -435,7 +435,7 @@ export function VaultView({ setView, vault, handleBurn, appConfig }: VaultViewPr
               {['ledger', 'coins', 'addresses', 'contacts'].map((t) => (
                 <button
                   key={t}
-                  onClick={() => setTab(t as any)}
+                  onClick={() => setTab(t as typeof tab)}
                   className={`px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all rounded-sm ${tab === t ? 'text-xmr-green border border-xmr-green/30 bg-xmr-green/5' : 'text-xmr-dim hover:text-xmr-green border border-transparent'}`}
                 >
                   {t}

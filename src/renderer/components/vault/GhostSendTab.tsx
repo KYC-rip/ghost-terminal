@@ -154,7 +154,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
         // Save trade persistence for ledger tracking
         const tradeId = trade.trade_id || trade.id || '';
         if (tradeId && txHash) {
-          (window as any).api.saveGhostTrade(txHash, tradeId);
+          window.api.saveGhostTrade(txHash, tradeId);
         }
 
         setGhostPhase('tracking');
@@ -389,7 +389,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
           <div
             onClick={() => {
               const url = `https://kyc.rip/swap?id=${tradeResponse?.trade_id || tradeResponse?.id}`;
-              (window as any).api.openExternal(url, { width: 940, height: 820 });
+              window.api.openExternal(url, { width: 940, height: 820 });
             }}
             className="text-[10px] text-xmr-accent hover:text-xmr-green underline uppercase tracking-tighter mt-2 cursor-pointer"
           >
@@ -408,7 +408,7 @@ export function GhostSendTab({ onRequirePassword, onClose }: GhostSendTabProps) 
           <div
             onClick={() => {
               const url = `https://kyc.rip/swap?id=${tradeResponse?.trade_id || tradeResponse?.id}`;
-              (window as any).api.openExternal(url, { width: 940, height: 820 });
+              window.api.openExternal(url, { width: 940, height: 820 });
             }}
             className="text-[10px] text-xmr-accent hover:text-xmr-green underline uppercase tracking-tighter cursor-pointer"
           >
